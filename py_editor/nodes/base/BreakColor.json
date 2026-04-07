@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "BreakColor",
+  "category": "Math",
+  "inputs": {
+    "color": "color"
+  },
+  "outputs": {
+    "r": "int",
+    "g": "int",
+    "b": "int"
+  },
+  "code": "name = \"BreakColor\"\ninputs = {\"color\":\"color\"}\noutputs = {\"r\":\"int\",\"g\":\"int\",\"b\":\"int\"}\ndef process(color):\n    if color and isinstance(color, (list, tuple)) and len(color) >= 3:\n        return int(color[0]), int(color[1]), int(color[2])\n    return 0, 0, 0\n"
+}

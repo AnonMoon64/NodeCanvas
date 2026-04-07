@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "DictGet",
+  "category": "Variables",
+  "inputs": {
+    "dict": "any",
+    "key": "string",
+    "default": "any"
+  },
+  "outputs": {
+    "value": "any"
+  },
+  "code": "name = \"DictGet\"\ninputs = {\"dict\":\"any\",\"key\":\"string\",\"default\":\"any\"}\noutputs = {\"value\":\"any\"}\ndef process(dict, key, default):\n    if dict is None or key is None:\n        return default\n    try:\n        return dict.get(str(key), default)\n    except (TypeError, AttributeError):\n        return default\n"
+}

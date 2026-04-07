@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "StructGet",
+  "category": "Collections",
+  "inputs": {
+    "struct": "struct",
+    "field": "string"
+  },
+  "outputs": {
+    "value": "any"
+  },
+  "code": "name = \"StructGet\"\ninputs = {\"struct\":\"struct\",\"field\":\"string\"}\noutputs = {\"value\":\"any\"}\ndef process(struct, field):\n    if struct is None or not isinstance(struct, dict):\n        return None\n    return struct.get(str(field or ''), None)\n"
+}

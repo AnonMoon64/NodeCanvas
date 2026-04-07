@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "Sequence",
+  "category": "Flow Control",
+  "dynamic_outputs": true,
+  "inputs": {
+    "exec_in": "exec"
+  },
+  "outputs": {
+    "then0": "exec",
+    "then1": "exec"
+  },
+  "code": "name = \"Sequence\"\ninputs = {\"exec_in\":\"exec\"}\noutputs = {\"then0\":\"exec\",\"then1\":\"exec\"}\ndef process(exec_in):\n    # Sequence is a flow control node - actual execution handled by backend\n    # Returns tuple of exec pins to trigger in order\n    return ('then0', 'then1')\n"
+}

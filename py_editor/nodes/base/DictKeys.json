@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "DictKeys",
+  "category": "Variables",
+  "inputs": {
+    "dict": "any"
+  },
+  "outputs": {
+    "keys": "any"
+  },
+  "code": "name = \"DictKeys\"\ninputs = {\"dict\":\"any\"}\noutputs = {\"keys\":\"any\"}\ndef process(dict):\n    if dict is None:\n        return []\n    try:\n        return list(dict.keys())\n    except (TypeError, AttributeError):\n        return []\n"
+}

@@ -1,0 +1,14 @@
+{
+    "name": "OnTick",
+    "category": "Animation",
+    "description": "Receives delta time from animation runtime. Time pushes in, never pulled.",
+    "color": "#2196F3",
+    "inputs": {},
+    "outputs": {
+        "exec": "exec",
+        "deltaTime": "float"
+    },
+    "isEntryPoint": true,
+    "isAnimationEvent": true,
+    "code": "def process():\n    return ('exec_out', 0.016)"
+}

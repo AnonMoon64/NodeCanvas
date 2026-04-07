@@ -1,0 +1,453 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "template": "GetVariable",
+      "pos": [
+        -576.0,
+        -216.0
+      ],
+      "values": {
+        "name": "monsters"
+      }
+    },
+    {
+      "id": 3,
+      "template": "ConstString",
+      "pos": [
+        -600.0,
+        -72.0
+      ],
+      "values": {
+        "value": "Goblin"
+      }
+    },
+    {
+      "id": 4,
+      "template": "Print",
+      "pos": [
+        408.0,
+        -240.0
+      ],
+      "values": {
+        "label": ""
+      }
+    },
+    {
+      "id": 6,
+      "template": "ForEachLoop",
+      "pos": [
+        -264.0,
+        -288.0
+      ]
+    },
+    {
+      "id": 8,
+      "template": "StructGet",
+      "pos": [
+        96.0,
+        -264.0
+      ],
+      "values": {
+        "field": "name"
+      }
+    },
+    {
+      "id": 9,
+      "template": "Equal",
+      "pos": [
+        96.0,
+        -96.0
+      ]
+    },
+    {
+      "id": 11,
+      "template": "OnUIButtonPressed",
+      "pos": [
+        1440.0,
+        120.0
+      ],
+      "values": {
+        "buttonId": "battlescreen"
+      }
+    },
+    {
+      "id": 12,
+      "template": "GetVariable",
+      "pos": [
+        24.0,
+        288.0
+      ],
+      "values": {
+        "name": "monsters"
+      }
+    },
+    {
+      "id": 13,
+      "template": "ListLength",
+      "pos": [
+        384.0,
+        456.0
+      ]
+    },
+    {
+      "id": 14,
+      "template": "RandomNumber",
+      "pos": [
+        480.0,
+        216.0
+      ],
+      "values": {
+        "min": 0.0,
+        "max": 0.0
+      }
+    },
+    {
+      "id": 15,
+      "template": "ListGet",
+      "pos": [
+        1128.0,
+        312.0
+      ],
+      "values": {
+        "index": 0
+      }
+    },
+    {
+      "id": 16,
+      "template": "ToInt",
+      "pos": [
+        816.0,
+        384.0
+      ]
+    },
+    {
+      "id": 18,
+      "template": "Print",
+      "pos": [
+        1440.0,
+        240.0
+      ],
+      "values": {
+        "label": ""
+      }
+    },
+    {
+      "id": 20,
+      "template": "Subtract",
+      "pos": [
+        672.0,
+        552.0
+      ],
+      "values": {
+        "a": 0.0,
+        "b": 1.0
+      }
+    },
+    {
+      "id": 22,
+      "template": "RoundToInt",
+      "pos": [
+        768.0,
+        264.0
+      ],
+      "values": {
+        "value": 0.0
+      }
+    },
+    {
+      "id": 23,
+      "template": "SetUIScreen",
+      "pos": [
+        1776.0,
+        240.0
+      ],
+      "values": {
+        "screenName": "Screen 2"
+      }
+    },
+    {
+      "id": 24,
+      "template": "OnStart",
+      "pos": [
+        864.0,
+        -168.0
+      ]
+    },
+    {
+      "id": 25,
+      "template": "PlaySound",
+      "pos": [
+        1200.0,
+        -120.0
+      ],
+      "values": {
+        "file_path": "",
+        "channel": 0,
+        "loop": true,
+        "volume": 0.0
+      }
+    },
+    {
+      "id": 26,
+      "template": "GetVariable",
+      "pos": [
+        888.0,
+        -24.0
+      ],
+      "values": {
+        "name": "battlemusic"
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": 1,
+      "from_pin": "value",
+      "to": 6,
+      "to_pin": "list"
+    },
+    {
+      "from": 3,
+      "from_pin": "value",
+      "to": 9,
+      "to_pin": "b"
+    },
+    {
+      "from": 6,
+      "from_pin": "item",
+      "to": 8,
+      "to_pin": "struct"
+    },
+    {
+      "from": 8,
+      "from_pin": "value",
+      "to": 9,
+      "to_pin": "a"
+    },
+    {
+      "from": 9,
+      "from_pin": "result",
+      "to": 4,
+      "to_pin": "value"
+    },
+    {
+      "from": 16,
+      "from_pin": "result",
+      "to": 15,
+      "to_pin": "index"
+    },
+    {
+      "from": 12,
+      "from_pin": "value",
+      "to": 13,
+      "to_pin": "list"
+    },
+    {
+      "from": 12,
+      "from_pin": "value",
+      "to": 15,
+      "to_pin": "list"
+    },
+    {
+      "from": 13,
+      "from_pin": "length",
+      "to": 20,
+      "to_pin": "a"
+    },
+    {
+      "from": 20,
+      "from_pin": "result",
+      "to": 14,
+      "to_pin": "max"
+    },
+    {
+      "from": 11,
+      "from_pin": "exec_out",
+      "to": 18,
+      "to_pin": "exec_in"
+    },
+    {
+      "from": 15,
+      "from_pin": "value",
+      "to": 18,
+      "to_pin": "value"
+    },
+    {
+      "from": 14,
+      "from_pin": "result",
+      "to": 22,
+      "to_pin": "value"
+    },
+    {
+      "from": 22,
+      "from_pin": "result",
+      "to": 16,
+      "to_pin": "value"
+    },
+    {
+      "from": 18,
+      "from_pin": "exec_out",
+      "to": 23,
+      "to_pin": "exec_in"
+    },
+    {
+      "from": 24,
+      "from_pin": "exec_out",
+      "to": 25,
+      "to_pin": "exec_in"
+    },
+    {
+      "from": 26,
+      "from_pin": "value",
+      "to": 25,
+      "to_pin": "file_path"
+    }
+  ],
+  "variables": {
+    "monsters": {
+      "type": "list",
+      "value": [
+        {
+          "name": "Slime",
+          "health": 100.0,
+          "attack": 5,
+          "tag": "forest"
+        },
+        {
+          "name": "Goblin",
+          "health": 0.0,
+          "attack": 0,
+          "tag": ""
+        }
+      ]
+    },
+    "dialogue": {
+      "type": "string",
+      "value": "Hello, World!"
+    },
+    "battlemusic": {
+      "type": "audio",
+      "value": "C:/Users/atomi/Music/xDeviruchi - 16 bit Fantasy & Adventure (2025)/Loopable + one shots/ogg/09 - Battle 2.ogg"
+    }
+  },
+  "ui": {
+    "screens": {
+      "Screen 1": [
+        {
+          "id": 1,
+          "type": "Button",
+          "properties": {
+            "type": "button",
+            "text": "Adventure Gate",
+            "buttonId": "",
+            "width": 100,
+            "height": 32,
+            "backgroundColor": "#2d2d30",
+            "textColor": "#e0e0e0"
+          },
+          "pos": [
+            -49.0,
+            96.0
+          ],
+          "parent_id": null
+        }
+      ],
+      "Screen 2": [
+        {
+          "id": 6,
+          "type": "Image",
+          "properties": {
+            "type": "image",
+            "source": "C:/Users/atomi/Downloads/91d245b1c_1000007502.png",
+            "width": 1273,
+            "height": 669,
+            "scaleMode": "fill",
+            "bindings": []
+          },
+          "pos": [
+            -641.6763607932418,
+            -314.95453179011713
+          ],
+          "parent_id": null
+        },
+        {
+          "id": 7,
+          "type": "Label",
+          "properties": {
+            "type": "label",
+            "text": "Label",
+            "fontSize": 20,
+            "textColor": "#e0e0e0",
+            "backgroundImage": "",
+            "width": 1036,
+            "height": 70,
+            "bindings": [
+              {
+                "property": "text",
+                "variable": "dialogue"
+              }
+            ]
+          },
+          "pos": [
+            -516.9748637691011,
+            171.30528030218736
+          ],
+          "parent_id": null
+        }
+      ]
+    },
+    "screen_order": [
+      "Screen 1",
+      "Screen 2"
+    ],
+    "current_screen": "Screen 2",
+    "form": {
+      "width": 1280,
+      "height": 720
+    },
+    "widgets": [
+      {
+        "id": 6,
+        "type": "Image",
+        "properties": {
+          "type": "image",
+          "source": "C:/Users/atomi/Downloads/91d245b1c_1000007502.png",
+          "width": 1273,
+          "height": 669,
+          "scaleMode": "fill",
+          "bindings": []
+        },
+        "pos": [
+          -641.6763607932418,
+          -314.95453179011713
+        ],
+        "parent_id": null
+      },
+      {
+        "id": 7,
+        "type": "Label",
+        "properties": {
+          "type": "label",
+          "text": "Label",
+          "fontSize": 20,
+          "textColor": "#e0e0e0",
+          "backgroundImage": "",
+          "width": 1036,
+          "height": 70,
+          "bindings": [
+            {
+              "property": "text",
+              "variable": "dialogue"
+            }
+          ]
+        },
+        "pos": [
+          -516.9748637691011,
+          171.30528030218736
+        ],
+        "parent_id": null
+      }
+    ]
+  }
+}

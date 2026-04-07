@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "ListMinField",
+  "category": "Collections",
+  "inputs": {
+    "list": "list",
+    "fieldName": "string"
+  },
+  "outputs": {
+    "item": "struct",
+    "minValue": "float"
+  },
+  "code": "name = \"ListMinField\"\ninputs = {\"list\":\"list\",\"fieldName\":\"string\"}\noutputs = {\"item\":\"struct\",\"minValue\":\"float\"}\ndef process(list, fieldName):\n    \"\"\"Find struct with minimum value in a field\"\"\"\n    if not list or not isinstance(list, (list, tuple)):\n        return None, 0.0\n    field = str(fieldName or '')\n    min_val = None\n    min_item = None\n    for item in list:\n        if isinstance(item, dict) and field in item:\n            try:\n                val = float(item[field])\n                if min_val is None or val < min_val:\n                    min_val = val\n                    min_item = item\n            except (TypeError, ValueError):\n                pass\n    return min_item, min_val if min_val is not None else 0.0\n"
+}

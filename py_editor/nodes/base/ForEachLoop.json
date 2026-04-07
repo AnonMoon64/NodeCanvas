@@ -1,0 +1,16 @@
+{
+  "type": "base",
+  "name": "ForEachLoop",
+  "category": "Flow Control",
+  "inputs": {
+    "exec_in": "exec",
+    "list": "list"
+  },
+  "outputs": {
+    "loop_body": "exec",
+    "completed": "exec",
+    "item": "any",
+    "index": "int"
+  },
+  "code": "name = \"ForEachLoop\"\ninputs = {\"exec_in\":\"exec\",\"list\":\"list\"}\noutputs = {\"loop_body\":\"exec\",\"completed\":\"exec\",\"item\":\"any\",\"index\":\"int\"}\ndef process(exec_in, list):\n    # ForEachLoop is a flow control node - actual loop logic handled by backend\n    # Backend will call loop_body for each item, then completed when done\n    return None\n"
+}

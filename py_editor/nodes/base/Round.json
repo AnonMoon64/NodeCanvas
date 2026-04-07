@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "Round",
+  "category": "Math",
+  "inputs": {
+    "value": "float",
+    "decimals": "int"
+  },
+  "outputs": {
+    "result": "float"
+  },
+  "code": "name = \"Round\"\ninputs = {\"value\":\"float\",\"decimals\":\"int\"}\noutputs = {\"result\":\"float\"}\ndef process(value, decimals):\n    if value is None:\n        return 0.0\n    decimals = decimals if decimals is not None else 0\n    return round(float(value), int(decimals))\n"
+}

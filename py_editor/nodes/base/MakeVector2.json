@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "MakeVector2",
+  "category": "Math",
+  "inputs": {
+    "x": "float",
+    "y": "float"
+  },
+  "outputs": {
+    "vector": "vector2"
+  },
+  "code": "name = \"MakeVector2\"\ninputs = {\"x\":\"float\",\"y\":\"float\"}\noutputs = {\"vector\":\"vector2\"}\ndef process(x, y):\n    return [float(x or 0), float(y or 0)]\n"
+}

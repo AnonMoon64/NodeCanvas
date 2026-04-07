@@ -1,0 +1,16 @@
+{
+  "type": "base",
+  "name": "ListRemoveByField",
+  "category": "Collections",
+  "inputs": {
+    "list": "list",
+    "fieldName": "string",
+    "fieldValue": "any"
+  },
+  "outputs": {
+    "list": "list",
+    "removed": "struct",
+    "found": "bool"
+  },
+  "code": "name = \"ListRemoveByField\"\ninputs = {\"list\":\"list\",\"fieldName\":\"string\",\"fieldValue\":\"any\"}\noutputs = {\"list\":\"list\",\"removed\":\"struct\",\"found\":\"bool\"}\ndef process(list, fieldName, fieldValue):\n    \"\"\"Remove first struct/dict from list where field matches value\"\"\"\n    if not list or not isinstance(list, (list, tuple)):\n        return [], None, False\n    field = str(fieldName or '')\n    result = []\n    removed = None\n    found = False\n    for item in list:\n        if not found and isinstance(item, dict) and field in item:\n            if item[field] == fieldValue:\n                removed = item\n                found = True\n                continue\n        result.append(item)\n    return result, removed, found\n"
+}

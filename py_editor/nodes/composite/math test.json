@@ -1,0 +1,89 @@
+{
+  "type": "composite",
+  "name": "math test",
+  "category": "Test",
+  "graph": {
+    "nodes": [
+      {
+        "id": 1,
+        "template": "Add",
+        "pos": [
+          -166.0,
+          -127.0
+        ],
+        "values": {
+          "a": 10.0,
+          "b": 10.0
+        }
+      },
+      {
+        "id": 3,
+        "template": "__composite_output__",
+        "pos": [
+          437.0,
+          -126.0
+        ],
+        "values": {
+          "in0": 0.0
+        },
+        "pin_type": "float",
+        "external_name": "result"
+      },
+      {
+        "id": 7,
+        "template": "Print",
+        "pos": [
+          135.0,
+          -122.0
+        ],
+        "values": {
+          "label": ""
+        }
+      },
+      {
+        "id": 8,
+        "template": "__composite_input__",
+        "pos": [
+          -221.0,
+          -2.0
+        ],
+        "pin_type": "string",
+        "external_name": "label input"
+      }
+    ],
+    "connections": [
+      {
+        "from": 1,
+        "from_pin": "result",
+        "to": 7,
+        "to_pin": "value"
+      },
+      {
+        "from": 7,
+        "from_pin": "value",
+        "to": 3,
+        "to_pin": "in0"
+      },
+      {
+        "from": 8,
+        "from_pin": "out0",
+        "to": 7,
+        "to_pin": "label"
+      }
+    ]
+  },
+  "inputs": {
+    "label input": {
+      "node": 8,
+      "pin": "out0",
+      "type": "string"
+    }
+  },
+  "outputs": {
+    "result": {
+      "node": 3,
+      "pin": "in0",
+      "type": "float"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "ListRemove",
+  "category": "Variables",
+  "inputs": {
+    "list": "any",
+    "index": "int"
+  },
+  "outputs": {
+    "list": "any"
+  },
+  "code": "name = \"ListRemove\"\ninputs = {\"list\":\"any\",\"index\":\"int\"}\noutputs = {\"list\":\"any\"}\ndef process(list, index):\n    if list is None:\n        return []\n    result = list.copy() if hasattr(list, 'copy') else list[:]\n    try:\n        idx = int(index) if index is not None else 0\n        if 0 <= idx < len(result):\n            result.pop(idx)\n    except (IndexError, TypeError, ValueError):\n        pass\n    return result\n"
+}

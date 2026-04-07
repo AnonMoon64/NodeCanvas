@@ -1,0 +1,17 @@
+{
+  "type": "base",
+  "name": "MakeStruct3",
+  "category": "Collections",
+  "inputs": {
+    "field1": "string",
+    "value1": "any",
+    "field2": "string",
+    "value2": "any",
+    "field3": "string",
+    "value3": "any"
+  },
+  "outputs": {
+    "struct": "struct"
+  },
+  "code": "name = \"MakeStruct3\"\ninputs = {\"field1\":\"string\",\"value1\":\"any\",\"field2\":\"string\",\"value2\":\"any\",\"field3\":\"string\",\"value3\":\"any\"}\noutputs = {\"struct\":\"struct\"}\ndef process(field1, value1, field2, value2, field3, value3):\n    \"\"\"Create struct with 3 fields\"\"\"\n    result = {}\n    if field1: result[str(field1)] = value1\n    if field2: result[str(field2)] = value2\n    if field3: result[str(field3)] = value3\n    return result\n"
+}

@@ -1,0 +1,19 @@
+{
+  "type": "base",
+  "name": "SetTimer",
+  "category": "Time",
+  "inputs": {
+    "exec_in": "exec",
+    "delay": "float",
+    "looping": "bool"
+  },
+  "outputs": {
+    "exec_out": "exec",
+    "on_timer": "exec"
+  },
+  "code": "name = \"SetTimer\"\ninputs = {\"exec_in\":\"exec\",\"delay\":\"float\",\"looping\":\"bool\"}\noutputs = {\"exec_out\":\"exec\",\"on_timer\":\"exec\"}\ndef process(exec_in, delay, looping):\n    # SetTimer - simple fire-and-forget timer\n    # Safer than Tick for delayed/periodic actions\n    #\n    # exec_in: Starts the timer\n    # delay: Seconds until on_timer fires\n    # looping: If True, fires repeatedly every 'delay' seconds\n    #\n    # exec_out: Fires immediately (continues execution)\n    # on_timer: Fires after delay (and repeatedly if looping)\n    #\n    # Timer handling is done by the runtime.\n    d = delay if delay and delay > 0 else 1.0\n    return ('exec_out', 'on_timer')\n",
+  "defaults": {
+    "delay": 1.0,
+    "looping": false
+  }
+}

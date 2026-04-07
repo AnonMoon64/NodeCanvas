@@ -1,0 +1,15 @@
+{
+    "name": "Stop",
+    "category": "Animation",
+    "description": "Stop an animation on a reference",
+    "color": "#F44336",
+    "inputs": {
+        "exec": "exec",
+        "target": "instance"
+    },
+    "outputs": {
+        "exec": "exec"
+    },
+    "isAnimationNode": true,
+    "code": "def process():\n    return ('exec_out',)"
+}

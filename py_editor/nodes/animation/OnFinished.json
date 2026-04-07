@@ -1,0 +1,14 @@
+{
+    "name": "OnFinished",
+    "category": "Animation",
+    "description": "Event that fires when an animation completes",
+    "color": "#FF9800",
+    "inputs": {},
+    "outputs": {
+        "exec": "exec",
+        "animName": "string"
+    },
+    "isEntryPoint": true,
+    "isAnimationEvent": true,
+    "code": "def process():\n    return ('exec_out', None)"
+}

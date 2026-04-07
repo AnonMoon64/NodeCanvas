@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "BreakVector3",
+  "category": "Math",
+  "inputs": {
+    "vector": "vector3"
+  },
+  "outputs": {
+    "x": "float",
+    "y": "float",
+    "z": "float"
+  },
+  "code": "name = \"BreakVector3\"\ninputs = {\"vector\":\"vector3\"}\noutputs = {\"x\":\"float\",\"y\":\"float\",\"z\":\"float\"}\ndef process(vector):\n    if vector and isinstance(vector, (list, tuple)) and len(vector) >= 3:\n        return float(vector[0]), float(vector[1]), float(vector[2])\n    return 0.0, 0.0, 0.0\n"
+}

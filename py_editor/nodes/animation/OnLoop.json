@@ -1,0 +1,14 @@
+{
+    "name": "OnLoop",
+    "category": "Animation",
+    "description": "Event that fires on each loop iteration",
+    "color": "#FF9800",
+    "inputs": {},
+    "outputs": {
+        "exec": "exec",
+        "loopCount": "int"
+    },
+    "isEntryPoint": true,
+    "isAnimationEvent": true,
+    "code": "def process():\n    return ('exec_out', 0)"
+}

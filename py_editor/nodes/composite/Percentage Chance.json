@@ -1,0 +1,86 @@
+{
+  "type": "composite",
+  "name": "Percentage Chance",
+  "category": "Math",
+  "graph": {
+    "nodes": [
+      {
+        "id": 1,
+        "template": "RandomNumber",
+        "pos": [
+          -702.0,
+          -251.0
+        ],
+        "values": {
+          "min": 0.0,
+          "max": 100.0
+        }
+      },
+      {
+        "id": 2,
+        "template": "LessThan",
+        "pos": [
+          -372.0,
+          -237.0
+        ]
+      },
+      {
+        "id": 6,
+        "template": "__composite_input__",
+        "pos": [
+          -703.0,
+          -141.0
+        ],
+        "pin_type": "int",
+        "external_name": "Chance"
+      },
+      {
+        "id": 7,
+        "template": "__composite_output__",
+        "pos": [
+          -84.0,
+          -240.0
+        ],
+        "values": {
+          "in0": false
+        },
+        "pin_type": "bool",
+        "external_name": "Bool"
+      }
+    ],
+    "connections": [
+      {
+        "from": 1,
+        "from_pin": "result",
+        "to": 2,
+        "to_pin": "a"
+      },
+      {
+        "from": 6,
+        "from_pin": "out0",
+        "to": 2,
+        "to_pin": "b"
+      },
+      {
+        "from": 2,
+        "from_pin": "result",
+        "to": 7,
+        "to_pin": "in0"
+      }
+    ]
+  },
+  "inputs": {
+    "Chance": {
+      "node": 6,
+      "pin": "out0",
+      "type": "int"
+    }
+  },
+  "outputs": {
+    "Bool": {
+      "node": 7,
+      "pin": "in0",
+      "type": "bool"
+    }
+  }
+}

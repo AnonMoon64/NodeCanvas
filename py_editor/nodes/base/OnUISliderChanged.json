@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "OnUISliderChanged",
+  "category": "UI Events",
+  "inputs": {
+    "sliderId": "string"
+  },
+  "outputs": {
+    "exec_out": "exec",
+    "value": "int"
+  },
+  "code": "name = \"OnUISliderChanged\"\ninputs = {\"sliderId\":\"string\"}\noutputs = {\"exec_out\":\"exec\",\"value\":\"int\"}\ndef process(sliderId):\n    # This is an event node - triggers exec flow when slider changes\n    # The actual triggering and value are handled by the runtime\n    return (None, 0)\n"
+}

@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "Multiply",
+  "category": "Math",
+  "inputs": {
+    "a": "float",
+    "b": "float"
+  },
+  "outputs": {
+    "result": "float"
+  },
+  "code": "name = \"Multiply\"\ninputs = {\"a\":\"float\",\"b\":\"float\"}\noutputs = {\"result\":\"float\"}\ndef process(a, b):\n    return a * b\n"
+}

@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "ToInt",
+  "category": "Conversion",
+  "inputs": {
+    "value": "any"
+  },
+  "outputs": {
+    "result": "int"
+  },
+  "code": "name = \"ToInt\"\ninputs = {\"value\":\"any\"}\noutputs = {\"result\":\"int\"}\ndef process(value):\n    if value is None:\n        return 0\n    if isinstance(value, bool):\n        return 1 if value else 0\n    if isinstance(value, (int, float)):\n        return int(value)\n    if isinstance(value, str):\n        try:\n            return int(float(value))\n        except ValueError:\n            return 0\n    return 0\n"
+}

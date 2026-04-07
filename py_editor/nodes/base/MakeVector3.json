@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "MakeVector3",
+  "category": "Math",
+  "inputs": {
+    "x": "float",
+    "y": "float",
+    "z": "float"
+  },
+  "outputs": {
+    "vector": "vector3"
+  },
+  "code": "name = \"MakeVector3\"\ninputs = {\"x\":\"float\",\"y\":\"float\",\"z\":\"float\"}\noutputs = {\"vector\":\"vector3\"}\ndef process(x, y, z):\n    return [float(x or 0), float(y or 0), float(z or 0)]\n"
+}

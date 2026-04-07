@@ -1,0 +1,37 @@
+{
+  "type": "base",
+  "name": "PlaySound",
+  "category": "Audio",
+  "inputs": {
+    "exec_in": "exec",
+    "file_path": "string"
+  },
+  "outputs": {
+    "exec_out": "exec"
+  },
+  "code": "name = \"PlaySound\"\ninputs = {\"exec_in\":\"exec\",\"file_path\":\"string\"}\noutputs = {\"exec_out\":\"exec\"}\ndef process(exec_in, file_path):\n    # PlaySound - plays an audio file\n    # file_path: Path to audio file (.wav, .mp3, .ogg, .flac)\n    # Channel and Loop are set via node widgets (not pins)\n    # Audio playback handled by runtime.\n    return ('exec_out',)\n",
+  "widgets": {
+    "channel": {
+      "type": "dropdown",
+      "options": [
+        "Music",
+        "Effect",
+        "Voice",
+        "UI",
+        "Ambient",
+        "Custom1",
+        "Custom2",
+        "Custom3"
+      ],
+      "default": "Effect"
+    },
+    "loop": {
+      "type": "dropdown",
+      "options": [
+        "No",
+        "Yes"
+      ],
+      "default": "No"
+    }
+  }
+}

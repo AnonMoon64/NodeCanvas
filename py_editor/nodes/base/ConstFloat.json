@@ -1,0 +1,10 @@
+{
+  "type": "base",
+  "name": "ConstFloat",
+  "category": "Value",
+  "inputs": {},
+  "outputs": {
+    "value": "float"
+  },
+  "code": "name = \"ConstFloat\"\ninputs = {}\noutputs = {\"value\":\"float\"}\ndef process():\n    return 0.0\n"
+}

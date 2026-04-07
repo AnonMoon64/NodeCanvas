@@ -1,0 +1,11 @@
+{
+  "type": "base",
+  "name": "Return",
+  "category": "Flow Control",
+  "inputs": {
+    "exec_in": "exec",
+    "value": "any"
+  },
+  "outputs": {},
+  "code": "name = \"Return\"\ninputs = {\"exec_in\":\"exec\",\"value\":\"any\"}\noutputs = {}\ndef process(exec_in, value):\n    \"\"\"Return a value from the graph.\"\"\"\n    return value\n"
+}

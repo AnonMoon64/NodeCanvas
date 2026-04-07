@@ -1,0 +1,33 @@
+{
+  "nodes": [
+    {
+      "id": 3,
+      "template": "Return",
+      "pos": [
+        674.0,
+        -106.0
+      ]
+    },
+    {
+      "id": 4,
+      "template": "math test",
+      "pos": [
+        17.958412098298695,
+        -106.30056710775045
+      ],
+      "values": {
+        "out0": "Happy",
+        "label input": "Happy",
+        "input": ""
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": 4,
+      "from_pin": "Value",
+      "to": 3,
+      "to_pin": "value"
+    }
+  ]
+}

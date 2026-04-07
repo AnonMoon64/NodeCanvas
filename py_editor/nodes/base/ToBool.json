@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "ToBool",
+  "category": "Conversion",
+  "inputs": {
+    "value": "any"
+  },
+  "outputs": {
+    "result": "bool"
+  },
+  "code": "name = \"ToBool\"\ninputs = {\"value\":\"any\"}\noutputs = {\"result\":\"bool\"}\ndef process(value):\n    if value is None:\n        return False\n    if isinstance(value, bool):\n        return value\n    if isinstance(value, (int, float)):\n        return value != 0\n    if isinstance(value, str):\n        return value.lower() in ('true', '1', 'yes', 'on')\n    if isinstance(value, (list, dict)):\n        return len(value) > 0\n    return bool(value)\n"
+}

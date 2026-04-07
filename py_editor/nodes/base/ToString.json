@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "ToString",
+  "category": "Conversion",
+  "inputs": {
+    "value": "any"
+  },
+  "outputs": {
+    "result": "string"
+  },
+  "code": "name = \"ToString\"\ninputs = {\"value\":\"any\"}\noutputs = {\"result\":\"string\"}\ndef process(value):\n    if value is None:\n        return \"\"\n    return str(value)\n"
+}

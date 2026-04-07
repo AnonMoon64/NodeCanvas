@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "Lerp",
+  "category": "Math",
+  "inputs": {
+    "a": "float",
+    "b": "float",
+    "alpha": "float"
+  },
+  "outputs": {
+    "result": "float"
+  },
+  "code": "name = \"Lerp\"\ninputs = {\"a\":\"float\",\"b\":\"float\",\"alpha\":\"float\"}\noutputs = {\"result\":\"float\"}\ndef process(a, b, alpha):\n    # Linear interpolation between a and b\n    # alpha = 0 returns a, alpha = 1 returns b\n    a_val = a if a is not None else 0.0\n    b_val = b if b is not None else 0.0\n    t = alpha if alpha is not None else 0.0\n    t = max(0.0, min(1.0, t))  # Clamp 0-1\n    return a_val + (b_val - a_val) * t\n"
+}

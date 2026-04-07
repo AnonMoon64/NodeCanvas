@@ -1,0 +1,16 @@
+{
+  "type": "base",
+  "name": "ListFindByField",
+  "category": "Collections",
+  "inputs": {
+    "list": "list",
+    "fieldName": "string",
+    "fieldValue": "any"
+  },
+  "outputs": {
+    "item": "struct",
+    "index": "int",
+    "found": "bool"
+  },
+  "code": "name = \"ListFindByField\"\ninputs = {\"list\":\"list\",\"fieldName\":\"string\",\"fieldValue\":\"any\"}\noutputs = {\"item\":\"struct\",\"index\":\"int\",\"found\":\"bool\"}\ndef process(list, fieldName, fieldValue):\n    \"\"\"Find first struct/dict in list where field matches value\"\"\"\n    if not list or not isinstance(list, (list, tuple)):\n        return None, -1, False\n    field = str(fieldName or '')\n    for i, item in enumerate(list):\n        if isinstance(item, dict) and field in item:\n            if item[field] == fieldValue:\n                return item, i, True\n    return None, -1, False\n"
+}

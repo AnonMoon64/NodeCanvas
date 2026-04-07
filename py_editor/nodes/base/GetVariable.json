@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "GetVariable",
+  "category": "Variables",
+  "inputs": {
+    "name": "string"
+  },
+  "outputs": {
+    "value": "any"
+  },
+  "code": "name = \"GetVariable\"\ninputs = {\"name\":\"string\"}\noutputs = {\"value\":\"any\"}\ndef process(name):\n    # Retrieve variable from execution context\n    return None\n"
+}

@@ -1,0 +1,10 @@
+{
+  "type": "base",
+  "name": "CreateStruct",
+  "category": "Collections",
+  "inputs": {},
+  "outputs": {
+    "struct": "struct"
+  },
+  "code": "name = \"CreateStruct\"\ninputs = {}\noutputs = {\"struct\":\"struct\"}\ndef process():\n    \"\"\"Create an empty struct (dictionary)\"\"\"\n    return {}\n"
+}

@@ -1,0 +1,16 @@
+{
+    "type": "base",
+    "name": "WhileLoop",
+    "category": "Flow Control",
+    "inputs": {
+        "exec_in": "exec",
+        "condition": "bool",
+        "max_iterations": "int"
+    },
+    "outputs": {
+        "loop_body": "exec",
+        "completed": "exec",
+        "iteration": "int"
+    },
+    "code": "name = \"WhileLoop\"\ninputs = {\"exec_in\":\"exec\",\"condition\":\"bool\",\"max_iterations\":\"int\"}\noutputs = {\"loop_body\":\"exec\",\"completed\":\"exec\",\"iteration\":\"int\"}\ndef process(exec_in, condition, max_iterations):\n    # WhileLoop is a flow control node - actual loop logic handled by backend\n    # Backend will call loop_body while condition is true, with safety limit of max_iterations\n    # Default max_iterations is 10000 to prevent infinite loops\n    return None\n"
+}

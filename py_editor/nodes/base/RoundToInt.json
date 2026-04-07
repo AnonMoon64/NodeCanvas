@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "RoundToInt",
+  "category": "Math",
+  "inputs": {
+    "value": "float"
+  },
+  "outputs": {
+    "result": "int"
+  },
+  "code": "name = \"RoundToInt\"\ninputs = {\"value\":\"float\"}\noutputs = {\"result\":\"int\"}\ndef process(value):\n    if value is None:\n        return 0\n    return round(float(value))\n"
+}

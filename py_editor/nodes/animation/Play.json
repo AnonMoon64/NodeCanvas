@@ -1,0 +1,30 @@
+{
+    "name": "Play",
+    "category": "Animation",
+    "description": "Start playing an animation on a reference",
+    "color": "#4CAF50",
+    "inputs": {
+        "exec": "exec",
+        "target": "instance",
+        "speed": "float"
+    },
+    "outputs": {
+        "exec": "exec"
+    },
+    "widgets": {
+        "animation": {
+            "type": "string",
+            "default": "idle"
+        },
+        "loop": {
+            "type": "dropdown",
+            "options": [
+                "once",
+                "loop"
+            ],
+            "default": "once"
+        }
+    },
+    "isAnimationNode": true,
+    "code": "def process():\n    return ('exec_out',)"
+}

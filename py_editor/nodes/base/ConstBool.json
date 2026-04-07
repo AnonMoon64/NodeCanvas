@@ -1,0 +1,10 @@
+{
+  "type": "base",
+  "name": "ConstBool",
+  "category": "Value",
+  "inputs": {},
+  "outputs": {
+    "value": "bool"
+  },
+  "code": "name = \"ConstBool\"\ninputs = {}\noutputs = {\"value\":\"bool\"}\ndef process():\n    return False\n"
+}

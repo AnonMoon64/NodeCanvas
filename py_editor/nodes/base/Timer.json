@@ -1,0 +1,22 @@
+{
+  "type": "base",
+  "name": "Timer",
+  "category": "Time",
+  "inputs": {
+    "exec_in": "exec",
+    "duration": "float",
+    "looping": "bool"
+  },
+  "outputs": {
+    "exec_out": "exec",
+    "on_tick": "exec",
+    "on_complete": "exec",
+    "elapsed": "float",
+    "progress": "float"
+  },
+  "code": "name = \"Timer\"\ninputs = {\"exec_in\":\"exec\",\"duration\":\"float\",\"looping\":\"bool\"}\noutputs = {\"exec_out\":\"exec\",\"on_tick\":\"exec\",\"on_complete\":\"exec\",\"elapsed\":\"float\",\"progress\":\"float\"}\ndef process(exec_in, duration, looping):\n    # Timer - a safer alternative to Event_Tick for timed operations\n    #\n    # exec_in: Start the timer\n    # duration: Time in seconds (default 1.0)\n    # looping: If True, timer restarts after completion\n    #\n    # exec_out: Fires immediately when started\n    # on_tick: Fires each update while timer is running\n    # on_complete: Fires when timer reaches duration\n    # elapsed: Seconds since timer started\n    # progress: 0.0 to 1.0 progress through duration\n    #\n    # Timer handling is done by the runtime.\n    dur = duration if duration and duration > 0 else 1.0\n    return ('exec_out', 'on_tick', 'on_complete', 0.0, 0.0)\n",
+  "defaults": {
+    "duration": 1.0,
+    "looping": false
+  }
+}

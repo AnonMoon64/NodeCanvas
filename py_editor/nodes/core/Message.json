@@ -1,0 +1,23 @@
+{
+    "name": "Message",
+    "category": "Core/Events",
+    "description": "Invoke a custom event. Without target = self (this graph). With target = external reference.",
+    "color": "#AB47BC",
+    "inputs": {
+        "exec": "exec",
+        "target": "instance",
+        "payload": "any"
+    },
+    "outputs": {
+        "exec": "exec",
+        "result": "any"
+    },
+    "widgets": {
+        "event": {
+            "type": "string",
+            "default": "MyEvent"
+        }
+    },
+    "isMessageNode": true,
+    "code": "def process():\n    # Execution handled by interpreter\n    # If target is None/empty, invokes on self\n    # If target is a reference, invokes on that graph\n    return None"
+}

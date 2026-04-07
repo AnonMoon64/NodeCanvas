@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "ClearTimer",
+  "category": "Time",
+  "inputs": {
+    "exec_in": "exec",
+    "timer_id": "string"
+  },
+  "outputs": {
+    "exec_out": "exec"
+  },
+  "code": "name = \"ClearTimer\"\ninputs = {\"exec_in\":\"exec\",\"timer_id\":\"string\"}\noutputs = {\"exec_out\":\"exec\"}\ndef process(exec_in, timer_id):\n    # ClearTimer - stops a running timer\n    # Use to cancel SetTimer or Timer nodes\n    #\n    # timer_id: Identifier of timer to stop (optional - clears all if empty)\n    #\n    # Timer handling is done by the runtime.\n    return ('exec_out',)\n"
+}

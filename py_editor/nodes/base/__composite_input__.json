@@ -1,0 +1,8 @@
+{
+  "type": "base",
+  "name": "__composite_input__",
+  "category": "Composite",
+  "inputs": {},
+  "outputs": {"out0": "any"},
+  "code": "name = \"__composite_input__\"\ninputs = {}\noutputs = {\"out0\":\"any\"}\ndef process():\n    return None\n"
+}

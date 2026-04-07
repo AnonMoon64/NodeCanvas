@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "InverseLerp",
+  "category": "Math",
+  "inputs": {
+    "a": "float",
+    "b": "float",
+    "value": "float"
+  },
+  "outputs": {
+    "alpha": "float"
+  },
+  "code": "name = \"InverseLerp\"\ninputs = {\"a\":\"float\",\"b\":\"float\",\"value\":\"float\"}\noutputs = {\"alpha\":\"float\"}\ndef process(a, b, value):\n    # Inverse linear interpolation - find alpha for a value between a and b\n    # Returns 0 when value = a, returns 1 when value = b\n    a_val = a if a is not None else 0.0\n    b_val = b if b is not None else 1.0\n    v = value if value is not None else 0.0\n    if abs(b_val - a_val) < 0.0001:\n        return 0.0\n    alpha = (v - a_val) / (b_val - a_val)\n    return max(0.0, min(1.0, alpha))  # Clamp 0-1\n"
+}

@@ -1,0 +1,15 @@
+{
+  "type": "base",
+  "name": "SetVariable",
+  "category": "Variables",
+  "inputs": {
+    "exec_in": "exec",
+    "name": "string",
+    "value": "any"
+  },
+  "outputs": {
+    "exec_out": "exec",
+    "value": "any"
+  },
+  "code": "name = \"SetVariable\"\ninputs = {\"exec_in\":\"exec\",\"name\":\"string\",\"value\":\"any\"}\noutputs = {\"exec_out\":\"exec\",\"value\":\"any\"}\ndef process(exec_in, name, value):\n    # Store variable in execution context\n    return ('exec_out', value)\n"
+}

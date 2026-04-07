@@ -1,0 +1,10 @@
+{
+  "type": "base",
+  "name": "OnStart",
+  "category": "Events",
+  "inputs": {},
+  "outputs": {
+    "exec_out": "exec"
+  },
+  "code": "name = \"OnStart\"\ninputs = {}\noutputs = {\"exec_out\":\"exec\"}\ndef process():\n    # OnStart is an entry point - execution starts here when graph runs\n    return ('exec_out',)\n"
+}

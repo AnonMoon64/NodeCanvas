@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "Branch",
+  "category": "Flow Control",
+  "inputs": {
+    "exec_in": "exec",
+    "condition": "bool"
+  },
+  "outputs": {
+    "exec_true": "exec",
+    "exec_false": "exec"
+  },
+  "code": "name = \"Branch\"\ninputs = {\"exec_in\":\"exec\",\"condition\":\"bool\"}\noutputs = {\"exec_true\":\"exec\",\"exec_false\":\"exec\"}\ndef process(exec_in, condition):\n    # Branch is a flow control node - actual execution handled by backend\n    # Returns which exec output to follow based on condition\n    return ('exec_true' if condition else 'exec_false',)\n"
+}

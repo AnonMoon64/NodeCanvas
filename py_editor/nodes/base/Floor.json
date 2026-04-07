@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "Floor",
+  "category": "Math",
+  "inputs": {
+    "value": "float"
+  },
+  "outputs": {
+    "result": "int"
+  },
+  "code": "name = \"Floor\"\ninputs = {\"value\":\"float\"}\noutputs = {\"result\":\"int\"}\nimport math\ndef process(value):\n    if value is None:\n        return 0\n    return math.floor(float(value))\n"
+}

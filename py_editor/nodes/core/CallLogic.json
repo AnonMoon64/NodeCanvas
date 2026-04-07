@@ -1,0 +1,15 @@
+{
+    "name": "CallLogic",
+    "category": "Core/Call",
+    "description": "Call an external logic graph as a function",
+    "color": "#6B5B95",
+    "inputs": {
+        "exec": "exec"
+    },
+    "outputs": {
+        "exec": "exec"
+    },
+    "dynamic": true,
+    "isCallNode": true,
+    "code": "def process():\n    # Execution handled by interpreter\n    return None"
+}

@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "OnUITextChanged",
+  "category": "UI Events",
+  "inputs": {
+    "inputId": "string"
+  },
+  "outputs": {
+    "exec_out": "exec",
+    "text": "string"
+  },
+  "code": "name = \"OnUITextChanged\"\ninputs = {\"inputId\":\"string\"}\noutputs = {\"exec_out\":\"exec\",\"text\":\"string\"}\ndef process(inputId):\n    # This is an event node - triggers exec flow when text changes\n    # The actual triggering and value are handled by the runtime\n    return (None, '')\n"
+}

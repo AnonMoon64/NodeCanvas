@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "ListSlice",
+  "category": "Collections",
+  "inputs": {
+    "list": "list",
+    "start": "int",
+    "end": "int"
+  },
+  "outputs": {
+    "sliced": "list"
+  },
+  "code": "name = \"ListSlice\"\ninputs = {\"list\":\"list\",\"start\":\"int\",\"end\":\"int\"}\noutputs = {\"sliced\":\"list\"}\ndef process(list, start, end):\n    \"\"\"Get a slice of a list from start to end index\"\"\"\n    if not list or not isinstance(list, (list, tuple)):\n        return []\n    s = int(start or 0)\n    e = int(end) if end else len(list)\n    return list[s:e]\n"
+}

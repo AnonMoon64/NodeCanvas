@@ -1,0 +1,10 @@
+{
+  "type": "base",
+  "name": "CreateList",
+  "category": "Variables",
+  "inputs": {},
+  "outputs": {
+    "list": "any"
+  },
+  "code": "name = \"CreateList\"\ninputs = {}\noutputs = {\"list\":\"any\"}\ndef process():\n    return []\n"
+}

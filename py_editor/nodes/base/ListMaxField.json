@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "ListMaxField",
+  "category": "Collections",
+  "inputs": {
+    "list": "list",
+    "fieldName": "string"
+  },
+  "outputs": {
+    "item": "struct",
+    "maxValue": "float"
+  },
+  "code": "name = \"ListMaxField\"\ninputs = {\"list\":\"list\",\"fieldName\":\"string\"}\noutputs = {\"item\":\"struct\",\"maxValue\":\"float\"}\ndef process(list, fieldName):\n    \"\"\"Find struct with maximum value in a field\"\"\"\n    if not list or not isinstance(list, (list, tuple)):\n        return None, 0.0\n    field = str(fieldName or '')\n    max_val = None\n    max_item = None\n    for item in list:\n        if isinstance(item, dict) and field in item:\n            try:\n                val = float(item[field])\n                if max_val is None or val > max_val:\n                    max_val = val\n                    max_item = item\n            except (TypeError, ValueError):\n                pass\n    return max_item, max_val if max_val is not None else 0.0\n"
+}

@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "SetUIScreen",
+  "category": "UI",
+  "inputs": {
+    "exec_in": "exec",
+    "screenName": "string"
+  },
+  "outputs": {
+    "exec_out": "exec"
+  },
+  "code": "name = \"SetUIScreen\"\ninputs = {\"exec_in\":\"exec\",\"screenName\":\"string\"}\noutputs = {\"exec_out\":\"exec\"}\ndef process(exec_in, screenName):\n    # This node triggers a screen change in the UI\n    # The actual switching is handled by the runtime\n    return ('exec_out',)\n"
+}

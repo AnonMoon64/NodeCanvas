@@ -1,0 +1,122 @@
+{
+  "package_name": "Math Utilities",
+  "description": "A collection of mathematical utility nodes",
+  "author": "NodeCanvas",
+  "version": "1.0",
+  "nodes": [
+    {
+      "name": "Clamp",
+      "description": "Clamps a number between min and max values",
+      "category": "Math Utils",
+      "inputs": {
+        "value": {
+          "type": "float"
+        },
+        "min": {
+          "type": "float"
+        },
+        "max": {
+          "type": "float"
+        }
+      },
+      "outputs": {
+        "result": {
+          "type": "float"
+        }
+      },
+      "code": "def process(value, min, max):\n    if value is None:\n        return 0.0\n    min_val = min if min is not None else 0.0\n    max_val = max if max is not None else 1.0\n    return min_val if value < min_val else (max_val if value > max_val else value)"
+    },
+    {
+      "name": "Lerp",
+      "description": "Linear interpolation between two values",
+      "category": "Math Utils",
+      "inputs": {
+        "a": {
+          "type": "float"
+        },
+        "b": {
+          "type": "float"
+        },
+        "t": {
+          "type": "float"
+        }
+      },
+      "outputs": {
+        "result": {
+          "type": "float"
+        }
+      },
+      "code": "def process(a, b, t):\n    a_val = a if a is not None else 0.0\n    b_val = b if b is not None else 1.0\n    t_val = t if t is not None else 0.5\n    return a_val + (b_val - a_val) * t_val"
+    },
+    {
+      "name": "Abs",
+      "description": "Returns the absolute value of a number",
+      "category": "Math Utils",
+      "inputs": {
+        "value": {
+          "type": "float"
+        }
+      },
+      "outputs": {
+        "result": {
+          "type": "float"
+        }
+      },
+      "code": "def process(value):\n    return abs(value) if value is not None else 0.0"
+    },
+    {
+      "name": "Power",
+      "description": "Raises a number to a power",
+      "category": "Math Utils",
+      "inputs": {
+        "base": {
+          "type": "float"
+        },
+        "exponent": {
+          "type": "float"
+        }
+      },
+      "outputs": {
+        "result": {
+          "type": "float"
+        }
+      },
+      "code": "def process(base, exponent):\n    b = base if base is not None else 0.0\n    e = exponent if exponent is not None else 2.0\n    return b ** e"
+    },
+    {
+      "name": "SquareRoot",
+      "description": "Returns the square root of a number",
+      "category": "Math Utils",
+      "inputs": {
+        "value": {
+          "type": "float"
+        }
+      },
+      "outputs": {
+        "result": {
+          "type": "float"
+        }
+      },
+      "code": "def process(value):\n    import math\n    v = value if value is not None else 0.0\n    return math.sqrt(abs(v))"
+    },
+    {
+      "name": "Round",
+      "description": "Rounds a number to specified decimal places",
+      "category": "Math Utils",
+      "inputs": {
+        "value": {
+          "type": "float"
+        },
+        "decimals": {
+          "type": "int"
+        }
+      },
+      "outputs": {
+        "result": {
+          "type": "float"
+        }
+      },
+      "code": "def process(value, decimals):\n    v = value if value is not None else 0.0\n    d = int(decimals) if decimals is not None else 0\n    return round(v, d)"
+    }
+  ]
+}

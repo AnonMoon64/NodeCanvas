@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "Equal",
+  "category": "Comparison",
+  "inputs": {
+    "a": "any",
+    "b": "any"
+  },
+  "outputs": {
+    "result": "bool"
+  },
+  "code": "name = \"Equal\"\ninputs = {\"a\":\"any\",\"b\":\"any\"}\noutputs = {\"result\":\"bool\"}\ndef process(a, b):\n    return a == b\n"
+}

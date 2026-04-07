@@ -1,0 +1,37 @@
+# NodeCanvas .gitignore
+
+# Environment files with API keys
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Plugin cache
+.plugin_cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+compass_artifact_wf-f8a3c148-1c5a-47c6-abce-91d03cba3655_text_markdown.md
+.github/copilot-instructions.md

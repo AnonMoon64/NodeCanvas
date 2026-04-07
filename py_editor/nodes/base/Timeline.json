@@ -1,0 +1,27 @@
+{
+  "type": "base",
+  "name": "Timeline",
+  "category": "Time",
+  "inputs": {
+    "play": "exec",
+    "stop": "exec",
+    "reverse": "exec",
+    "duration": "float",
+    "looping": "bool",
+    "play_rate": "float"
+  },
+  "outputs": {
+    "exec_out": "exec",
+    "update": "exec",
+    "finished": "exec",
+    "direction_changed": "exec",
+    "alpha": "float",
+    "time": "float"
+  },
+  "code": "name = \"Timeline\"\ninputs = {\"play\":\"exec\",\"stop\":\"exec\",\"reverse\":\"exec\",\"duration\":\"float\",\"looping\":\"bool\",\"play_rate\":\"float\"}\noutputs = {\"exec_out\":\"exec\",\"update\":\"exec\",\"finished\":\"exec\",\"direction_changed\":\"exec\",\"alpha\":\"float\",\"time\":\"float\"}\ndef process(play, stop, reverse, duration, looping, play_rate):\n    # Timeline - smooth animation driver\n    # Use for UI animations, transitions, and timed sequences\n    #\n    # Inputs:\n    #   play: Start/resume playing forward\n    #   stop: Pause the timeline\n    #   reverse: Play in reverse direction\n    #   duration: Length in seconds (default 1.0)\n    #   looping: Restart when finished\n    #   play_rate: Speed multiplier (default 1.0)\n    #\n    # Outputs:\n    #   exec_out: Fires when play/stop/reverse triggered\n    #   update: Fires each frame while playing\n    #   finished: Fires when timeline completes\n    #   direction_changed: Fires when direction reverses\n    #   alpha: 0.0 to 1.0 normalized progress\n    #   time: Current time in seconds\n    #\n    # Timeline handling is done by the runtime.\n    return ('exec_out', 'update', 'finished', 'direction_changed', 0.0, 0.0)\n",
+  "defaults": {
+    "duration": 1.0,
+    "looping": false,
+    "play_rate": 1.0
+  }
+}

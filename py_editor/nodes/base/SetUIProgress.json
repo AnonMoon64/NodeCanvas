@@ -1,0 +1,18 @@
+{
+    "type": "base",
+    "name": "SetUIProgress",
+    "category": "UI",
+    "inputs": {
+        "exec_in": "exec",
+        "widgetId": "string",
+        "value": "int",
+        "max": "int"
+    },
+    "outputs": {
+        "exec_out": "exec"
+    },
+    "code": "name = \"SetUIProgress\"\ninputs = {\"exec_in\":\"exec\",\"widgetId\":\"string\",\"value\":\"int\",\"max\":\"int\"}\noutputs = {\"exec_out\":\"exec\"}\ndef process(exec_in, widgetId, value, max):\n    # SetUIProgress - updates a ProgressBar widget value\n    # widgetId: The ID of the ProgressBar to update\n    # value: Current progress value\n    # max: Maximum progress value (default 100)\n    #\n    # Widget updates are handled by the runtime.\n    return ('exec_out',)\n",
+    "defaults": {
+        "max": 100
+    }
+}

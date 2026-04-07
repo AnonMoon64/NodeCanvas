@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "OnUICheckboxChanged",
+  "category": "UI Events",
+  "inputs": {
+    "checkboxId": "string"
+  },
+  "outputs": {
+    "exec_out": "exec",
+    "checked": "bool"
+  },
+  "code": "name = \"OnUICheckboxChanged\"\ninputs = {\"checkboxId\":\"string\"}\noutputs = {\"exec_out\":\"exec\",\"checked\":\"bool\"}\ndef process(checkboxId):\n    # This is an event node - triggers exec flow when checkbox changes\n    # The actual triggering and value are handled by the runtime\n    return (None, False)\n"
+}

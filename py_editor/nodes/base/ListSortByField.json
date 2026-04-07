@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "ListSortByField",
+  "category": "Collections",
+  "inputs": {
+    "list": "list",
+    "fieldName": "string",
+    "ascending": "bool"
+  },
+  "outputs": {
+    "sorted": "list"
+  },
+  "code": "name = \"ListSortByField\"\ninputs = {\"list\":\"list\",\"fieldName\":\"string\",\"ascending\":\"bool\"}\noutputs = {\"sorted\":\"list\"}\ndef process(list, fieldName, ascending):\n    \"\"\"Sort list of structs/dicts by a field value\"\"\"\n    if not list or not isinstance(list, (list, tuple)):\n        return []\n    field = str(fieldName or '')\n    try:\n        result = sorted(list, key=lambda x: x.get(field, 0) if isinstance(x, dict) else 0, reverse=not ascending)\n        return result\n    except:\n        return list[:]\n"
+}

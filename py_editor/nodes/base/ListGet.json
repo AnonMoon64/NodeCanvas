@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "ListGet",
+  "category": "Variables",
+  "inputs": {
+    "list": "any",
+    "index": "int"
+  },
+  "outputs": {
+    "value": "any"
+  },
+  "code": "name = \"ListGet\"\ninputs = {\"list\":\"any\",\"index\":\"int\"}\noutputs = {\"value\":\"any\"}\ndef process(list, index):\n    if list is None or index is None:\n        return None\n    try:\n        return list[int(index)]\n    except (IndexError, TypeError):\n        return None\n"
+}

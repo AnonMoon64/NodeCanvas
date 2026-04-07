@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "ListContains",
+  "category": "Variables",
+  "inputs": {
+    "list": "any",
+    "value": "any"
+  },
+  "outputs": {
+    "contains": "bool"
+  },
+  "code": "name = \"ListContains\"\ninputs = {\"list\":\"any\",\"value\":\"any\"}\noutputs = {\"contains\":\"bool\"}\ndef process(list, value):\n    if list is None:\n        return False\n    try:\n        return value in list\n    except TypeError:\n        return False\n"
+}

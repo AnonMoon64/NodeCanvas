@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "OnUIButtonPressed",
+  "category": "UI Events",
+  "inputs": {
+    "buttonId": "string"
+  },
+  "outputs": {
+    "exec_out": "exec"
+  },
+  "code": "name = \"OnUIButtonPressed\"\ninputs = {\"buttonId\":\"string\"}\noutputs = {\"exec_out\":\"exec\"}\ndef process(buttonId):\n    # This is an event node - triggers exec flow when button pressed\n    # The actual triggering is handled by the runtime\n    return None\n"
+}

@@ -1,0 +1,13 @@
+{
+    "name": "Reference",
+    "category": "Core/Logic",
+    "description": "Creates an opaque handle to a logic graph instance. Can be passed and messaged, but never inspected.",
+    "color": "#7E57C2",
+    "inputs": {},
+    "outputs": {
+        "handle": "instance"
+    },
+    "dynamic": true,
+    "isReferenceNode": true,
+    "code": "def process():\n    # Returns opaque handle - execution handled by interpreter\n    return None"
+}

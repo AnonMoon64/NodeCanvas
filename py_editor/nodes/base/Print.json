@@ -1,0 +1,15 @@
+{
+  "type": "base",
+  "name": "Print",
+  "category": "Debug",
+  "inputs": {
+    "exec_in": "exec",
+    "value": "any",
+    "label": "string"
+  },
+  "outputs": {
+    "exec_out": "exec",
+    "value": "any"
+  },
+  "code": "name = \"Print\"\ninputs = {\"exec_in\":\"exec\",\"value\":\"any\",\"label\":\"string\"}\noutputs = {\"exec_out\":\"exec\",\"value\":\"any\"}\ndef process(exec_in, value, label=\"\"):\n    prefix = f\"[{label}] \" if label else \"\"\n    print(f\"{prefix}{value}\")\n    return ('exec_out', value)\n"
+}

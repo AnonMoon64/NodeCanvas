@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "StructFields",
+  "category": "Collections",
+  "inputs": {
+    "struct": "struct"
+  },
+  "outputs": {
+    "fields": "list"
+  },
+  "code": "name = \"StructFields\"\ninputs = {\"struct\":\"struct\"}\noutputs = {\"fields\":\"list\"}\ndef process(struct):\n    \"\"\"Get list of field names in struct\"\"\"\n    if struct is None or not isinstance(struct, dict):\n        return []\n    return list(struct.keys())\n"
+}

@@ -1,0 +1,14 @@
+{
+    "type": "base",
+    "name": "SetUIText",
+    "category": "UI",
+    "inputs": {
+        "exec_in": "exec",
+        "widgetId": "string",
+        "text": "string"
+    },
+    "outputs": {
+        "exec_out": "exec"
+    },
+    "code": "name = \"SetUIText\"\ninputs = {\"exec_in\":\"exec\",\"widgetId\":\"string\",\"text\":\"string\"}\noutputs = {\"exec_out\":\"exec\"}\ndef process(exec_in, widgetId, text):\n    # SetUIText - updates the text of a Label, Button, or TextInput widget\n    # widgetId: The ID of the widget to update\n    # text: The new text content\n    #\n    # Widget updates are handled by the runtime.\n    return ('exec_out',)\n"
+}

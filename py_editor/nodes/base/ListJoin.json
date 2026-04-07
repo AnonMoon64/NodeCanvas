@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "ListJoin",
+  "category": "Collections",
+  "inputs": {
+    "list1": "list",
+    "list2": "list"
+  },
+  "outputs": {
+    "joined": "list"
+  },
+  "code": "name = \"ListJoin\"\ninputs = {\"list1\":\"list\",\"list2\":\"list\"}\noutputs = {\"joined\":\"list\"}\ndef process(list1, list2):\n    \"\"\"Join two lists together\"\"\"\n    l1 = list1 if isinstance(list1, list) else []\n    l2 = list2 if isinstance(list2, list) else []\n    return l1 + l2\n"
+}

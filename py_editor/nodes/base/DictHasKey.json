@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "DictHasKey",
+  "category": "Variables",
+  "inputs": {
+    "dict": "any",
+    "key": "string"
+  },
+  "outputs": {
+    "exists": "bool"
+  },
+  "code": "name = \"DictHasKey\"\ninputs = {\"dict\":\"any\",\"key\":\"string\"}\noutputs = {\"exists\":\"bool\"}\ndef process(dict, key):\n    if dict is None or key is None:\n        return False\n    try:\n        return str(key) in dict\n    except (TypeError, AttributeError):\n        return False\n"
+}

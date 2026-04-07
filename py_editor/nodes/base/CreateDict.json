@@ -1,0 +1,10 @@
+{
+  "type": "base",
+  "name": "CreateDict",
+  "category": "Variables",
+  "inputs": {},
+  "outputs": {
+    "dict": "any"
+  },
+  "code": "name = \"CreateDict\"\ninputs = {}\noutputs = {\"dict\":\"any\"}\ndef process():\n    return {}\n"
+}

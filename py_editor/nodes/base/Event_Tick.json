@@ -1,0 +1,17 @@
+{
+  "type": "base",
+  "name": "Event_Tick",
+  "category": "Events",
+  "inputs": {
+    "tick_rate": "int"
+  },
+  "outputs": {
+    "exec_out": "exec",
+    "delta_time": "float"
+  },
+  "code": "name = \"Event_Tick\"\ninputs = {\"tick_rate\":\"int\"}\noutputs = {\"exec_out\":\"exec\",\"delta_time\":\"float\"}\ndef process(tick_rate):\n    # Event_Tick fires every frame at the specified tick rate (Hz)\n    # Default: 30 Hz (safe default, not 60)\n    # WARNING: Heavy operations in Tick can freeze your graph!\n    # Consider using Timer or Timeline nodes for most use cases.\n    #\n    # tick_rate: Target ticks per second (10, 30, 60, etc.)\n    # delta_time: Time since last tick in seconds\n    #\n    # The actual tick handling is done by the runtime.\n    # This node just defines the interface.\n    rate = tick_rate if tick_rate and tick_rate > 0 else 30\n    delta = 1.0 / rate\n    return ('exec_out', delta)\n",
+  "defaults": {
+    "tick_rate": 30
+  },
+  "warning": "Heavy operations in Tick can freeze your graph. Consider Timer or Timeline nodes instead."
+}

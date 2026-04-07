@@ -1,0 +1,28 @@
+{
+    "name": "Custom Event",
+    "category": "Core/Events",
+    "description": "Define a custom event that can be invoked via Message. Public events are callable from outside.",
+    "color": "#66BB6A",
+    "inputs": {},
+    "outputs": {
+        "exec": "exec",
+        "payload": "any"
+    },
+    "widgets": {
+        "name": {
+            "type": "string",
+            "default": "MyEvent"
+        },
+        "visibility": {
+            "type": "dropdown",
+            "options": [
+                "public",
+                "private"
+            ],
+            "default": "public"
+        }
+    },
+    "isEntryPoint": true,
+    "isCustomEvent": true,
+    "code": "def process():\n    return ('exec_out', None)"
+}

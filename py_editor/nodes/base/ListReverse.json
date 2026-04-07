@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "ListReverse",
+  "category": "Collections",
+  "inputs": {
+    "list": "list"
+  },
+  "outputs": {
+    "reversed": "list"
+  },
+  "code": "name = \"ListReverse\"\ninputs = {\"list\":\"list\"}\noutputs = {\"reversed\":\"list\"}\ndef process(list):\n    \"\"\"Reverse a list\"\"\"\n    if not list or not isinstance(list, (list, tuple)):\n        return []\n    return list[::-1]\n"
+}

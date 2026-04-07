@@ -1,0 +1,29 @@
+{
+  "type": "base",
+  "name": "StopSound",
+  "category": "Audio",
+  "inputs": {
+    "exec_in": "exec"
+  },
+  "outputs": {
+    "exec_out": "exec"
+  },
+  "code": "name = \"StopSound\"\ninputs = {\"exec_in\":\"exec\"}\noutputs = {\"exec_out\":\"exec\"}\ndef process(exec_in):\n    # StopSound - stops audio on a specific channel\n    # Channel is set via node widget (not pin)\n    # Use 'All' to stop all audio channels\n    # Audio control handled by runtime.\n    return ('exec_out',)\n",
+  "widgets": {
+    "channel": {
+      "type": "dropdown",
+      "options": [
+        "All",
+        "Music",
+        "Effect",
+        "Voice",
+        "UI",
+        "Ambient",
+        "Custom1",
+        "Custom2",
+        "Custom3"
+      ],
+      "default": "All"
+    }
+  }
+}

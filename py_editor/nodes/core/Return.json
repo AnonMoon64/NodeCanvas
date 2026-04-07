@@ -1,0 +1,13 @@
+{
+    "name": "Return",
+    "category": "Core/Flow",
+    "description": "Return a value from this logic graph (defines output signature)",
+    "color": "#FF5722",
+    "inputs": {
+        "exec": "exec",
+        "value": "any"
+    },
+    "outputs": {},
+    "isExitPoint": true,
+    "code": "def process(exec_in, value):\n    return value"
+}

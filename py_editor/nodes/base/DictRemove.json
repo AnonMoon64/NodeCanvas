@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "DictRemove",
+  "category": "Variables",
+  "inputs": {
+    "dict": "any",
+    "key": "string"
+  },
+  "outputs": {
+    "dict": "any"
+  },
+  "code": "name = \"DictRemove\"\ninputs = {\"dict\":\"any\",\"key\":\"string\"}\noutputs = {\"dict\":\"any\"}\ndef process(dict, key):\n    if dict is None:\n        return {}\n    result = dict.copy() if hasattr(dict, 'copy') else {}\n    if key is not None:\n        result.pop(str(key), None)\n    return result\n"
+}

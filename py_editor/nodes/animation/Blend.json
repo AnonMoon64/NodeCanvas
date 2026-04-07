@@ -1,0 +1,26 @@
+{
+    "name": "Blend",
+    "category": "Animation",
+    "description": "Blend between two animations",
+    "color": "#9C27B0",
+    "inputs": {
+        "exec": "exec",
+        "target": "instance",
+        "weight": "float"
+    },
+    "outputs": {
+        "exec": "exec"
+    },
+    "widgets": {
+        "animA": {
+            "type": "string",
+            "default": "idle"
+        },
+        "animB": {
+            "type": "string",
+            "default": "walk"
+        }
+    },
+    "isAnimationNode": true,
+    "code": "def process():\n    return ('exec_out',)"
+}

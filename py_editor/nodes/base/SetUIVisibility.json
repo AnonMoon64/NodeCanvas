@@ -1,0 +1,17 @@
+{
+    "type": "base",
+    "name": "SetUIVisibility",
+    "category": "UI",
+    "inputs": {
+        "exec_in": "exec",
+        "widgetId": "string",
+        "visible": "bool"
+    },
+    "outputs": {
+        "exec_out": "exec"
+    },
+    "code": "name = \"SetUIVisibility\"\ninputs = {\"exec_in\":\"exec\",\"widgetId\":\"string\",\"visible\":\"bool\"}\noutputs = {\"exec_out\":\"exec\"}\ndef process(exec_in, widgetId, visible):\n    # SetUIVisibility - shows or hides a UI widget\n    # widgetId: The ID of the widget to show/hide\n    # visible: True to show, False to hide\n    #\n    # Widget visibility is handled by the runtime.\n    return ('exec_out',)\n",
+    "defaults": {
+        "visible": true
+    }
+}

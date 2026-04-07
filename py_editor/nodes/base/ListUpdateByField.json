@@ -1,0 +1,17 @@
+{
+  "type": "base",
+  "name": "ListUpdateByField",
+  "category": "Collections",
+  "inputs": {
+    "list": "list",
+    "fieldName": "string",
+    "fieldValue": "any",
+    "updateField": "string",
+    "updateValue": "any"
+  },
+  "outputs": {
+    "list": "list",
+    "updated": "bool"
+  },
+  "code": "name = \"ListUpdateByField\"\ninputs = {\"list\":\"list\",\"fieldName\":\"string\",\"fieldValue\":\"any\",\"updateField\":\"string\",\"updateValue\":\"any\"}\noutputs = {\"list\":\"list\",\"updated\":\"bool\"}\ndef process(list, fieldName, fieldValue, updateField, updateValue):\n    \"\"\"Find struct in list by field and update another field\"\"\"\n    if not list or not isinstance(list, (list, tuple)):\n        return [], False\n    result = [item.copy() if isinstance(item, dict) else item for item in list]\n    field = str(fieldName or '')\n    update_field = str(updateField or '')\n    for item in result:\n        if isinstance(item, dict) and field in item:\n            if item[field] == fieldValue:\n                item[update_field] = updateValue\n                return result, True\n    return result, False\n"
+}

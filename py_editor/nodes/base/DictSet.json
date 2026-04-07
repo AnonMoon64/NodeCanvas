@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "DictSet",
+  "category": "Variables",
+  "inputs": {
+    "dict": "any",
+    "key": "string",
+    "value": "any"
+  },
+  "outputs": {
+    "dict": "any"
+  },
+  "code": "name = \"DictSet\"\ninputs = {\"dict\":\"any\",\"key\":\"string\",\"value\":\"any\"}\noutputs = {\"dict\":\"any\"}\ndef process(dict, key, value):\n    if dict is None:\n        dict = {}\n    result = dict.copy() if hasattr(dict, 'copy') else {}\n    if key is not None:\n        result[str(key)] = value\n    return result\n"
+}

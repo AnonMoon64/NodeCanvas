@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "ListSum",
+  "category": "Collections",
+  "inputs": {
+    "list": "list"
+  },
+  "outputs": {
+    "sum": "float"
+  },
+  "code": "name = \"ListSum\"\ninputs = {\"list\":\"list\"}\noutputs = {\"sum\":\"float\"}\ndef process(list):\n    \"\"\"Sum all numeric values in a list\"\"\"\n    if not list or not isinstance(list, (list, tuple)):\n        return 0.0\n    total = 0.0\n    for item in list:\n        try:\n            total += float(item)\n        except (TypeError, ValueError):\n            pass\n    return total\n"
+}

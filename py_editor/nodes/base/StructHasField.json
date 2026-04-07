@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "StructHasField",
+  "category": "Collections",
+  "inputs": {
+    "struct": "struct",
+    "field": "string"
+  },
+  "outputs": {
+    "hasField": "bool"
+  },
+  "code": "name = \"StructHasField\"\ninputs = {\"struct\":\"struct\",\"field\":\"string\"}\noutputs = {\"hasField\":\"bool\"}\ndef process(struct, field):\n    \"\"\"Check if struct has a specific field\"\"\"\n    if struct is None or not isinstance(struct, dict):\n        return False\n    return str(field or '') in struct\n"
+}

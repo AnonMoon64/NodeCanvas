@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "MakeColor",
+  "category": "Math",
+  "inputs": {
+    "r": "int",
+    "g": "int",
+    "b": "int"
+  },
+  "outputs": {
+    "color": "color"
+  },
+  "code": "name = \"MakeColor\"\ninputs = {\"r\":\"int\",\"g\":\"int\",\"b\":\"int\"}\noutputs = {\"color\":\"color\"}\ndef process(r, g, b):\n    return [max(0, min(255, int(r or 0))), max(0, min(255, int(g or 0))), max(0, min(255, int(b or 0)))]\n"
+}

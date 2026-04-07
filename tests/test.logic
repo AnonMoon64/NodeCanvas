@@ -1,0 +1,205 @@
+{
+  "nodes": [
+    {
+      "id": 32,
+      "template": "OnStart",
+      "pos": [
+        -192.0,
+        192.0
+      ]
+    },
+    {
+      "id": 33,
+      "template": "Return",
+      "pos": [
+        432.0,
+        216.0
+      ]
+    },
+    {
+      "id": 41,
+      "template": "Message",
+      "pos": [
+        120.0,
+        216.0
+      ],
+      "values": {
+        "event": "GetHealth"
+      }
+    },
+    {
+      "id": 112,
+      "template": "Reference",
+      "pos": [
+        -192.0,
+        288.0
+      ],
+      "values": {
+        "graphPath": "C:\\Users\\atomi\\OneDrive\\Desktop\\NodeCanvas\\tests\\character.logic"
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": 32,
+      "from_pin": "exec_out",
+      "to": 41,
+      "to_pin": "exec"
+    },
+    {
+      "from": 41,
+      "from_pin": "exec",
+      "to": 33,
+      "to_pin": "exec_in"
+    },
+    {
+      "from": 41,
+      "from_pin": "result",
+      "to": 33,
+      "to_pin": "value"
+    },
+    {
+      "from": 112,
+      "from_pin": "handle",
+      "to": 41,
+      "to_pin": "target"
+    }
+  ],
+  "variables": {},
+  "ui": {
+    "screens": {
+      "Screen 1": [
+        {
+          "id": 1,
+          "type": "Button",
+          "properties": {
+            "type": "button",
+            "text": "Adventure Gate",
+            "buttonId": "",
+            "width": 100,
+            "height": 32,
+            "backgroundColor": "#2d2d30",
+            "textColor": "#e0e0e0"
+          },
+          "pos": [
+            -49.0,
+            96.0
+          ],
+          "parent_id": null
+        }
+      ],
+      "Screen 2": [
+        {
+          "id": 6,
+          "type": "Image",
+          "properties": {
+            "type": "image",
+            "source": "C:/Users/atomi/Downloads/91d245b1c_1000007502.png",
+            "width": 1273,
+            "height": 669,
+            "scaleMode": "fill",
+            "bindings": []
+          },
+          "pos": [
+            -641.6763607932418,
+            -314.95453179011713
+          ],
+          "parent_id": null
+        },
+        {
+          "id": 7,
+          "type": "Label",
+          "properties": {
+            "type": "label",
+            "text": "Label",
+            "fontSize": 20,
+            "textColor": "#e0e0e0",
+            "backgroundImage": "",
+            "width": 1036,
+            "height": 70,
+            "bindings": [
+              {
+                "property": "text",
+                "variable": "dialogue"
+              }
+            ]
+          },
+          "pos": [
+            -516.9748637691011,
+            171.30528030218736
+          ],
+          "parent_id": null
+        }
+      ]
+    },
+    "screen_order": [
+      "Screen 1",
+      "Screen 2"
+    ],
+    "current_screen": "Screen 2",
+    "form": {
+      "width": 1280,
+      "height": 720
+    },
+    "widgets": [
+      {
+        "id": 6,
+        "type": "Image",
+        "properties": {
+          "type": "image",
+          "source": "C:/Users/atomi/Downloads/91d245b1c_1000007502.png",
+          "width": 1273,
+          "height": 669,
+          "scaleMode": "fill",
+          "bindings": []
+        },
+        "pos": [
+          -641.6763607932418,
+          -314.95453179011713
+        ],
+        "parent_id": null
+      },
+      {
+        "id": 7,
+        "type": "Label",
+        "properties": {
+          "type": "label",
+          "text": "Label",
+          "fontSize": 20,
+          "textColor": "#e0e0e0",
+          "backgroundImage": "",
+          "width": 1036,
+          "height": 70,
+          "bindings": [
+            {
+              "property": "text",
+              "variable": "dialogue"
+            }
+          ]
+        },
+        "pos": [
+          -516.9748637691011,
+          171.30528030218736
+        ],
+        "parent_id": null
+      }
+    ]
+  },
+  "interface": {
+    "name": "test",
+    "type": "logic",
+    "version": "1.0",
+    "events": {
+      "OnStart": {
+        "visibility": "public",
+        "nodeId": 32
+      }
+    },
+    "outputs": {
+      "return_33": {
+        "type": "any",
+        "nodeId": 33
+      }
+    }
+  }
+}

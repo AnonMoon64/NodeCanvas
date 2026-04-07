@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "ListSumField",
+  "category": "Collections",
+  "inputs": {
+    "list": "list",
+    "fieldName": "string"
+  },
+  "outputs": {
+    "sum": "float"
+  },
+  "code": "name = \"ListSumField\"\ninputs = {\"list\":\"list\",\"fieldName\":\"string\"}\noutputs = {\"sum\":\"float\"}\ndef process(list, fieldName):\n    \"\"\"Sum a specific field across all structs in a list\"\"\"\n    if not list or not isinstance(list, (list, tuple)):\n        return 0.0\n    field = str(fieldName or '')\n    total = 0.0\n    for item in list:\n        if isinstance(item, dict) and field in item:\n            try:\n                total += float(item[field])\n            except (TypeError, ValueError):\n                pass\n    return total\n"
+}

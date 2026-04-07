@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "Abs",
+  "category": "Math",
+  "inputs": {
+    "value": "float"
+  },
+  "outputs": {
+    "result": "float"
+  },
+  "code": "name = \"Abs\"\ninputs = {\"value\":\"float\"}\noutputs = {\"result\":\"float\"}\ndef process(value):\n    if value is None:\n        return 0.0\n    return abs(float(value))\n"
+}

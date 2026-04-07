@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "Divide",
+  "category": "Math",
+  "inputs": {
+    "a": "float",
+    "b": "float"
+  },
+  "outputs": {
+    "result": "float"
+  },
+  "code": "name = \"Divide\"\ninputs = {\"a\":\"float\",\"b\":\"float\"}\noutputs = {\"result\":\"float\"}\ndef process(a, b):\n    if b == 0:\n        return float('inf')\n    return a / b\n"
+}

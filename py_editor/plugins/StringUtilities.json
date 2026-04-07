@@ -1,0 +1,116 @@
+{
+  "package_name": "String Utilities",
+  "description": "A collection of string manipulation nodes",
+  "author": "NodeCanvas",
+  "version": "1.0",
+  "nodes": [
+    {
+      "name": "StringLength",
+      "description": "Returns the length of a string",
+      "category": "String Utils",
+      "inputs": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "outputs": {
+        "length": {
+          "type": "int"
+        }
+      },
+      "code": "def process(text):\n    return len(text) if text else 0"
+    },
+    {
+      "name": "Concatenate",
+      "description": "Joins two strings together",
+      "category": "String Utils",
+      "inputs": {
+        "string1": {
+          "type": "string"
+        },
+        "string2": {
+          "type": "string"
+        }
+      },
+      "outputs": {
+        "result": {
+          "type": "string"
+        }
+      },
+      "code": "def process(string1, string2):\n    s1 = str(string1) if string1 is not None else ''\n    s2 = str(string2) if string2 is not None else ''\n    return s1 + s2"
+    },
+    {
+      "name": "ToUpperCase",
+      "description": "Converts a string to uppercase",
+      "category": "String Utils",
+      "inputs": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "outputs": {
+        "result": {
+          "type": "string"
+        }
+      },
+      "code": "def process(text):\n    return str(text).upper() if text is not None else ''"
+    },
+    {
+      "name": "ToLowerCase",
+      "description": "Converts a string to lowercase",
+      "category": "String Utils",
+      "inputs": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "outputs": {
+        "result": {
+          "type": "string"
+        }
+      },
+      "code": "def process(text):\n    return str(text).lower() if text is not None else ''"
+    },
+    {
+      "name": "StringReplace",
+      "description": "Replaces occurrences of a substring with another",
+      "category": "String Utils",
+      "inputs": {
+        "text": {
+          "type": "string"
+        },
+        "old": {
+          "type": "string"
+        },
+        "new": {
+          "type": "string"
+        }
+      },
+      "outputs": {
+        "result": {
+          "type": "string"
+        }
+      },
+      "code": "def process(text, old, new):\n    if text is None:\n        return ''\n    old_str = str(old) if old is not None else ''\n    new_str = str(new) if new is not None else ''\n    return str(text).replace(old_str, new_str)"
+    },
+    {
+      "name": "StringSplit",
+      "description": "Splits a string by a delimiter",
+      "category": "String Utils",
+      "inputs": {
+        "text": {
+          "type": "string"
+        },
+        "delimiter": {
+          "type": "string"
+        }
+      },
+      "outputs": {
+        "result": {
+          "type": "string"
+        }
+      },
+      "code": "def process(text, delimiter):\n    if text is None:\n        return ''\n    delim = str(delimiter) if delimiter is not None else ' '\n    parts = str(text).split(delim)\n    return str(parts)"
+    }
+  ]
+}

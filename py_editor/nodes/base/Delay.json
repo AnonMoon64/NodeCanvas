@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "Delay",
+  "category": "Flow Control",
+  "inputs": {
+    "exec_in": "exec",
+    "seconds": "float"
+  },
+  "outputs": {
+    "exec_out": "exec"
+  },
+  "code": "name = \"Delay\"\ninputs = {\"exec_in\":\"exec\",\"seconds\":\"float\"}\noutputs = {\"exec_out\":\"exec\"}\nimport time\ndef process(exec_in, seconds):\n    # Note: In a real implementation, this would be async\n    # For now, blocking delay (will freeze UI momentarily)\n    if seconds and seconds > 0:\n        time.sleep(min(seconds, 5.0))  # Cap at 5 seconds to avoid freezing\n    return ('exec_out',)\n"
+}

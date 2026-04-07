@@ -1,0 +1,10 @@
+{
+  "type": "base",
+  "name": "ConstInt",
+  "category": "Value",
+  "inputs": {},
+  "outputs": {
+    "value": "int"
+  },
+  "code": "name = \"ConstInt\"\ninputs = {}\noutputs = {\"value\":\"int\"}\ndef process():\n    return 0\n"
+}

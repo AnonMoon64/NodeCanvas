@@ -1,0 +1,13 @@
+{
+  "type": "base",
+  "name": "ListLast",
+  "category": "Collections",
+  "inputs": {
+    "list": "list"
+  },
+  "outputs": {
+    "item": "any",
+    "valid": "bool"
+  },
+  "code": "name = \"ListLast\"\ninputs = {\"list\":\"list\"}\noutputs = {\"item\":\"any\",\"valid\":\"bool\"}\ndef process(list):\n    \"\"\"Get last item from list\"\"\"\n    if not list or not isinstance(list, (list, tuple)) or len(list) == 0:\n        return None, False\n    return list[-1], True\n"
+}

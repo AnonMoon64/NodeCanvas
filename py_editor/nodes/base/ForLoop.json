@@ -1,0 +1,17 @@
+{
+    "type": "base",
+    "name": "ForLoop",
+    "category": "Flow Control",
+    "inputs": {
+        "exec_in": "exec",
+        "start": "int",
+        "end": "int",
+        "step": "int"
+    },
+    "outputs": {
+        "loop_body": "exec",
+        "completed": "exec",
+        "index": "int"
+    },
+    "code": "name = \"ForLoop\"\ninputs = {\"exec_in\":\"exec\",\"start\":\"int\",\"end\":\"int\",\"step\":\"int\"}\noutputs = {\"loop_body\":\"exec\",\"completed\":\"exec\",\"index\":\"int\"}\ndef process(exec_in, start, end, step):\n    # ForLoop is a flow control node - actual loop logic handled by backend\n    # Backend will call loop_body for each index from start to end with step, then completed when done\n    return None\n"
+}

@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "StructSet",
+  "category": "Collections",
+  "inputs": {
+    "struct": "struct",
+    "field": "string",
+    "value": "any"
+  },
+  "outputs": {
+    "struct": "struct"
+  },
+  "code": "name = \"StructSet\"\ninputs = {\"struct\":\"struct\",\"field\":\"string\",\"value\":\"any\"}\noutputs = {\"struct\":\"struct\"}\ndef process(struct, field, value):\n    if struct is None:\n        struct = {}\n    result = struct.copy()\n    result[str(field or '')] = value\n    return result\n"
+}
