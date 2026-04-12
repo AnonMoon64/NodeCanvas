@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import (
     QColor, QPainter, QFont, QSurfaceFormat, QMouseEvent,
-    QWheelEvent, QKeyEvent, QPen, QBrush, QCursor, QDrag,
+    QWheelEvent, QKeyEvent, QDropEvent, QPen, QBrush, QCursor, QDrag,
     QIcon, QPixmap, QShortcut, QKeySequence
 )
 from PyQt6.QtCore import (
@@ -203,6 +203,10 @@ def _normalize(v):
     ln = math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])
     return (v[0]/ln, v[1]/ln, v[2]/ln) if ln > 1e-9 else (0,0,0)
 
+def _normalize_2d(v):
+    ln = math.sqrt(v[0]*v[0]+v[1]*v[1])
+    return (v[0]/ln, v[1]/ln) if ln > 1e-9 else (0,0)
+
 def _dot(a, b):
     return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]
 
@@ -253,6 +257,21 @@ def _ray_intersect_aabb(origin, direction, amin, amax):
     if tmax < tmin or tmax < 0: return None
     return tmin
 
+def _dist_point_ray(p, origin, direction):
+    v = _sub(p, origin)
+    t = _dot(v, direction)
+    if t <= 0: return _length(v)
+    proj_p = _add(origin, _scale_vec(direction, t))
+    return _length(_sub(p, proj_p))
+
+def _rotate_point_around_pivot(p, pivot, rot_mat):
+    # p_local = p - pivot
+    v = _sub(p, pivot)
+    # v_rot = rot_mat * v
+    v_rot = _mat_vec_mul(rot_mat, v)
+    # p_rot = pivot + v_rot
+    return _add(pivot, v_rot)
+
 def _euler_to_matrix(ex, ey, ez):
     # Order: Y (Yaw) * X (Pitch) * Z (Roll) - Standard World-Space behavior
     rx, ry, rz = math.radians(ex), math.radians(ey), math.radians(ez)
@@ -271,6 +290,13 @@ def _euler_to_matrix(ex, ey, ez):
                 for k in range(3): C[i][j] += A[i][k] * B[k][j]
         return C
     return __mul(My, __mul(Mx, Mz))
+
+def _mat_vec_mul(M, v):
+    return (
+        M[0][0]*v[0] + M[0][1]*v[1] + M[0][2]*v[2],
+        M[1][0]*v[0] + M[1][1]*v[1] + M[1][2]*v[2],
+        M[2][0]*v[0] + M[2][1]*v[1] + M[2][2]*v[2]
+    )
 
 def _matrix_to_euler(M):
     # Recover YXZ-order Euler angles
@@ -453,6 +479,14 @@ class Camera2D:
         wx = self.x + (2.0 * mx / width - 1.0) * hw
         wy = self.y + (1.0 - 2.0 * my / height) * hh
         return wx, wy
+
+    def world_to_screen(self, pos, width, height):
+        wx, wy = pos[0], pos[1]
+        aspect = width / max(height, 1)
+        hw, hh = self.zoom_level * aspect, self.zoom_level
+        mx = ((wx - self.x) / hw + 1.0) / 2.0 * width
+        my = (1.0 - (wy - self.y) / hh) / 2.0 * height
+        return (mx, my)
 
 
 # ===================================================================
@@ -673,49 +707,51 @@ def _draw_gizmo_rotate_3d(size=1.0, hover_part=None):
 
 
 def _draw_gizmo_scale_3d(size=1.0, hover_part=None):
-    """Draw UE5-style Scale gizmo: 3 axis lines with solid cubes at the tips."""
+    """Draw Premium Modern Scale gizmo: Sleek shafts with solid-lit cubes."""
     glDisable(GL_DEPTH_TEST)
     s = size
 
     def get_color(axis, base):
-        if hover_part == axis or (hover_part == "Uniform"): return (1.0, 1.0, 0.0, 1.0)
+        if hover_part == axis or (hover_part == "Uniform"): 
+            return (1.0, 1.0, 0.4, 1.0) # Vibrant Golden highlight
         return base
 
-    # Axis shafts
-    glLineWidth(4.0 if hover_part else 2.5)
+    # Axis shafts - Thicker for premium feel
+    glLineWidth(5.0 if hover_part else 3.5)
     glBegin(GL_LINES)
-    glColor4f(*get_color("X", (0.95, 0.2, 0.2, GIZMO_ALPHA))); glVertex3f(0,0,0); glVertex3f(s,0,0)
-    glColor4f(*get_color("Y", (0.2, 0.95, 0.2, GIZMO_ALPHA))); glVertex3f(0,0,0); glVertex3f(0,s,0)
-    glColor4f(*get_color("Z", (0.3, 0.3, 0.95, GIZMO_ALPHA))); glVertex3f(0,0,0); glVertex3f(0,0,s)
+    # X - Modern Red
+    glColor4f(*get_color("X", (1.0, 0.3, 0.3, GIZMO_ALPHA))); glVertex3f(0,0,0); glVertex3f(s,0,0)
+    # Y - Modern Green
+    glColor4f(*get_color("Y", (0.3, 1.0, 0.3, GIZMO_ALPHA))); glVertex3f(0,0,0); glVertex3f(0,s,0)
+    # Z - Modern Blue
+    glColor4f(*get_color("Z", (0.3, 0.4, 1.0, GIZMO_ALPHA))); glVertex3f(0,0,0); glVertex3f(0,0,s)
     glEnd()
 
-    # Cube tips (UE5-style solid wireframe cubes)
-    cube_half = s * 0.08
+    # Cube tips (Solid Cubes)
+    cube_sz = s * 0.1
     for axis, color_tuple, center in [
-        ("X", (0.95,0.2,0.2,GIZMO_ALPHA), (s,0,0)),
-        ("Y", (0.2,0.95,0.2,GIZMO_ALPHA), (0,s,0)),
-        ("Z", (0.3,0.3,0.95,GIZMO_ALPHA), (0,0,s)),
+        ("X", (1.0, 0.3, 0.3, GIZMO_ALPHA), (s,0,0)),
+        ("Y", (0.3, 1.0, 0.3, GIZMO_ALPHA), (0,s,0)),
+        ("Z", (0.3, 0.4, 1.0, GIZMO_ALPHA), (0,0,s)),
     ]:
         col = get_color(axis, color_tuple)
-        glColor4f(*col)
         cx, cy, cz = center
-        # Draw filled-ish wireframe cube
-        _draw_wireframe_cube(cube_half*2, cube_half*2, cube_half*2, col, (col[0], col[1], col[2], 0.4))
+        glPushMatrix()
+        glTranslatef(cx, cy, cz)
+        # Draw solid cube at tip
+        _draw_wireframe_cube(cube_sz, cube_sz, cube_sz, col, (col[0], col[1], col[2], 0.7))
+        glPopMatrix()
 
-    # Center box
-    center_sz = s * 0.12
-    uc = get_color("Uniform", (0.9, 0.9, 0.3, GIZMO_ALPHA))
-    glColor4f(uc[0], uc[1], uc[2], 0.6 if hover_part == "Uniform" else 0.15)
-    glBegin(GL_QUADS)
-    glVertex3f(-center_sz,-center_sz,-center_sz); glVertex3f(center_sz,-center_sz,-center_sz)
-    glVertex3f(center_sz,center_sz,-center_sz); glVertex3f(-center_sz,center_sz,-center_sz)
-    glEnd()
-    if hover_part == "Uniform":
-        glColor4f(1,1,0,0.8); glLineWidth(2.0)
-        glBegin(GL_LINE_LOOP)
-        glVertex3f(-center_sz,-center_sz,0); glVertex3f(center_sz,-center_sz,0)
-        glVertex3f(center_sz,center_sz,0); glVertex3f(-center_sz,center_sz,0)
-        glEnd()
+    # Center box (Uniform Scale)
+    center_sz = s * 0.15
+    is_uni = (hover_part == "Uniform")
+    uc = (1.0, 1.0, 0.4, 1.0) if is_uni else (1.0, 1.0, 1.0, 0.3)
+    
+    glPushMatrix()
+    # Draw central glowing box
+    _draw_wireframe_cube(center_sz, center_sz, center_sz, (uc[0], uc[1], uc[2], 0.9 if is_uni else 0.4), 
+                        (uc[0], uc[1], uc[2], 0.5 if is_uni else 0.1))
+    glPopMatrix()
 
     glLineWidth(1.0); glEnable(GL_DEPTH_TEST)
 
@@ -895,12 +931,50 @@ if QOpenGLWidget and HAS_OPENGL:
 
         def set_mode(self, mode: str):
             self._mode = mode; self.update()
-
         def set_transform_mode(self, mode: str):
             self._transform_mode = mode; self.update()
 
         def set_transform_space(self, space: str):
-            self._transform_space = space; self.update()
+            self._transform_space = space
+            self.update()
+
+        def _get_all_descendants(self, obj_id):
+            descendants = []
+            children = [o for o in self.scene_objects if o.parent_id == obj_id]
+            for child in children:
+                descendants.append(child)
+                descendants.extend(self._get_all_descendants(child.id))
+            return descendants
+
+        def _get_selection_center(self):
+            sel = [o for o in self.scene_objects if o.selected]
+            if not sel: return
+            
+            center = self._get_selection_center()
+            if self._mode == "3D":
+                # Find bounding sphere radius
+                max_d = 0.5 # minimum radius
+                for o in sel:
+                    d = _length(_sub(tuple(o.position), tuple(center)))
+                    max_d = max(max_d, d + _length(o.scale)*0.5)
+                
+                # Move camera to view the sphere
+                f = self._cam3d.front
+                dist = max_d / math.tan(math.radians(self._cam3d.fov * 0.5))
+                self._cam3d.pos = [center[0] - f[0]*dist*1.5, center[1] - f[1]*dist*1.5, center[2] - f[2]*dist*1.5]
+            else:
+                # 2D Bounding Box
+                min_x, min_y = 1e9, 1e9
+                max_x, max_y = -1e9, -1e9
+                for o in sel:
+                    hw, hh = o.scale[0]*0.5, o.scale[1]*0.5
+                    min_x = min(min_x, o.position[0]-hw); max_x = max(max_x, o.position[0]+hw)
+                    min_y = min(min_y, o.position[1]-hh); max_y = max(max_y, o.position[1]+hh)
+                
+                self._cam2d.x, self._cam2d.y = center[0], center[1]
+                w, h = max_x - min_x, max_y - min_y
+                self._cam2d.zoom_level = max(w, h) * 0.8
+            self.update()
 
         def set_grid_size(self, size: float):
             self.grid_size = size; self.update()
@@ -960,6 +1034,54 @@ if QOpenGLWidget and HAS_OPENGL:
                 self._draw_grid_2d()
                 self._draw_scene_objects_2d()
                 self._draw_gizmo_for_selected_2d()
+
+            self._draw_overlay_2d(w, h)
+
+        def _draw_overlay_2d(self, w, h):
+            if getattr(self, '_drag_action', None) == "box_select" and getattr(self, '_select_start', None) and getattr(self, '_select_current', None):
+                x1, y1 = self._select_start
+                x2, y2 = self._select_current
+                min_x = min(x1, x2); max_x = max(x1, x2)
+                min_y = min(y1, y2); max_y = max(y1, y2)
+                
+                glMatrixMode(GL_PROJECTION)
+                glPushMatrix()
+                glLoadIdentity()
+                glOrtho(0, w, h, 0, -1, 1)
+                
+                glMatrixMode(GL_MODELVIEW)
+                glPushMatrix()
+                glLoadIdentity()
+                
+                glDisable(GL_DEPTH_TEST)
+                glEnable(GL_BLEND)
+                
+                # Fill
+                glColor4f(0.3, 0.7, 1.0, 0.2)
+                glBegin(GL_QUADS)
+                glVertex2f(min_x, min_y)
+                glVertex2f(max_x, min_y)
+                glVertex2f(max_x, max_y)
+                glVertex2f(min_x, max_y)
+                glEnd()
+                
+                # Outline
+                glColor4f(0.3, 0.7, 1.0, 0.8)
+                glLineWidth(1.5)
+                glBegin(GL_LINE_LOOP)
+                glVertex2f(min_x, min_y)
+                glVertex2f(max_x, min_y)
+                glVertex2f(max_x, max_y)
+                glVertex2f(min_x, max_y)
+                glEnd()
+                glLineWidth(1.0)
+                
+                glEnable(GL_DEPTH_TEST)
+                
+                glMatrixMode(GL_PROJECTION)
+                glPopMatrix()
+                glMatrixMode(GL_MODELVIEW)
+                glPopMatrix()
 
         # ---- 3D Grid ----
         def _draw_grid_3d(self):
@@ -1062,7 +1184,9 @@ if QOpenGLWidget and HAS_OPENGL:
                 glRotatef(obj.rotation[2], 0, 0, 1) # Roll
                 glScalef(*obj.scale)
                 color = tuple(SELECT_COLOR) if obj.selected else tuple(obj.color)
-                fill = (color[0]*0.3, color[1]*0.3, color[2]*0.3, 0.3) if obj.selected else OBJECT_FACE_COLOR
+                fill = (color[0]*0.3, color[1]*0.3, color[2]*0.3, 0.4) if obj.selected else OBJECT_FACE_COLOR
+                if obj.selected: glLineWidth(3.0)
+                else: glLineWidth(1.0)
                 t = obj.obj_type
                 if t == 'cube': _draw_wireframe_cube(1,1,1, color, fill)
                 elif t == 'sphere': _draw_wireframe_sphere(0.5, color=color)
@@ -1088,9 +1212,19 @@ if QOpenGLWidget and HAS_OPENGL:
             glEnable(GL_DEPTH_TEST)
 
         # ---- Gizmos ----
-        def _get_gizmo_size_3d(self, obj):
+        def _get_selection_center(self):
+            sel = [o for o in self.scene_objects if o.selected]
+            if not sel: return (0,0,0)
+            avg = [0.0, 0.0, 0.0]
+            for o in sel:
+                for i in range(3): avg[i] += o.position[i]
+            return [v / len(sel) for v in avg]
+
+        def _get_gizmo_size_3d(self, pos):
             """Compute gizmo size proportional to screen (constant apparent size)."""
-            dist = _length(_sub(tuple(obj.position), tuple(self._cam3d.pos)))
+            # Ensure pos is a tuple/list of 3 floats
+            p = tuple(pos)
+            dist = _length(_sub(p, tuple(self._cam3d.pos)))
             return max(0.3, dist * 0.08)
 
         def _get_gizmo_size_2d(self):
@@ -1099,10 +1233,20 @@ if QOpenGLWidget and HAS_OPENGL:
         def _draw_gizmo_for_selected_3d(self):
             sel = [o for o in self.scene_objects if o.selected]
             if not sel: return
-            obj = sel[0]
+            
+            center = self._get_selection_center()
             glPushMatrix()
-            glTranslatef(*obj.position)
-            sz = self._get_gizmo_size_3d(obj)
+            glTranslatef(*center)
+            
+            # Local Rotation Basis
+            if self._transform_space == "Local":
+                # Use the last selected object's rotation
+                obj = sel[-1]
+                glRotatef(obj.rotation[1], 0, 1, 0) # Yaw (Global Up)
+                glRotatef(obj.rotation[0], 1, 0, 0) # Pitch
+                glRotatef(obj.rotation[2], 0, 0, 1) # Roll
+
+            sz = self._get_gizmo_size_3d(center)
             if self._transform_mode == "move":
                 _draw_gizmo_move_3d(sz, self._hover_gizmo_part or self._active_gizmo_part)
             elif self._transform_mode == "rotate":
@@ -1114,9 +1258,14 @@ if QOpenGLWidget and HAS_OPENGL:
         def _draw_gizmo_for_selected_2d(self):
             sel = [o for o in self.scene_objects if o.selected]
             if not sel: return
-            obj = sel[0]
+            center = self._get_selection_center()
             glPushMatrix()
-            glTranslatef(obj.position[0], obj.position[1], 0)
+            glTranslatef(center[0], center[1], 0)
+            
+            if self._transform_space == "Local":
+                obj = sel[-1]
+                glRotatef(obj.rotation[2], 0, 0, 1)
+
             sz = self._get_gizmo_size_2d()
             hp = self._hover_gizmo_part or self._active_gizmo_part
             if self._transform_mode == "move":
@@ -1155,100 +1304,82 @@ if QOpenGLWidget and HAS_OPENGL:
         def _pick_gizmo_3d(self, mx, my):
             sel = [o for o in self.scene_objects if o.selected]
             if not sel: return None
-            obj = sel[0]
+            
+            center = self._get_selection_center()
             origin, direction = self._cam3d.screen_to_ray(mx, my, self.width(), self.height())
-            sz = self._get_gizmo_size_3d(obj)
+            sz = self._get_gizmo_size_3d(center)
             
             # Simple analytical picking for move arrows
             if self._transform_mode == "move":
+                # In Local space, we need to transform the ray? 
+                # For now, let's stick to world-space picking for simplicity if Global,
+                # or just use the center.
                 axes = [("X", (1,0,0)), ("Y", (0,1,0)), ("Z", (0,0,1))]
-                best_part, best_dist = None, 0.15 * sz
-                for name, axis_vec in axes:
-                    dist, t_ray, t_axis = _dist_line_line(origin, direction, tuple(obj.position), axis_vec)
-                    if dist < best_dist and 0 <= t_axis <= sz:
-                        best_part = name; best_dist = dist
-                if best_part: return best_part
                 
-                # Planar handles (simple AABB-like checks in local space)
-                ps = sz * 0.3
-                for part, normal in [("XY", (0,0,1)), ("XZ", (0,1,0)), ("YZ", (1,0,0))]:
-                    wp = self._cam3d.ray_plane_intersect(mx, my, self.width(), self.height(), tuple(obj.position), normal)
-                    if wp:
-                        off = _sub(wp, tuple(obj.position))
-                        if part == "XY" and 0 <= off[0] <= ps and 0 <= off[1] <= ps: return "XY"
-                        if part == "XZ" and 0 <= off[0] <= ps and 0 <= off[2] <= ps: return "XZ"
-                        if part == "YZ" and 0 <= off[1] <= ps and 0 <= off[2] <= ps: return "YZ"
-            
-            elif self._transform_mode == "rotate":
-                # Screen-space Rotate picking for "thick" hit detection
-                best_axis = None; min_dist = 999.0
-                center = tuple(obj.position)
-                r_orbit = sz * 0.9
-                w, h = self.width(), self.height()
-                
-                # Transform click point into local space if in Local mode
-                l_mx, l_my = mx, my
-                if self._transform_space == "Local":
-                    # For simplicity in screen-space picking, we don't transform l_mx
-                    # but we sample world points in LOCAL space below
-                    pass
+                # If Local, get the axes from the last selected
+            # Standard axes
+            axes = [(1,0,0), (0,1,0), (0,0,1)]
+            if self._transform_space == "Local":
+                M = _euler_to_matrix(*primary.rotation)
+                axes = [_mat_vec_mul(M, (1,0,0)), _mat_vec_mul(M, (0,1,0)), _mat_vec_mul(M, (0,0,1))]
 
-                for axis in ["X", "Y", "Z"]:
-                    # Sample 16 points along the ring (aligned to Local or World)
-                    for i in range(16):
-                        ang = math.radians(i * 360 / 16)
-                        if axis == "X": p = (0, math.cos(ang)*r_orbit, math.sin(ang)*r_orbit)
-                        elif axis == "Y": p = (math.cos(ang)*r_orbit, 0, math.sin(ang)*r_orbit)
-                        else: p = (math.cos(ang)*r_orbit, math.sin(ang)*r_orbit, 0)
-                        
-                        if self._transform_space == "Local":
-                            # Transform local point p to world space
-                            M = _euler_to_matrix(*obj.rotation)
-                            p_rot = (M[0][0]*p[0] + M[0][1]*p[1] + M[0][2]*p[2],
-                                     M[1][0]*p[0] + M[1][1]*p[1] + M[1][2]*p[2],
-                                     M[2][0]*p[0] + M[2][1]*p[1] + M[2][2]*p[2])
-                            p_world = _add(center, p_rot)
-                        else:
-                            p_world = _add(center, p)
-                        
-                        p_screen = self._cam3d.world_to_screen(p_world, w, h)
-                        if p_screen:
-                            d = math.sqrt((p_screen[0] - mx)**2 + (p_screen[1] - my)**2)
-                            if d < 18: # 18-pixel thick hitbox
-                                if d < min_dist:
-                                    min_dist = d; best_axis = axis
+            PICK_RADIUS = 24
+            w, h = self.width(), self.height()
+            def get_dist(wp):
+                sp = self._cam3d.world_to_screen(wp, w, h)
+                if not sp: return 1e9
+                return math.sqrt((sp[0]-mx)**2 + (sp[1]-my)**2)
+
+            if self._transform_mode == "move":
+                # Axes tips
+                best_axis, min_dist = None, PICK_RADIUS
+                for i_idx, name in enumerate(["X", "Y", "Z"]):
+                    tip = _add(tuple(center), _scale_vec(axes[i_idx], sz))
+                    d = get_dist(tip)
+                    if d < min_dist: min_dist = d; best_axis = name
                 if best_axis: return best_axis
+
+                # Planar centers
+                planes = [("XY", 0, 1), ("XZ", 0, 2), ("YZ", 1, 2)]
+                for name, i1, i2 in planes:
+                    cp = _add(tuple(center), _scale_vec(_add(axes[i1], axes[i2]), sz * 0.4))
+                    if get_dist(cp) < PICK_RADIUS: return name
+
+            elif self._transform_mode == "rotate":
+                best_axis, min_dist = None, PICK_RADIUS
+                r_orbit = sz * 0.95
+                for ax_idx, name in enumerate(["X", "Y", "Z"]):
+                    for step in range(32):
+                        ang = math.radians(step * 360 / 32)
+                        if name == "X": lp = (0, math.cos(ang), math.sin(ang))
+                        elif name == "Y": lp = (math.cos(ang), 0, math.sin(ang))
+                        else: lp = (math.cos(ang), math.sin(ang), 0)
+                        
+                        p_world = lp
+                        if self._transform_space == "Local":
+                            M = _euler_to_matrix(*primary.rotation)
+                            p_world = _mat_vec_mul(M, lp)
+                        
+                        d = get_dist(_add(tuple(center), _scale_vec(p_world, r_orbit)))
+                        if d < min_dist: min_dist = d; best_axis = name
+                return best_axis
             
             elif self._transform_mode == "scale":
-                axes = [("X", (1,0,0)), ("Y", (0,1,0)), ("Z", (0,0,1))]
-                best_part, best_dist = None, 1e30
-                box_sz = sz * 0.18
-                for name, axis_vec in axes:
-                    if self._transform_space == "Local":
-                        M = _euler_to_matrix(*obj.rotation)
-                        axis_vec = _mat_vec_mul(M, axis_vec)
-                    tip = _add(tuple(obj.position), _scale_vec(axis_vec, sz))
-                    v = _sub(tip, origin)
-                    t = v[0]*direction[0] + v[1]*direction[1] + v[2]*direction[2]
-                    if t > 0:
-                        closest = _add(origin, _scale_vec(direction, t))
-                        dist = _length(_sub(tip, closest))
-                        if dist < box_sz and t < best_dist:
-                            best_part = name; best_dist = t
-                if best_part: return best_part
-                
-                # Center box
-                c_sz = sz * 0.2
-                c_min = [obj.position[i] - c_sz/2 for i in range(3)]
-                c_max = [obj.position[i] + c_sz/2 for i in range(3)]
-                if _ray_intersect_aabb(origin, direction, c_min, c_max) is not None:
-                    return "Uniform"
+                if get_dist(tuple(center)) < PICK_RADIUS * 1.2: return "Uniform"
+                best_part, min_dist = None, PICK_RADIUS
+                for i_idx, name in enumerate(["X", "Y", "Z"]):
+                    tip = _add(tuple(center), _scale_vec(axes[i_idx], sz))
+                    d = get_dist(tip)
+                    if d < min_dist: min_dist = d; best_part = name
+                return best_part
+
+            return None
             return None
 
         def _pick_gizmo_2d(self, mx, my):
             sel = [o for o in self.scene_objects if o.selected]
             if not sel: return None
-            obj = sel[0]
+            center = self._get_selection_center()
             wx, wy = self._cam2d.screen_to_world(mx, my, self.width(), self.height())
             sz = self._get_gizmo_size_2d()
             
@@ -1263,22 +1394,22 @@ if QOpenGLWidget and HAS_OPENGL:
                 return math.sqrt((px-(x1+t*dx))**2 + (py-(y1+t*dy))**2)
 
             # Center/Uniform
-            if abs(wx - obj.position[0]) < hit_sz and abs(wy - obj.position[1]) < hit_sz:
+            if abs(wx - center[0]) < hit_sz and abs(wy - center[1]) < hit_sz:
                 if self._transform_mode in ("move", "scale"): return "XY" if self._transform_mode=="move" else "Uniform"
 
             if self._transform_mode == "move":
                 # Check X axis
-                if dist_to_segment(wx, wy, obj.position[0], obj.position[1], obj.position[0]+sz, obj.position[1]) < hit_sz: return "X"
+                if dist_to_segment(wx, wy, center[0], center[1], center[0]+sz, center[1]) < hit_sz: return "X"
                 # Check Y axis
-                if dist_to_segment(wx, wy, obj.position[0], obj.position[1], obj.position[0], obj.position[1]+sz) < hit_sz: return "Y"
+                if dist_to_segment(wx, wy, center[0], center[1], center[0], center[1]+sz) < hit_sz: return "Y"
 
             elif self._transform_mode == "rotate":
                 r = sz * 0.85
-                dist_to_center = math.sqrt((wx - obj.position[0])**2 + (wy - obj.position[1])**2)
+                dist_to_center = math.sqrt((wx - center[0])**2 + (wy - center[1])**2)
                 if abs(dist_to_center - r) < hit_sz: return "Rotate"
 
             elif self._transform_mode == "scale":
-                for part, cp in [("X", (obj.position[0]+sz, obj.position[1])), ("Y", (obj.position[0], obj.position[1]+sz))]:
+                for part, cp in [("X", (center[0]+sz, center[1])), ("Y", (center[0], center[1]+sz))]:
                     if abs(wx - cp[0]) < hit_sz and abs(wy - cp[1]) < hit_sz: return part
 
             return None
@@ -1288,44 +1419,81 @@ if QOpenGLWidget and HAS_OPENGL:
             mx, my = event.pos().x(), event.pos().y()
             if btn == Qt.MouseButton.LeftButton:
                 self._lmb = True
+                mod = event.modifiers()
+                is_multi = bool(mod & Qt.KeyboardModifier.ControlModifier or mod & Qt.KeyboardModifier.ShiftModifier)
+
                 # Check gizmo first
-                if self._mode == "3D":
-                    self._active_gizmo_part = self._pick_gizmo_3d(mx, my)
-                else:
-                    self._active_gizmo_part = self._pick_gizmo_2d(mx, my)
+                if self._mode == "3D": self._active_gizmo_part = self._pick_gizmo_3d(mx, my)
+                else: self._active_gizmo_part = self._pick_gizmo_2d(mx, my)
 
                 if self._active_gizmo_part:
-                    sel = [o for o in self.scene_objects if o.selected][0]
-                    self._drag_object = sel
-                    self._drag_start_pos = list(sel.position)
-                    self._drag_obj_initial_rot = list(sel.rotation)
-                    self._drag_obj_initial_scale = list(sel.scale)
+                    sel = [o for o in self.scene_objects if o.selected]
+                    if not sel: return
+                    center = self._get_selection_center()
+                    self._drag_object = sel[-1]
+                    self._drag_start_pos = list(center)
+                    self._drag_obj_initial_rot = list(self._drag_object.rotation)
+                    self._drag_obj_initial_scale = list(self._drag_object.scale)
                     
-                    # Store world start for movement/rotation/scaling math
-                    if self._mode == "3D":
-                        self._init_drag_3d(mx, my, sel)
-                    else:
-                        self._init_drag_2d(mx, my, sel)
+                    self._drag_all_starts = {}
+                    self._drag_all_rots = {}
+                    self._drag_all_scales = {}
+                    for o in sel:
+                        self._drag_all_starts[o.id] = list(o.position)
+                        self._drag_all_rots[o.id] = list(o.rotation)
+                        self._drag_all_scales[o.id] = list(o.scale)
+                        # Include descendants in drag so they follow parents
+                        for desc in self._get_all_descendants(o.id):
+                            self._drag_all_starts[desc.id] = list(desc.position)
+                            self._drag_all_rots[desc.id] = list(desc.rotation)
+                            self._drag_all_scales[desc.id] = list(desc.scale)
+                    
+                    if self._mode == "3D": self._init_drag_3d(mx, my)
+                    else: self._init_drag_2d(mx, my)
                     return
 
                 if self._mode == "3D": picked = self._pick_object_3d(mx, my)
                 elif self._mode == "2D": picked = self._pick_object_2d(mx, my)
                 else: picked = None
                 
-                for o in self.scene_objects: o.selected = False
                 if picked:
-                    picked.selected = True
-                    self._drag_object = picked
-                    self._drag_start_pos = list(picked.position)
-                    if self._mode == "3D":
-                        self._drag_world_start = self._cam3d.ray_plane_intersect(mx, my, self.width(), self.height(), tuple(picked.position), (0, 1, 0))
-                    elif self._mode == "2D":
-                        wx, wy = self._cam2d.screen_to_world(mx, my, self.width(), self.height())
-                        self._drag_world_start = (wx, wy)
+                    if is_multi: picked.selected = not picked.selected
+                    else:
+                        for o in self.scene_objects: o.selected = False
+                        picked.selected = True
+
+                    if picked.selected:
+                        self._drag_object = picked
+                        self._drag_start_pos = list(picked.position)
+                        # Save starts for all selected to prevent flying away during multi-drag
+                        sel = [o for o in self.scene_objects if o.selected]
+                        self._drag_all_starts = {}
+                        self._drag_all_rots = {}
+                        self._drag_all_scales = {}
+                        for o in sel:
+                            self._drag_all_starts[o.id] = list(o.position)
+                            self._drag_all_rots[o.id] = list(o.rotation)
+                            self._drag_all_scales[o.id] = list(o.scale)
+                            for desc in self._get_all_descendants(o.id):
+                                self._drag_all_starts[desc.id] = list(desc.position)
+                                self._drag_all_rots[desc.id] = list(desc.rotation)
+                                self._drag_all_scales[desc.id] = list(desc.scale)
+                        
+                        if self._mode == "3D":
+                            self._drag_world_start = self._cam3d.ray_plane_intersect(mx, my, self.width(), self.height(), tuple(picked.position), (0, 1, 0))
+                        elif self._mode == "2D":
+                            wx, wy = self._cam2d.screen_to_world(mx, my, self.width(), self.height())
+                            self._drag_world_start = (wx, wy)
+                    self.object_selected.emit(picked)
                 else:
+                    if not is_multi:
+                        for o in self.scene_objects: o.selected = False
                     self._drag_object = None; self._drag_world_start = None
-                self.object_selected.emit(picked)
-                self.update() # Ensure immediate visual update
+                    self._drag_action = "box_select"
+                    self._select_start = (mx, my)
+                    self._select_current = (mx, my)
+                    self.object_selected.emit(None)
+                self.update()
             elif btn == Qt.MouseButton.RightButton:
                 self._rmb = True; self.setCursor(Qt.CursorShape.BlankCursor)
             elif btn == Qt.MouseButton.MiddleButton:
@@ -1333,23 +1501,40 @@ if QOpenGLWidget and HAS_OPENGL:
             self._last_mouse = event.pos()
             event.accept()
 
-        def _init_drag_3d(self, mx, my, sel):
+        def _init_drag_3d(self, mx, my):
+            center = self._get_selection_center()
             if self._transform_mode == "move":
-                normal = (0,1,0) if self._active_gizmo_part in ("X","Z","XZ") else (0,0,1)
-                if self._active_gizmo_part == "YZ": normal = (1,0,0)
-                self._drag_world_start = self._cam3d.ray_plane_intersect(mx, my, self.width(), self.height(), tuple(sel.position), normal)
+                normal = (0,1,0)
+                if self._transform_space == "Local":
+                    obj = [o for o in self.scene_objects if o.selected][-1]
+                    rot_mat = _euler_to_matrix(*obj.rotation)
+                    if self._active_gizmo_part == "X": normal = tuple(rot_mat[1]) # Use Local Y as normal
+                    elif self._active_gizmo_part == "Y": normal = tuple(rot_mat[0]) # Use Local X as normal
+                    elif self._active_gizmo_part == "Z": normal = tuple(rot_mat[1]) # Use Local Y as normal
+                else:
+                    if self._active_gizmo_part in ("X","Z","XZ"): normal = (0,1,0)
+                    elif self._active_gizmo_part == "YZ": normal = (1,0,0)
+                    else: normal = (0,0,1)
+                
+                self._drag_world_start = self._cam3d.ray_plane_intersect(mx, my, self.width(), self.height(), tuple(center), normal)
             elif self._transform_mode == "rotate":
                 self._drag_start_mouse = (mx, my)
-                sz = self._get_gizmo_size_3d(sel)
+                sz = self._get_gizmo_size_3d(center)
                 # Compute screen-space tangent of the selected ring
                 # Project two points along the ring tangent to screen
-                c = tuple(sel.position)
+                c = tuple(center)
                 axis_vec = {"X":(1,0,0), "Y":(0,1,0), "Z":(0,0,1)}.get(self._active_gizmo_part)
-                
-                # If local space, transform axis
                 if self._transform_space == "Local":
-                    M = _euler_to_matrix(*sel.rotation)
-                    axis_vec = _mat_vec_mul(M, axis_vec)
+                    obj = [o for o in self.scene_objects if o.selected][-1]
+                    rot_mat = _euler_to_matrix(*obj.rotation)
+                    # Transform axis_vec by rot_mat
+                    av = axis_vec
+                    axis_vec = (
+                        rot_mat[0][0]*av[0] + rot_mat[0][1]*av[1] + rot_mat[0][2]*av[2],
+                        rot_mat[1][0]*av[0] + rot_mat[1][1]*av[1] + rot_mat[1][2]*av[2],
+                        rot_mat[2][0]*av[0] + rot_mat[2][1]*av[1] + rot_mat[2][2]*av[2]
+                    )
+
                 
                 # Find a point on the ring near the mouse
                 wp = self._cam3d.ray_plane_intersect(mx, my, self.width(), self.height(), c, axis_vec)
@@ -1361,26 +1546,51 @@ if QOpenGLWidget and HAS_OPENGL:
                     p1 = self._cam3d.world_to_screen(wp, self.width(), self.height())
                     p2 = self._cam3d.world_to_screen(_add(wp, _scale_vec(tan_v, 0.1)), self.width(), self.height())
                     if p1 and p2:
-                        self._drag_tangent = _normalize((p2[0]-p1[0], p2[1]-p1[1]))
+                        self._drag_tangent = _normalize_2d((p2[0]-p1[0], p2[1]-p1[1]))
                     else:
                         self._drag_tangent = (1, 0)
                 else:
                     self._drag_tangent = (1, 0)
             elif self._transform_mode == "scale":
                 f = self._cam3d.front; normal = _normalize((f[0], 0, f[2]))
-                self._drag_world_start = self._cam3d.ray_plane_intersect(mx, my, self.width(), self.height(), tuple(sel.position), normal)
+                self._drag_world_start = self._cam3d.ray_plane_intersect(mx, my, self.width(), self.height(), tuple(center), normal)
                 if self._drag_world_start:
-                    self._drag_initial_dist = _length(_sub(self._drag_world_start, tuple(sel.position)))
+                    self._drag_initial_dist = _length(_sub(self._drag_world_start, tuple(center)))
 
-        def _init_drag_2d(self, mx, my, sel):
+        def _init_drag_2d(self, mx, my):
+            center = self._get_selection_center()
             wx, wy = self._cam2d.screen_to_world(mx, my, self.width(), self.height())
             self._drag_world_start = (wx, wy)
-            self._drag_initial_dist = math.sqrt((wx - sel.position[0])**2 + (wy - sel.position[1])**2)
+            self._drag_initial_dist = math.sqrt((wx - center[0])**2 + (wy - center[1])**2)
 
         def mouseReleaseEvent(self, event: QMouseEvent):
             btn = event.button()
             if btn == Qt.MouseButton.LeftButton:
-                if self._lmb and self._drag_object:
+                if getattr(self, '_drag_action', None) == "box_select":
+                    x1, y1 = self._select_start
+                    x2, y2 = self._select_current
+                    min_x, max_x = min(x1, x2), max(x1, x2)
+                    min_y, max_y = min(y1, y2), max(y1, y2)
+                    
+                    mod = event.modifiers()
+                    is_multi = bool(mod & Qt.KeyboardModifier.ControlModifier or mod & Qt.KeyboardModifier.ShiftModifier)
+                    if not is_multi:
+                        for o in self.scene_objects: o.selected = False
+                        
+                    for obj in self.scene_objects:
+                        sx, sy = 0, 0
+                        if self._mode == "3D": p = self._cam3d.world_to_screen(obj.position, self.width(), self.height())
+                        else: p = self._cam2d.world_to_screen(obj.position, self.width(), self.height())
+                        if p:
+                            sx, sy = p
+                            if min_x <= sx <= max_x and min_y <= sy <= max_y:
+                                obj.selected = True
+                                
+                    sel = [o for o in self.scene_objects if o.selected]
+                    self.object_selected.emit(sel[-1] if sel else None)
+                    self._drag_action = None
+                    self.update()
+                elif self._lmb and self._drag_object:
                     self.object_moved.emit()
                     self.state_changed.emit()
                 self._lmb = False; self._drag_object = None; self._drag_world_start = None
@@ -1395,10 +1605,16 @@ if QOpenGLWidget and HAS_OPENGL:
             event.accept()
 
         def mouseMoveEvent(self, event: QMouseEvent):
+            mx, my = event.pos().x(), event.pos().y()
+            if getattr(self, '_drag_action', None) == "box_select" and self._lmb:
+                self._select_current = (mx, my)
+                self.update()
+                return
+
             if self._last_mouse is None:
                 self._last_mouse = event.pos(); return
-            dx = event.pos().x() - self._last_mouse.x()
-            dy = event.pos().y() - self._last_mouse.y()
+            dx = mx - self._last_mouse.x()
+            dy = my - self._last_mouse.y()
             self._last_mouse = event.pos()
 
             if self._mode == "3D":
@@ -1411,46 +1627,104 @@ if QOpenGLWidget and HAS_OPENGL:
                     self._cam3d.pos[1] -= (r[1]*dx + u[1]*dy)*spd
                     self._cam3d.pos[2] -= (r[2]*dx + u[2]*dy)*spd
                 elif self._lmb and self._drag_object and self._transform_mode == "move":
-                    mx, my = event.pos().x(), event.pos().y()
+                    sel_objs = [o for o in self.scene_objects if o.selected]
+                    primary = sel_objs[-1] if sel_objs else self._drag_object
+                    
                     # Determine plane for intersection based on active part
-                    normal = (0,1,0)
-                    if self._active_gizmo_part == "Y": 
-                        # For vertical axis, use plane facing camera
+                    # Plane normal MUST NOT be parallel to the movement axis
+                    normal = (0,1,0) 
+                    if self._transform_space == "Local":
+                        rot_mat = _euler_to_matrix(*primary.rotation)
+                        if self._active_gizmo_part == "X": normal = tuple(rot_mat[1]) # Normal = Local Y
+                        elif self._active_gizmo_part == "Y": normal = tuple(rot_mat[0]) # Normal = Local X
+                        elif self._active_gizmo_part == "Z": normal = tuple(rot_mat[1]) # Normal = Local Y
+                        elif self._active_gizmo_part == "XY": normal = tuple(rot_mat[2]) # Normal = Local Z
+                        elif self._active_gizmo_part == "XZ": normal = tuple(rot_mat[1]) # Normal = Local Y
+                        elif self._active_gizmo_part == "YZ": normal = tuple(rot_mat[0]) # Normal = Local X
+                    else:
+                        if self._active_gizmo_part == "X": normal = (0,1,0) # Moving X? Use Y-normal plane (stable)
+                        elif self._active_gizmo_part == "Y": 
+                            # If moving vertical Y, use a plane facing the camera horizontally
+                            f = self._cam3d.front; normal = _normalize((f[0], 0, f[2]))
+                        elif self._active_gizmo_part == "Z": normal = (0,1,0) # Moving Z? Use Y-normal plane (stable)
+                    # 1. Determine best projection plane
+                    # Use a plane that is stable relative to the camera and the movement direction
+                    normal = (0, 1, 0) # Default ground plane
+                    if self._active_gizmo_part == "XY": normal = (0, 0, 1)
+                    elif self._active_gizmo_part == "XZ": normal = (0, 1, 0)
+                    elif self._active_gizmo_part == "YZ": normal = (1, 0, 0)
+                    elif self._active_gizmo_part in ("X", "Y", "Z"):
+                        # Pick a plane containing the axis but most facing the camera
                         f = self._cam3d.front
-                        normal = _normalize((f[0], 0, f[2])) 
-                    elif self._active_gizmo_part == "XY": normal = (0,0,1)
-                    elif self._active_gizmo_part == "YZ": normal = (1,0,0)
+                        if self._active_gizmo_part == "X": normal = (0, 1, 0) if abs(f[1]) < abs(f[2]) else (0, 0, 1)
+                        elif self._active_gizmo_part == "Y": normal = (1, 0, 0) if abs(f[0]) < abs(f[2]) else (0, 0, 1)
+                        else: normal = (0, 1, 0) if abs(f[1]) < abs(f[0]) else (1, 0, 0)
+                    else:
+                        # Free move: camera parallel
+                        normal = _scale_vec(self._cam3d.front, -1.0)
                     
                     wp = self._cam3d.ray_plane_intersect(mx, my, self.width(), self.height(), tuple(self._drag_start_pos), normal)
-                    if wp and self._drag_world_start:
-                        offset = _sub(wp, self._drag_world_start)
-                        for i, axis in enumerate(["X", "Y", "Z"]):
-                            if self._active_gizmo_part == axis:
-                                val = self._drag_start_pos[i] + offset[i]
-                                if self.snap_enabled: val = round(val / self.grid_size) * self.grid_size
-                                self._drag_object.position[i] = val
+                    if wp and getattr(self, '_drag_world_start', None):
+                        world_delta = _sub(wp, self._drag_world_start)
+                        sel_list = sel_objs
+                        # primary already defined above
                         
-                        if self._active_gizmo_part == "XY":
-                            for i in range(2):
-                                val = self._drag_start_pos[i] + offset[i]
-                                if self.snap_enabled: val = round(val / self.grid_size) * self.grid_size
-                                self._drag_object.position[i] = val
-                        elif self._active_gizmo_part == "XZ":
-                            for i in (0, 2):
-                                val = self._drag_start_pos[i] + offset[i]
-                                if self.snap_enabled: val = round(val / self.grid_size) * self.grid_size
-                                self._drag_object.position[i] = val
-                        elif self._active_gizmo_part == "YZ":
-                            for i in (1, 2):
-                                val = self._drag_start_pos[i] + offset[i]
-                                if self.snap_enabled: val = round(val / self.grid_size) * self.grid_size
-                                self._drag_object.position[i] = val
-                        elif not self._active_gizmo_part:
-                            for i in (0, 2):
-                                val = self._drag_start_pos[i] + offset[i]
-                                if self.snap_enabled: val = round(val / self.grid_size) * self.grid_size
-                                self._drag_object.position[i] = val
-                        self.object_moved.emit() # Update props panel
+                        # Project offset onto axis
+                        local_axes = [(1,0,0), (0,1,0), (0,0,1)]
+                        if self._transform_space == "Local":
+                            rot_mat = _euler_to_matrix(*primary.rotation)
+                            local_axes = [
+                                (rot_mat[0][0], rot_mat[1][0], rot_mat[2][0]),
+                                (rot_mat[0][1], rot_mat[1][1], rot_mat[2][1]),
+                                (rot_mat[0][2], rot_mat[1][2], rot_mat[2][2])
+                            ]
+
+                        for obj_id, start_pos in self._drag_all_starts.items():
+                            obj = next((o for o in self.scene_objects if o.id == obj_id), None)
+                            if not obj: continue
+                            
+                            final_offset = [0,0,0]
+                            for i, axis_name in enumerate(["X", "Y", "Z"]):
+                                if self._active_gizmo_part == axis_name:
+                                    dist = _dot(world_delta, local_axes[i])
+                                    final_offset = _scale_vec(local_axes[i], dist)
+                            
+                            if self._active_gizmo_part == "XY":
+                                d1 = _dot(world_delta, local_axes[0])
+                                d2 = _dot(world_delta, local_axes[1])
+                                final_offset = _add(_scale_vec(local_axes[0], d1), _scale_vec(local_axes[1], d2))
+                            elif self._active_gizmo_part == "XZ":
+                                d1 = _dot(world_delta, local_axes[0])
+                                d3 = _dot(world_delta, local_axes[2])
+                                final_offset = _add(_scale_vec(local_axes[0], d1), _scale_vec(local_axes[2], d3))
+                            elif self._active_gizmo_part == "YZ":
+                                d2 = _dot(world_delta, local_axes[1])
+                                d3 = _dot(world_delta, local_axes[2])
+                                final_offset = _add(_scale_vec(local_axes[1], d2), _scale_vec(local_axes[2], d3))
+                            if not self._active_gizmo_part:
+                                # Free move uses full offset from the stable intersection plane
+                                final_offset = world_delta
+                            else:
+                                for i, axis_name in enumerate(["X", "Y", "Z"]):
+                                    if self._active_gizmo_part == axis_name:
+                                        dist = _dot(world_delta, local_axes[i])
+                                        final_offset = _scale_vec(local_axes[i], dist)
+                                
+                                if self._active_gizmo_part == "XY":
+                                    d1 = _dot(world_delta, local_axes[0]); d2 = _dot(world_delta, local_axes[1])
+                                    final_offset = _add(_scale_vec(local_axes[0], d1), _scale_vec(local_axes[1], d2))
+                                elif self._active_gizmo_part == "XZ":
+                                    d1 = _dot(world_delta, local_axes[0]); d3 = _dot(world_delta, local_axes[2])
+                                    final_offset = _add(_scale_vec(local_axes[0], d1), _scale_vec(local_axes[2], d3))
+                                elif self._active_gizmo_part == "YZ":
+                                    d2 = _dot(world_delta, local_axes[1]); d3 = _dot(world_delta, local_axes[2])
+                                    final_offset = _add(_scale_vec(local_axes[1], d2), _scale_vec(local_axes[2], d3))
+                            
+                            new_pos = list(_add(start_pos, final_offset))
+                            if self.snap_enabled:
+                                for i in range(3): new_pos[i] = round(new_pos[i] / self.grid_size) * self.grid_size
+                            obj.position[:] = new_pos
+                        self.object_moved.emit()
                 
                 elif self._lmb and self._drag_object and self._transform_mode == "rotate":
                     if self._active_gizmo_part and hasattr(self, "_drag_tangent"):
@@ -1468,101 +1742,179 @@ if QOpenGLWidget and HAS_OPENGL:
                         # Apply Transformation Space Logic
                         axis_vec = {"X":(1,0,0), "Y":(0,1,0), "Z":(0,0,1)}.get(self._active_gizmo_part)
                         delta_mat = _axis_angle_to_matrix(axis_vec, angle_delta)
-                        start_mat = _euler_to_matrix(*self._drag_obj_initial_rot)
                         
-                        if self._transform_space == "Local":
-                            # Local rotation: Initial * Delta
-                            new_mat = _mat_mul_3x3(start_mat, delta_mat)
-                        else:
-                            # World rotation: Delta * Initial
-                            new_mat = _mat_mul_3x3(delta_mat, start_mat)
+                        pivot = tuple(self._drag_start_pos)
+                        
+                        for obj_id, start_pos in self._drag_all_starts.items():
+                            obj = next((o for o in self.scene_objects if o.id == obj_id), None)
+                            if not obj: continue
                             
-                        self._drag_object.rotation = _matrix_to_euler(new_mat)
+                            # Orbit position around pivot
+                            obj.position[:] = _rotate_point_around_pivot(tuple(start_pos), pivot, delta_mat)
+                            
+                            # Update orientation based on INTIAL rotation
+                            initial_rot = self._drag_all_rots.get(obj.id, obj.rotation)
+                            start_mat = _euler_to_matrix(*initial_rot)
+                            
+                            if self._transform_space == "Local":
+                                new_mat = _mat_mul_3x3(start_mat, delta_mat)
+                            else:
+                                new_mat = _mat_mul_3x3(delta_mat, start_mat)
+                            obj.rotation[:] = _matrix_to_euler(new_mat)
+                        
                         self.object_moved.emit()
                     else:
-                        # Fallback for old simple rotate or if tangent missing
-                        self._drag_object.rotation[1] += dx * 0.5
-                        if self.snap_enabled:
-                            self._drag_object.rotation[1] = round(self._drag_object.rotation[1] / 15.0) * 15.0
+                        # Fallback simple rotation (Y-axis only)
+                        delta_rad = math.radians(dx * 0.5)
+                        delta_mat = _axis_angle_to_matrix((0,1,0), dx * 0.5)
+                        pivot = tuple(self._drag_start_pos)
+                        for obj_id, start_pos in self._drag_all_starts.items():
+                            obj = next((o for o in self.scene_objects if o.id == obj_id), None)
+                            if not obj or obj.id not in self._drag_all_rots: continue
+                            
+                            obj.position[:] = _rotate_point_around_pivot(tuple(start_pos), pivot, delta_mat)
+                            initial_rot = self._drag_all_rots[obj.id]
+                            obj.rotation[1] = initial_rot[1] + dx * 0.5
                         self.object_moved.emit()
                         
                 elif self._lmb and self._drag_object and self._transform_mode == "scale":
                     # Use world-distance ratio for scaling
                     f = self._cam3d.front; normal = _normalize((f[0], 0, f[2]))
-                    wp = self._cam3d.ray_plane_intersect(event.pos().x(), event.pos().y(), self.width(), self.height(), tuple(self._drag_object.position), normal)
+                    center = tuple(self._drag_start_pos)
+                    wp = self._cam3d.ray_plane_intersect(mx, my, self.width(), self.height(), center, normal)
                     if wp and hasattr(self, "_drag_initial_dist") and self._drag_initial_dist > 0.01:
-                        v = _sub(wp, tuple(self._drag_object.position))
+                        v = _sub(wp, center)
                         ratio = _length(v) / self._drag_initial_dist
-                        if self._active_gizmo_part in ("X","Y","Z"):
+                        
+                        pivot = center
+                        
+                        # Determine the active axis vector for the scale operation
+                        active_axis_vec = None
+                        if self._active_gizmo_part in ("X", "Y", "Z"):
                             idx = {"X":0, "Y":1, "Z":2}.get(self._active_gizmo_part)
-                            new_val = self._drag_obj_initial_scale[idx] * ratio
-                            if self.snap_enabled: new_val = max(0.01, round(new_val / 0.1) * 0.1)
-                            self._drag_object.scale[idx] = max(0.01, new_val)
-                        else:
-                            # Uniform
-                            for i in range(3):
-                                new_val = self._drag_obj_initial_scale[i] * ratio
-                                if self.snap_enabled: new_val = max(0.01, round(new_val / 0.1) * 0.1)
-                                self._drag_object.scale[i] = max(0.01, new_val)
+                            if self._transform_space == "Local":
+                                primary = [o for o in self.scene_objects if o.selected][-1]
+                                M = _euler_to_matrix(*primary.rotation)
+                                # Extract column 'idx' from matrix (local axis in world space)
+                                active_axis_vec = (M[0][idx], M[1][idx], M[2][idx])
+                            else:
+                                active_axis_vec = [(1,0,0), (0,1,0), (0,0,1)][idx]
+
+                        for obj_id, start_pos in self._drag_all_starts.items():
+                            obj = next((o for o in self.scene_objects if o.id == obj_id), None)
+                            if not obj or obj.id not in self._drag_all_scales: continue
+                            
+                            # Scale position from pivot
+                            p_rel = _sub(tuple(start_pos), pivot)
+                            if active_axis_vec:
+                                # Scale only along the active axis
+                                comp = _dot(p_rel, active_axis_vec)
+                                offset = _scale_vec(active_axis_vec, comp * (ratio - 1.0))
+                                obj.position[:] = _add(tuple(start_pos), offset)
+                            else:
+                                # Uniform scale
+                                obj.position[:] = _add(pivot, _scale_vec(p_rel, ratio))
+                            
+                            # Scale size based on initial scales
+                            initial_scale = self._drag_all_scales[obj.id]
+                            if self._active_gizmo_part in ("X","Y","Z"):
+                                idx = {"X":0, "Y":1, "Z":2}.get(self._active_gizmo_part)
+                                obj.scale[idx] = max(0.01, initial_scale[idx] * ratio)
+                            else:
+                                for i in range(3):
+                                    obj.scale[i] = max(0.01, initial_scale[i] * ratio)
                         self.object_moved.emit()
                     else:
                         # Fallback for scale if plane intersection fails
                         factor = 1.0 + dx * 0.02
-                        for i in range(3):
-                            self._drag_object.scale[i] *= factor
+                        pivot = tuple(self._drag_start_pos)
+                        for obj_id, start_pos in self._drag_all_starts.items():
+                            obj = next((o for o in self.scene_objects if o.id == obj_id), None)
+                            if obj:
+                                p_rel = _sub(tuple(start_pos), pivot)
+                                obj.position[:] = _add(pivot, _scale_vec(p_rel, factor))
+                                for i in range(3): obj.scale[i] *= factor
                         self.object_moved.emit()
 
                 elif not self._lmb and self._mode == "3D":
                     # Update hover
-                    self._hover_gizmo_part = self._pick_gizmo_3d(event.pos().x(), event.pos().y())
+                    self._hover_gizmo_part = self._pick_gizmo_3d(mx, my)
             elif self._mode == "2D":
                 if self._mmb or self._rmb:
                     self._cam2d.pan(dx, dy, self.width(), self.height())
                 elif self._lmb and self._drag_object:
-                    mx, my = event.pos().x(), event.pos().y()
                     wx, wy = self._cam2d.screen_to_world(mx, my, self.width(), self.height())
                     
                     if self._transform_mode == "move":
                         if self._drag_world_start:
                             ox, oy = wx - self._drag_world_start[0], wy - self._drag_world_start[1]
                             
-                            if self._active_gizmo_part in ("X", "Y") and self._transform_space == "Local":
-                                # Project onto local axes
-                                rad = math.radians(self._drag_object.rotation[2])
-                                lx = ox*math.cos(rad) + oy*math.sin(rad)
-                                ly = -ox*math.sin(rad) + oy*math.cos(rad)
-                                if self._active_gizmo_part == "X": ox, oy = lx*math.cos(rad), lx*math.sin(rad)
-                                else: ox, oy = -ly*math.sin(rad), ly*math.cos(rad)
-                            elif self._active_gizmo_part == "X": oy = 0
-                            elif self._active_gizmo_part == "Y": ox = 0
-                            
-                            valx = self._drag_start_pos[0] + ox
-                            valy = self._drag_start_pos[1] + oy
-                            if self.snap_enabled:
-                                valx = round(valx / self.grid_size) * self.grid_size
-                                valy = round(valy / self.grid_size) * self.grid_size
-                            self._drag_object.position[0] = valx
-                            self._drag_object.position[1] = valy
+                            to_move = list(self._drag_all_starts.items())
+                            for obj_id, start_pos in to_move:
+                                obj = next((o for o in self.scene_objects if o.id == obj_id), None)
+                                if not obj: continue
+                                
+                                oox, ooy = ox, oy
+                                if self._active_gizmo_part in ("X", "Y") and self._transform_space == "Local":
+                                    # For multi-selection local move in 2D, we project onto the parent's local axes
+                                    # which we already calculated as ox, oy.
+                                    pass
+                                
+                                new_pos = [start_pos[0] + oox, start_pos[1] + ooy, start_pos[2]]
+                                if self.snap_enabled:
+                                    new_pos[0] = round(new_pos[0] / self.grid_size) * self.grid_size
+                                    new_pos[1] = round(new_pos[1] / self.grid_size) * self.grid_size
+                                obj.position[0] = new_pos[0]
+                                obj.position[1] = new_pos[1]
+                            self.object_moved.emit()
                             
                     elif self._transform_mode == "rotate":
                         cur_ang = math.atan2(wy - self._drag_object.position[1], wx - self._drag_object.position[0])
                         start_ang = math.atan2(self._drag_world_start[1] - self._drag_object.position[1], 
                                               self._drag_world_start[0] - self._drag_object.position[0])
                         diff = math.degrees(cur_ang - start_ang)
-                        new_rot = self._drag_obj_initial_rot[2] + diff
-                        if self.snap_enabled: new_rot = round(new_rot / 15.0) * 15.0
-                        self._drag_object.rotation[2] = new_rot
+                        
+                        pivot = (self._drag_object.position[0], self._drag_object.position[1])
+                        angle_rad = math.radians(diff)
+                        cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+                        
+                        for obj_id, start_pos in self._drag_all_starts.items():
+                            obj = next((o for o in self.scene_objects if o.id == obj_id), None)
+                            if not obj or obj.id not in self._drag_all_rots: continue
+                            
+                            # Orbit in 2D
+                            dx_rel, dy_rel = start_pos[0] - pivot[0], start_pos[1] - pivot[1]
+                            rx = dx_rel * cos_a - dy_rel * sin_a
+                            ry = dx_rel * sin_a + dy_rel * cos_a
+                            obj.position[0] = pivot[0] + rx
+                            obj.position[1] = pivot[1] + ry
+                            obj.rotation[2] = self._drag_all_rots[obj.id][2] + diff
+                        self.object_moved.emit()
                         
                     elif self._transform_mode == "scale":
                         if self._drag_initial_dist > 0.01:
                             dist = math.sqrt((wx - self._drag_object.position[0])**2 + (wy - self._drag_object.position[1])**2)
                             ratio = dist / self._drag_initial_dist
-                            if self._active_gizmo_part == "X":
-                                self._drag_object.scale[0] = max(0.01, self._drag_obj_initial_scale[0] * ratio)
-                            elif self._active_gizmo_part == "Y":
-                                self._drag_object.scale[1] = max(0.01, self._drag_obj_initial_scale[1] * ratio)
-                            else:
-                                for i in range(2): self._drag_object.scale[i] = max(0.01, self._drag_obj_initial_scale[i] * ratio)
+                            pivot = (self._drag_object.position[0], self._drag_object.position[1])
+                            
+                            for obj_id, start_pos in self._drag_all_starts.items():
+                                obj = next((o for o in self.scene_objects if o.id == obj_id), None)
+                                if not obj or obj.id not in self._drag_all_scales: continue
+                                
+                                # Pivot scale position
+                                dx_rel, dy_rel = start_pos[0] - pivot[0], start_pos[1] - pivot[1]
+                                obj.position[0] = pivot[0] + dx_rel * ratio
+                                obj.position[1] = pivot[1] + dy_rel * ratio
+                                
+                                # Scale size from INITIAL
+                                initial_scale = self._drag_all_scales[obj.id]
+                                if self._active_gizmo_part == "X":
+                                    obj.scale[0] = max(0.01, initial_scale[0] * ratio)
+                                elif self._active_gizmo_part == "Y":
+                                    obj.scale[1] = max(0.01, initial_scale[1] * ratio)
+                                else:
+                                    for i in range(2): obj.scale[i] = max(0.01, initial_scale[i] * ratio)
+                        self.object_moved.emit()
                     self.object_moved.emit()
                 else:
                     self._hover_gizmo_part = self._pick_gizmo_2d(event.pos().x(), event.pos().y())
@@ -1585,14 +1937,30 @@ if QOpenGLWidget and HAS_OPENGL:
             event.accept()
 
         def keyPressEvent(self, event: QKeyEvent):
-            self._keys.add(event.key())
-            if event.key() == Qt.Key.Key_Shift: self._cam3d.speed = 30.0
-            if event.key() == Qt.Key.Key_Delete:
-                self.scene_objects = [o for o in self.scene_objects if not o.selected]
-                self.object_selected.emit(None)
-                self.state_changed.emit()
-                self.update()
-                
+            key = event.key()
+            self._keys.add(key)
+            
+            # F for Focus
+            if key == Qt.Key.Key_F:
+                self._focus_selected()
+                event.accept()
+                return
+
+            if key == Qt.Key.Key_Delete or key == Qt.Key.Key_Backspace:
+                sel = [o for o in self.scene_objects if o.selected]
+                if sel:
+                    # Save state for undo
+                    parent = self.parent()
+                    while parent and not hasattr(parent, '_save_state'): parent = parent.parent()
+                    if parent: parent._save_state()
+                    
+                    for o in sel:
+                        self.scene_objects.remove(o)
+                    self._refresh_outliner()
+                    self.update()
+                event.accept()
+                return
+
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                 if event.key() == Qt.Key.Key_D:
                     self._duplicate_selected()
@@ -1609,20 +1977,29 @@ if QOpenGLWidget and HAS_OPENGL:
             event.accept()
 
         def _duplicate_selected(self):
+            # Save state for undo
+            parent = self.parent()
+            while parent and not hasattr(parent, '_save_state'): parent = parent.parent()
+            if parent: parent._save_state()
+
+            sel = [o for o in self.scene_objects if o.selected]
+            if not sel: return
+            
             new_objs = []
-            for obj in self.scene_objects:
-                if obj.selected:
-                    new_obj = SceneObject(obj.name + "_copy", obj.obj_type, list(obj.position), list(obj.rotation), list(obj.scale))
-                    new_obj.color = list(obj.color)
-                    new_obj.file_path = obj.file_path
-                    new_obj.selected = True
-                    obj.selected = False
-                    new_objs.append(new_obj)
-            if new_objs:
-                self.scene_objects.extend(new_objs)
-                self.object_selected.emit(new_objs[-1])
-                self.state_changed.emit()
-                self.update()
+            for obj in sel:
+                new_obj = SceneObject(obj.name + "_copy", obj.obj_type, [v+1.0 for v in obj.position], list(obj.rotation), list(obj.scale))
+                new_obj.color = list(obj.color)
+                new_obj.file_path = obj.file_path
+                new_obj.selected = True
+                obj.selected = False
+                new_objs.append(new_obj)
+            
+            self.scene_objects.extend(new_objs)
+            self._refresh_outliner()
+            self.update()
+            self.object_selected.emit(new_objs[-1])
+            self.state_changed.emit()
+            self.update()
                 
         def _copy_selected(self):
             self._clipboard = []
@@ -1881,6 +2258,47 @@ class ObjectPropertiesPanel(QWidget):
             self._current_object.scale[i] = self._scale_spins[i].value()
         self.property_changed.emit()
 
+class OutlinerTreeWidget(QTreeWidget):
+    """Custom tree widget for the scene outliner with drag-and-drop parenting."""
+    reparent_requested = pyqtSignal(str, str) # child_id, parent_id
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setHeaderHidden(True)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setStyleSheet(TREE_SS)
+
+    def dragEnterEvent(self, event):
+        if event.source() == self:
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.source() == self:
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event: QDropEvent):
+        target_item = self.itemAt(event.position().toPoint())
+        dropped_items = self.selectedItems()
+        if not dropped_items:
+            super().dropEvent(event); return
+
+        parent_id = target_item.data(0, Qt.ItemDataRole.UserRole) if target_item else ""
+        
+        for item in dropped_items:
+            child_id = item.data(0, Qt.ItemDataRole.UserRole)
+            if child_id:
+                self.reparent_requested.emit(child_id, parent_id)
+        
+        event.accept()
+
 
 # ===================================================================
 # Scene Explorer Panel
@@ -1908,6 +2326,7 @@ class _CollapsibleSection(QWidget):
         self.content.setVisible(not self.is_collapsed)
         arrow = ">" if self.is_collapsed else "v"
         self.header.setText(f" {arrow}  {self._title}")
+
 
 
 class SceneExplorerPanel(QWidget):
@@ -1989,13 +2408,20 @@ class SceneExplorerPanel(QWidget):
 
         # ---- Outliner section ----
         self._outliner_section = _CollapsibleSection("OUTLINER")
-        self.outliner_list = QListWidget()
-        self.outliner_list.setStyleSheet(LIST_SS)
-        self.outliner_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.outliner_list.customContextMenuRequested.connect(self._outliner_context_menu)
-        self.outliner_list.currentRowChanged.connect(self._on_outliner_select)
-        self.outliner_list.itemDoubleClicked.connect(self._on_outliner_rename)
-        self._outliner_section.content_layout.addWidget(self.outliner_list)
+        self.outliner_tree = OutlinerTreeWidget()
+        self.outliner_tree.setHeaderHidden(True)
+        self.outliner_tree.setStyleSheet(TREE_SS)
+        self.outliner_tree.setDragEnabled(True)
+        self.outliner_tree.setAcceptDrops(True)
+        self.outliner_tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.outliner_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.outliner_tree.customContextMenuRequested.connect(self._outliner_context_menu)
+        self.outliner_tree.itemSelectionChanged.connect(self._on_outliner_select)
+        self.outliner_tree.itemDoubleClicked.connect(self._on_outliner_rename)
+        self.outliner_tree.reparent_requested.connect(
+            lambda c, p: self.object_select_requested.emit(f"reparent:{c}:{p}")
+        )
+        self._outliner_section.content_layout.addWidget(self.outliner_tree)
         scroll_layout.addWidget(self._outliner_section)
 
         scroll_layout.addStretch()
@@ -2120,44 +2546,58 @@ class SceneExplorerPanel(QWidget):
 
     # ---- Outliner ----
     def update_outliner(self, objects: List[SceneObject]):
-        current_id = None
-        sel = self.outliner_list.currentItem()
-        if sel: current_id = sel.data(Qt.ItemDataRole.UserRole)
+        self.outliner_tree.blockSignals(True)
+        self.outliner_tree.clear()
 
-        self.outliner_list.blockSignals(True)
-        self.outliner_list.clear()
-        for obj in objects:
+        obj_map = {obj.id: obj for obj in objects}
+        item_map = {}
+
+        def get_item(obj: SceneObject):
+            if obj.id in item_map: return item_map[obj.id]
             icon_map = {
                 'cube':'[C]','sphere':'[S]','cylinder':'[Y]','plane':'[P]',
                 'cone':'[N]','rect':'[R]','circle':'[O]','sprite':'[I]','mesh':'[M]',
             }
             prefix = icon_map.get(obj.obj_type, '[?]')
             label = f"{prefix} {obj.name}"
-            if obj.selected: label = f"> {label}"
-            item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, obj.id)
-            if obj.selected: item.setForeground(QColor("#4fc3f7"))
-            self.outliner_list.addItem(item)
+            item = QTreeWidgetItem([label])
+            item.setData(0, Qt.ItemDataRole.UserRole, obj.id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)
+            if obj.selected:
+                item.setForeground(0, QColor("#4fc3f7"))
+                item.setSelected(True)
+            item_map[obj.id] = item
+            return item
 
-        if current_id:
-            for i in range(self.outliner_list.count()):
-                if self.outliner_list.item(i).data(Qt.ItemDataRole.UserRole) == current_id:
-                    self.outliner_list.setCurrentRow(i); break
-        self.outliner_list.blockSignals(False)
+        # First pass: Create all items
+        for obj in objects:
+            get_item(obj)
 
-    def _on_outliner_select(self, row):
-        if row < 0: return
-        item = self.outliner_list.item(row)
-        if item: self.object_select_requested.emit(item.data(Qt.ItemDataRole.UserRole))
+        # Second pass: Build hierarchy
+        for obj in objects:
+            item = item_map[obj.id]
+            if obj.parent_id and obj.parent_id in item_map:
+                parent_item = item_map[obj.parent_id]
+                parent_item.addChild(item)
+            else:
+                self.outliner_tree.addTopLevelItem(item)
 
-    def _on_outliner_rename(self, item):
-        obj_id = item.data(Qt.ItemDataRole.UserRole)
+        self.outliner_tree.expandAll()
+        self.outliner_tree.blockSignals(False)
+
+    def _on_outliner_select(self):
+        sel = self.outliner_tree.selectedItems()
+        if sel: self.object_select_requested.emit(sel[0].data(0, Qt.ItemDataRole.UserRole))
+        else: self.object_select_requested.emit(None)
+
+    def _on_outliner_rename(self, item, col):
+        obj_id = item.data(0, Qt.ItemDataRole.UserRole)
         if obj_id: self.object_select_requested.emit(f"rename:{obj_id}")
 
     def _outliner_context_menu(self, pos):
-        item = self.outliner_list.itemAt(pos)
+        item = self.outliner_tree.itemAt(pos)
         if not item: return
-        obj_id = item.data(Qt.ItemDataRole.UserRole)
+        obj_id = item.data(0, Qt.ItemDataRole.UserRole)
         if not obj_id: return
 
         menu = QMenu(self)
@@ -2168,14 +2608,17 @@ class SceneExplorerPanel(QWidget):
         """)
         rename_act = menu.addAction("Rename")
         delete_act = menu.addAction("Delete")
+        menu.addSeparator()
+        ref_act = menu.addAction("Create Logic Reference")
         
-        # Blocking call - list might refresh while this is open
-        action = menu.exec(self.outliner_list.mapToGlobal(pos))
+        action = menu.exec(self.outliner_tree.mapToGlobal(pos))
         
         if action == rename_act:
             self.object_select_requested.emit(f"rename:{obj_id}")
         elif action == delete_act:
             self.object_select_requested.emit(f"delete:{obj_id}")
+        elif action == ref_act:
+            self.object_select_requested.emit(f"create_ref:{obj_id}")
 
 
 # ===================================================================
@@ -2305,6 +2748,7 @@ class SceneEditorWidget(QWidget):
     """
 
     mode_changed = pyqtSignal(str)
+    create_reference_requested = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2359,7 +2803,8 @@ class SceneEditorWidget(QWidget):
         # Outliner refresh timer
         self._outliner_timer = QTimer(self)
         self._outliner_timer.timeout.connect(self._refresh_outliner)
-        self._outliner_timer.start(500)
+        self._outliner_timer.start(1000)
+        self._outliner_dirty = True
 
         # Connect signals
         self.toolbar.mode_changed.connect(self._on_mode_changed)
@@ -2376,6 +2821,7 @@ class SceneEditorWidget(QWidget):
         self.viewport.state_changed.connect(self._save_state)
 
         self.explorer.object_select_requested.connect(self._on_outliner_action)
+        self.explorer.outliner_tree.reparent_requested.connect(self._on_reparent_requested)
         self.explorer.properties.property_changed.connect(self._on_property_changed)
 
         # Set workspace root for asset scanning
@@ -2496,11 +2942,36 @@ class SceneEditorWidget(QWidget):
         for o in self.viewport.scene_objects: o.selected = False
         obj.selected = True
         self.viewport.object_selected.emit(obj)
+        self._outliner_dirty = True
         self._refresh_outliner()
 
     def _on_object_selected(self, obj):
         self.explorer.properties.set_object(obj)
         self._refresh_outliner()
+
+    def _on_reparent_requested(self, child_id, parent_id):
+        # Update SceneObject hierarchy
+        child = next((o for o in self.viewport.scene_objects if o.id == child_id), None)
+        if not child: return
+        
+        # Prevent cycles
+        if parent_id:
+            curr = next((o for o in self.viewport.scene_objects if o.id == parent_id), None)
+            while curr:
+                if curr.id == child_id: return
+                curr = next((o for o in self.viewport.scene_objects if o.id == curr.parent_id), None) if curr.parent_id else None
+
+        child.parent_id = parent_id if parent_id else None
+        self._outliner_dirty = True
+        self._refresh_outliner()
+        self._save_state()
+
+    def _select_object_by_id(self, obj_id):
+        for o in self.viewport.scene_objects:
+            o.selected = (o.id == obj_id)
+        selected = next((o for o in self.viewport.scene_objects if o.selected), None)
+        self.explorer.properties.set_object(selected)
+        self.viewport.update()
 
     def _on_object_moved(self):
         """Called after user finishes dragging an object — sync properties panel."""
@@ -2509,7 +2980,19 @@ class SceneEditorWidget(QWidget):
             self.explorer.properties.refresh_from_object()
 
     def _refresh_outliner(self):
+        if not hasattr(self, "_outliner_dirty") or not self._outliner_dirty:
+            return
+            
+        # Don't refresh if user is dragging an item in the outliner
+        if self.explorer.outliner_tree.state() != QAbstractItemView.State.NoState:
+            return
+            
+        # Don't refresh if user is currently transforming an object in the viewport
+        if self.viewport._lmb or self.viewport._rmb or self.viewport._mmb:
+            return
+
         self.explorer.update_outliner(self.viewport.scene_objects)
+        self._outliner_dirty = False
 
     def _on_outliner_action(self, action_str):
         if action_str.startswith("rename:"):
@@ -2518,13 +3001,14 @@ class SceneEditorWidget(QWidget):
                 if obj.id == obj_id:
                     new_name, ok = QInputDialog.getText(self, "Rename Object", "Name:", text=obj.name)
                     if ok and new_name.strip():
-                        obj.name = new_name.strip(); self._refresh_outliner()
+                        obj.name = new_name.strip()
+                        self._save_state(); self._refresh_outliner()
                     return
         elif action_str.startswith("delete:"):
             obj_id = action_str[7:]
             self.viewport.scene_objects = [o for o in self.viewport.scene_objects if o.id != obj_id]
             self.explorer.properties.set_object(None)
-            self._refresh_outliner(); return
+            self._save_state(); self._refresh_outliner(); return
         elif action_str.startswith("duplicate:"):
             obj_id = action_str[10:]
             for obj in list(self.viewport.scene_objects):
@@ -2537,8 +3021,46 @@ class SceneEditorWidget(QWidget):
                     new_obj.selected = True
                     self.explorer.properties.set_object(new_obj)
                     self.viewport.update()
+                    self._outliner_dirty = True
                     self._refresh_outliner()
+                    self._save_state()
                     return
+        elif action_str.startswith("reparent:"):
+            _, child_id, parent_id = action_str.split(":", 2)
+            c_obj = next((o for o in self.viewport.scene_objects if o.id == child_id), None)
+            if not c_obj: return
+            
+            # Remove from old parent
+            if c_obj.parent_id:
+                p_old = next((o for o in self.viewport.scene_objects if o.id == c_obj.parent_id), None)
+                if p_old and child_id in p_old.children_ids: p_old.children_ids.remove(child_id)
+            
+            # Loop prevention
+            curr_p = parent_id
+            while curr_p:
+                if curr_p == child_id: return
+                p_obj = next((o for o in self.viewport.scene_objects if o.id == curr_p), None)
+                curr_p = p_obj.parent_id if p_obj else None
+
+            c_obj.parent_id = parent_id if parent_id else None
+            if parent_id:
+                p_new = next((o for o in self.viewport.scene_objects if o.id == parent_id), None)
+                if p_new and child_id not in p_new.children_ids: p_new.children_ids.append(child_id)
+                
+            self._save_state(); self._refresh_outliner()
+            return
+        elif action_str.startswith("unparent:"):
+            obj_id = action_str.split(":", 1)[1]
+            c_obj = next((o for o in self.viewport.scene_objects if o.id == obj_id), None)
+            if c_obj and c_obj.parent_id:
+                p_old = next((o for o in self.viewport.scene_objects if o.id == c_obj.parent_id), None)
+                if p_old and obj_id in p_old.children_ids: p_old.children_ids.remove(obj_id)
+                c_obj.parent_id = None
+                self._save_state(); self._refresh_outliner()
+            return
+        elif action_str.startswith("create_ref:"):
+            obj_id = action_str.split(":", 1)[1]
+            self.create_reference_requested.emit(obj_id)
         else:
             for o in self.viewport.scene_objects:
                 o.selected = (o.id == action_str)

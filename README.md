@@ -119,11 +119,12 @@ NodeCanvas V2 is a **fully functional visual programming environment** with the 
     - **Project Files**: Full folder tree of the project, filtered to show asset files (FBX/OBJ/GLTF for 3D, PNG/JPG/WebP for 2D)
     - **Outliner**: Lists all scene objects with selection, rename (double-click), and context menu delete
     - **Properties Panel**: Position/Rotation/Scale spinboxes with bidirectional sync (edit values updates object, dragging object updates values)
-  - **Transform Gizmos** (UE5-style Interactive):
-    - **Move**: RGB axis arrows with **planar handles** (XY, XZ, YZ). Drag arrows to move along one axis; drag planes to move along two.
-    - **Rotate**: Three colored rotation rings with **highlighting** (X=red, Y=green, Z=blue). Drag rings to rotate around the corresponding axis.
-    - **Scale**: RGB axis lines with cube tips and a **center cube** for uniform scaling.
-    - **Interactive Feedback**: Gizmo parts highlight yellow when hovered.
+  - **Transform Gizmos** (Premium UE5-Style & High Reliability):
+    - **Move**: RGB axis arrows with **planar handles** (XY, XZ, YZ). Uses stabilized intersection planes for jitter-free 3D translation.
+    - **Rotate**: Three colored rotation rings. Supports **Absolute Rigid Parenting** (children follow parent pivot and orientation with zero drift).
+    - **Scale**: Redesigned with **thick shafts and solid cubes**. Supports **Proportional Pivot-Scaling** and **Screen-Space Uniform Scale** handles.
+    - **Interactive Feedback (Bulletproof)**: Uses **Screen-Space Proximity Picking** (24px radius) ensuring handles are 100% effortless to grab from any angle or camera distance.
+    - **Initial State Snapshots**: Transformations use absolute snapshots from the start of drag, eliminating cumulative "spinning" or "exploding" artifacts.
     - Gizmos scale proportionally to camera distance (constant screen size).
   - **Object System**: RMB click to select, LMB drag to move/rotate/scale based on active tool, Delete key to remove.
   - **Viewport Context Menu**: Right-click any object in the viewport to **Delete** or **Rename** it instantly.
