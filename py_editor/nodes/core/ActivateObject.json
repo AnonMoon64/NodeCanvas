@@ -1,0 +1,14 @@
+{
+    "name": "Activate Object",
+    "category": "Core",
+    "type": "core",
+    "inputs": {
+        "Exec": "exec",
+        "Target": "string",
+        "Active": "bool"
+    },
+    "outputs": {
+        "Then": "exec"
+    },
+    "description": "Sets the active state of a scene object by name."
+}

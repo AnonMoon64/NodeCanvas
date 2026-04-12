@@ -1,13 +1,16 @@
 {
-    "name": "Reference",
-    "category": "Core/Logic",
-    "description": "Creates an opaque handle to a logic graph instance. Can be passed and messaged, but never inspected.",
-    "color": "#7E57C2",
+    "name": "Scene Reference",
+    "category": "Core",
+    "type": "core",
     "inputs": {},
     "outputs": {
-        "handle": "instance"
+        "Ref": "instance"
     },
-    "dynamic": true,
-    "isReferenceNode": true,
-    "code": "def process():\n    # Returns opaque handle - execution handled by interpreter\n    return None"
+    "widgets": {
+        "object_id": {
+            "type": "string",
+            "default": ""
+        }
+    },
+    "description": "Represents a reference to a specific object in the current scene."
 }

@@ -1,0 +1,178 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "template": "Scene Reference",
+      "pos": [
+        -720.0,
+        -288.0
+      ],
+      "values": {
+        "object_name": "Object",
+        "object_id": ""
+      }
+    },
+    {
+      "id": 2,
+      "template": "Scene Reference",
+      "pos": [
+        -696.0,
+        -216.0
+      ],
+      "values": {
+        "object_name": "Object",
+        "object_id": ""
+      }
+    },
+    {
+      "id": 3,
+      "template": "Scene Reference",
+      "pos": [
+        -696.0,
+        -144.0
+      ],
+      "values": {
+        "object_name": "Object",
+        "object_id": ""
+      }
+    },
+    {
+      "id": 4,
+      "template": "Activate Object",
+      "pos": [
+        -336.0,
+        -288.0
+      ],
+      "values": {
+        "Target": "",
+        "Active": false
+      }
+    },
+    {
+      "id": 5,
+      "template": "OnStart",
+      "pos": [
+        -864.0,
+        -432.0
+      ]
+    },
+    {
+      "id": 6,
+      "template": "Delay",
+      "pos": [
+        -552.0,
+        -408.0
+      ],
+      "values": {
+        "seconds": 5.0
+      }
+    },
+    {
+      "id": 7,
+      "template": "Return",
+      "pos": [
+        24.0,
+        -336.0
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": 3,
+      "from_pin": "Name",
+      "to": 4,
+      "to_pin": "Target"
+    },
+    {
+      "from": 5,
+      "from_pin": "exec_out",
+      "to": 6,
+      "to_pin": "exec_in"
+    },
+    {
+      "from": 6,
+      "from_pin": "exec_out",
+      "to": 4,
+      "to_pin": "Exec"
+    },
+    {
+      "from": 4,
+      "from_pin": "Then",
+      "to": 7,
+      "to_pin": "exec_in"
+    }
+  ],
+  "variables": {},
+  "ui": {
+    "screens": {
+      "Screen 1": []
+    },
+    "screen_order": [
+      "Screen 1"
+    ],
+    "current_screen": "Screen 1",
+    "form": {
+      "width": 400,
+      "height": 300
+    },
+    "widgets": []
+  },
+  "animation": {
+    "states": {
+      "Idle": {
+        "clip": "idle_anim",
+        "speed": 1.0,
+        "loop": true
+      },
+      "Walk": {
+        "clip": "walk_anim",
+        "speed": 1.0,
+        "loop": true
+      },
+      "Run": {
+        "clip": "run_anim",
+        "speed": 1.5,
+        "loop": true
+      },
+      "Jump": {
+        "clip": "jump_anim",
+        "speed": 1.0,
+        "loop": false
+      }
+    },
+    "transitions": [
+      {
+        "from": "Idle",
+        "to": "Walk",
+        "condition": "speed > 0.1"
+      },
+      {
+        "from": "Walk",
+        "to": "Run",
+        "condition": "speed > 0.5"
+      },
+      {
+        "from": "Any",
+        "to": "Jump",
+        "condition": "isJumping"
+      }
+    ]
+  },
+  "interface": {
+    "name": "scene",
+    "type": "logic",
+    "version": "1.0",
+    "events": {
+      "OnStart": {
+        "visibility": "public",
+        "nodeId": 5
+      }
+    },
+    "outputs": {
+      "return_7": {
+        "type": "any",
+        "nodeId": 7
+      }
+    }
+  }
+}

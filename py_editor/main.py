@@ -47,11 +47,11 @@ from PyQt6.QtCore import Qt, QTimer, QMimeData, pyqtSignal
 
 try:
     # prefer package imports when available
-    from py_editor.ui import LogicEditor, CanvasView, NodeEditorDialog, NodeSettingsDialog, CodeGenDialog, UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget, SceneEditorWidget
+    from py_editor.ui import LogicEditor, CanvasView, NodeEditorDialog, NodeSettingsDialog, CodeGenDialog, UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget, SceneEditorWidget, SceneExplorerPanel, ObjectPropertiesPanel
     from py_editor.core import load_templates
 except Exception:
     try:
-        from .ui import LogicEditor, CanvasView, NodeEditorDialog, NodeSettingsDialog, CodeGenDialog, UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget, SceneEditorWidget
+        from .ui import LogicEditor, CanvasView, NodeEditorDialog, NodeSettingsDialog, CodeGenDialog, UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget, SceneEditorWidget, SceneExplorerPanel, ObjectPropertiesPanel
         from .core import load_templates
     except Exception:
         import sys
@@ -60,7 +60,7 @@ except Exception:
         parent_dir = Path(__file__).resolve().parent.parent
         if str(parent_dir) not in sys.path:
             sys.path.insert(0, str(parent_dir))
-        from py_editor.ui import LogicEditor, CanvasView, NodeEditorDialog, NodeSettingsDialog, CodeGenDialog, UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget, SceneEditorWidget
+        from py_editor.ui import LogicEditor, CanvasView, NodeEditorDialog, NodeSettingsDialog, CodeGenDialog, UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget, SceneEditorWidget, SceneExplorerPanel, ObjectPropertiesPanel
         from py_editor.core import load_templates
 
 ASSET_PATH = Path(__file__).resolve().parents[1] / "assets" / "sample_positions.json"
@@ -2467,14 +2467,25 @@ class MainWindow(QMainWindow):
         
         # Logic tab (formerly Canvas) - Node graph editor
         self.canvas = LogicEditor()
+        self.canvas.main_window = self
         self.tabs.addTab(self.canvas, "Logic")
+        
+        # Global Docks (persistent across tabs)
+        self.explorer = SceneExplorerPanel(self)
+        self.explorer.set_workspace_root(WORKSPACE_ROOT) # Set default project root
+        self.explorer.file_selected.connect(self._on_explorer_file_selected)
+        self.properties = ObjectPropertiesPanel(self)
         
         # UI Builder (created early, injected into Viewport tab)
         self.ui_builder = UIBuilderWidget()
         self.ui_builder.set_main_window(self)
         
         # Viewport tab (replaces old Game + UI tabs)
-        self.scene_editor = SceneEditorWidget()
+        self.scene_editor = SceneEditorWidget(self, self.explorer, self.properties)
+        # Injected global panels - redundant but kept for back-compat with older methods
+        self.scene_editor.explorer = self.explorer
+        self.scene_editor.properties = self.properties
+        
         self.scene_editor.set_ui_builder(self.ui_builder)
         self.scene_editor.mode_changed.connect(self._on_viewport_mode_changed)
         self.game_tab = self.scene_editor
@@ -2488,7 +2499,7 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
         toolbar = QToolBar("Main")
-        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, toolbar)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
 
         save_act = QAction("Save", self)
         save_act.triggered.connect(self.save)
@@ -2998,20 +3009,22 @@ class MainWindow(QMainWindow):
         # Determine default directory
         default_dir = getattr(self, 'project_root', str(WORKSPACE_ROOT / "py_editor" / "nodes" / "graphs"))
         
-        # Determine default extension based on current tab
         current_tab = self.tabs.currentIndex()
-        if current_tab == 2:  # Anim tab
+        if current_tab == 2: # Anim tab
             default_filter = "Animation Files (*.anim)"
-        elif current_tab == 1 and hasattr(self, 'scene_editor') and self.scene_editor._current_mode == 'UI':
-            default_filter = "UI Layout Files (*.ui)"
-        else:  # Logic tab (0) or Viewport tab (1)
+        elif current_tab == 1:
+            if hasattr(self, 'scene_editor') and self.scene_editor._current_mode == 'UI':
+                default_filter = "UI Layout Files (*.ui)"
+            else:
+                default_filter = "Scene Files (*.scene)"
+        else:  # Logic tab (0)
             default_filter = "Logic Files (*.logic)"
         
         file_path, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Save Project",
             default_dir,
-            "Logic Files (*.logic);;Animation Files (*.anim);;UI Layout Files (*.ui);;JSON Files (*.json);;All Files (*)",
+            "Logic Files (*.logic);;Scene Files (*.scene);;Animation Files (*.anim);;UI Layout Files (*.ui);;JSON Files (*.json);;All Files (*)",
             default_filter
         )
         if not file_path:
@@ -3026,8 +3039,28 @@ class MainWindow(QMainWindow):
                 file_path += ".anim"
             elif "*.ui" in selected_filter:
                 file_path += ".ui"
+            elif "*.scene" in selected_filter:
+                file_path += ".scene"
             else:
                 file_path += ".json"
+        
+        # --- Handle .scene Save ---
+        if file_path.endswith('.scene'):
+            scene_data = {
+                'objects': [obj.to_dict() for obj in self.scene_editor.viewport.scene_objects],
+                'camera': {
+                    'pos': self.scene_editor.viewport._cam3d.pos,
+                    'pitch': self.scene_editor.viewport._cam3d.pitch,
+                    'yaw': self.scene_editor.viewport._cam3d.yaw
+                }
+            }
+            try:
+                with open(file_path, 'w') as f:
+                    json.dump(scene_data, f, indent=4)
+                QMessageBox.information(self, "Success", f"Scene saved to {file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save scene: {e}")
+            return
         
         # Export the full graph from canvas
         graph_data = self.canvas.export_graph()
@@ -3108,7 +3141,7 @@ class MainWindow(QMainWindow):
             
             # Refresh explorer if file is in workspace
             if hasattr(self, 'explorer'):
-                self.explorer.refresh()
+                self.explorer.refresh_assets()
             
             print(f"Saved project to {file_path}")
             QMessageBox.information(self, "Success", f"Project saved to:\n{file_path}")
@@ -3124,7 +3157,7 @@ class MainWindow(QMainWindow):
             self,
             "Load Project",
             default_dir,
-            "All NodeCanvas Files (*.logic *.anim *.ui *.json);;Logic Files (*.logic);;Animation Files (*.anim);;UI Layout Files (*.ui);;JSON Files (*.json);;All Files (*)"
+            "All NodeCanvas Files (*.logic *.anim *.ui *.scene *.json);;Logic Files (*.logic);;Scene Files (*.scene);;Animation Files (*.anim);;UI Layout Files (*.ui);;JSON Files (*.json);;All Files (*)"
         )
         if not file_path:
             return
@@ -3132,6 +3165,16 @@ class MainWindow(QMainWindow):
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 graph_data = json.load(f)
+            
+            # --- Handle .scene Load ---
+            if file_path.endswith('.scene'):
+                self.scene_editor.load_scene_data(graph_data)
+                self.tabs.setCurrentIndex(1) # Switch to viewport
+                self.current_file = file_path
+                self.setWindowTitle(f"NodeCanvas - {Path(file_path).name}")
+                QMessageBox.information(self, "Success", f"Scene loaded from:\n{file_path}")
+                return
+
             self.canvas.load_graph(graph_data)
             if hasattr(self, 'variable_panel'):
                 self.variable_panel.load_variables(graph_data.get('variables', {}))
@@ -3161,12 +3204,14 @@ class MainWindow(QMainWindow):
             else:
                 self.tabs.setCurrentIndex(0)  # Logic tab
             
+            # Update Master Explorer
+            if hasattr(self, 'explorer'):
+                self.explorer.refresh_assets()
+            
             self.current_file = file_path
             self.setWindowTitle(f"NodeCanvas - {Path(file_path).name}")
             
-            # Add to open graphs list
-            if hasattr(self, 'explorer'):
-                self.explorer.add_open_graph(file_path)
+
             
             print(f"Loaded project from {file_path}")
             QMessageBox.information(self, "Success", f"Project loaded from:\n{file_path}")
@@ -3175,6 +3220,54 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
             QMessageBox.warning(self, "Error", f"Failed to load project:\n{e}")
+
+    def _on_explorer_file_selected(self, file_path):
+        """Handle file selection from Master Explorer"""
+        p = Path(file_path)
+        ext = p.suffix.lower()
+        if ext == '.scene':
+            # Fast-path for scene loading
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                self.scene_editor.load_scene_data(data)
+                self.tabs.setCurrentIndex(1)
+                self.current_file = file_path
+                self.setWindowTitle(f"NodeCanvas - {p.name}")
+            except Exception as e: print(f"Failed to load scene: {e}")
+        elif ext in ('.logic', '.anim', '.ui', '.json'):
+            # Use existing Load logic (refactor to avoid dialog)
+            self._load_file_direct(file_path)
+
+    def _load_file_direct(self, file_path):
+        """Internal helper to load a project file without a dialog"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            self.canvas.load_graph(data)
+            if hasattr(self, 'variable_panel'):
+                self.variable_panel.load_variables(data.get('variables', {}))
+            
+            if 'ui' in data:
+                self.ui_builder.canvas.load_ui(data['ui'])
+                if hasattr(self, 'screen_list'): self.screen_list.refresh_list()
+            if 'animation' in data:
+                self.load_anim_data(data['animation'])
+            
+            ext = Path(file_path).suffix.lower()
+            if ext == '.anim': self.tabs.setCurrentIndex(2)
+            elif ext == '.ui':
+                self.tabs.setCurrentIndex(1)
+                self.scene_editor.toolbar.mode_combo.setCurrentText('UI')
+            else: self.tabs.setCurrentIndex(0)
+            
+            self.current_file = file_path
+            self.setWindowTitle(f"NodeCanvas - {Path(file_path).name}")
+            self.explorer.refresh_assets()
+            
+        except Exception as e:
+            print(f"Error loading {file_path}: {e}")
 
     def create_node(self):
         # open node editor dialog to create a template
@@ -3613,12 +3706,26 @@ class MainWindow(QMainWindow):
             print(f"Live execution error: {e}")
 
     def _setup_docks(self):
-        # --- Canvas Mode Docks ---
-        self.explorer = FileExplorerWidget(WORKSPACE_ROOT, self)
+        # --- Shared Global Docks ---
         self.file_dock = QDockWidget("Explorer", self)
         self.file_dock.setWidget(self.explorer)
         self.file_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.file_dock)
+        
+        self.var_panel = VariablePanelWidget(self)
+        self.var_dock = QDockWidget("Variables", self)
+        self.var_dock.setWidget(self.var_panel)
+        self.var_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.var_dock)
+        self.variable_panel = self.var_panel
+
+        self.prop_dock = QDockWidget("Properties", self)
+        self.prop_dock.setWidget(self.properties)
+        self.prop_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.prop_dock)
+        
+        # Stack vars above properties
+        self.splitDockWidget(self.var_dock, self.prop_dock, Qt.Orientation.Vertical)
         
         # AI Chat dock (below Explorer)
         self.ai_chat = AIChatWidget(self)
@@ -3628,13 +3735,6 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.chat_dock)
         # Stack chat below explorer
         self.splitDockWidget(self.file_dock, self.chat_dock, Qt.Orientation.Vertical)
-
-        self.var_panel = VariablePanelWidget(self)
-        self.var_dock = QDockWidget("Variables", self)
-        self.var_dock.setWidget(self.var_panel)
-        self.var_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.var_dock)
-        self.variable_panel = self.var_panel
 
         # --- UI Builder Mode Docks ---
         self.ui_palette = WidgetPaletteWidget(self)
@@ -3709,24 +3809,17 @@ class MainWindow(QMainWindow):
 
         self.ui_props.property_changed.connect(update_item_visuals)
 
-        # --- Viewport Mode Docks ---
-        self.vp_explorer_dock = QDockWidget("Explorer", self)
-        self.vp_explorer_dock.setWidget(self.scene_editor.explorer)
-        self.vp_explorer_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.vp_explorer_dock)
-        self.vp_explorer_dock.hide()
+        # Ensure explorer sizes are consistent
+        self.file_dock.setMinimumWidth(260)
 
-        self.vp_props_dock = QDockWidget("Properties", self)
-        self.vp_props_dock.setWidget(self.scene_editor.properties_stack)
-        self.vp_props_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.vp_props_dock)
-        self.vp_props_dock.hide()
-
-        # Group docks for switching (include chat dock in canvas mode)
-        self.canvas_docks = [self.file_dock, self.chat_dock, self.var_dock]
-        self.viewport_docks = [self.vp_explorer_dock, self.vp_props_dock]
+        # Group docks for switching (Note: file_dock, var_dock and prop_dock are shared and stay visible)
+        self.canvas_docks = [self.chat_dock]
+        self.viewport_docks = []
         self.ui_docks = [self.ui_palette_dock, self.ui_props_dock, self.screen_list_dock, self.widget_list_dock]
+        self.shared_docks = [self.file_dock, self.var_dock, self.prop_dock]
         self._viewport_ui_mode = False
+        # Set initial proportions for stacked right docks (Variables half height)
+        self.resizeDocks([self.var_dock, self.prop_dock], [500, 500], Qt.Orientation.Vertical)
 
     def _on_viewport_mode_changed(self, mode):
         """Called when the Viewport tab's mode changes."""
@@ -3748,11 +3841,17 @@ class MainWindow(QMainWindow):
         # Hide all context-specific docks first by default
         for d in self.canvas_docks + self.ui_docks + self.viewport_docks:
             d.hide()
+        
+        # Always show shared docks
+        if hasattr(self, 'shared_docks'):
+            for d in self.shared_docks: d.show()
 
         # Logic tab (0) - show canvas docks
         if index == 0:
             for d in self.canvas_docks:
                 d.show()
+            if hasattr(self, 'explorer'):
+                self.explorer._primitives_section.set_collapsed(True)
         # Viewport tab (1) - show Viewport docks, or UI docks if in UI mode
         elif index == 1:
             if self._viewport_ui_mode:

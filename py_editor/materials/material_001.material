@@ -1,0 +1,18 @@
+{
+  "base_color": [
+    0.1,
+    0.8,
+    0.2,
+    1.0
+  ],
+  "roughness": 0.5,
+  "metallic": 0.0,
+  "emissive_color": [
+    0.1,
+    0.8,
+    0.2,
+    1.0
+  ],
+  "name": "material_001",
+  "preset": "Green Glow"
+}

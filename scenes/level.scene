@@ -1,0 +1,166 @@
+{
+    "objects": [
+        {
+            "id": "0802ae3e",
+            "name": "Cube",
+            "type": "cube",
+            "position": [
+                -0.1022507712761926,
+                0.5,
+                -0.34233384460561567
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "scale": [
+                1.0,
+                1.0,
+                1.0
+            ],
+            "color": [
+                0.7,
+                0.7,
+                0.7,
+                0.8
+            ],
+            "file_path": null,
+            "parent_id": null,
+            "children_ids": [],
+            "material": {
+                "base_color": [
+                    0.8,
+                    0.8,
+                    0.8,
+                    1.0
+                ],
+                "roughness": 0.7,
+                "metallic": 0.0,
+                "emissive_color": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "preset": "Plastic"
+            },
+            "active": true,
+            "visible": true,
+            "intensity": 1.0,
+            "range": 10.0,
+            "fov": 60.0
+        },
+        {
+            "id": "1ee93b57",
+            "name": "Light_directional",
+            "type": "light_directional",
+            "position": [
+                3.2230089104696455,
+                1.0,
+                -0.7225346025477908
+            ],
+            "rotation": [
+                -19.503386849153568,
+                31.102058715814447,
+                -81.4615891182197
+            ],
+            "scale": [
+                1.0,
+                1.0,
+                1.0
+            ],
+            "color": [
+                0.7,
+                0.7,
+                0.7,
+                0.8
+            ],
+            "file_path": null,
+            "parent_id": null,
+            "children_ids": [],
+            "material": {
+                "base_color": [
+                    0.8,
+                    0.8,
+                    0.8,
+                    1.0
+                ],
+                "roughness": 0.7,
+                "metallic": 0.0,
+                "emissive_color": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "preset": "Plastic"
+            },
+            "active": true,
+            "visible": false,
+            "intensity": 1.0,
+            "range": 10.0,
+            "fov": 60.0
+        },
+        {
+            "id": "2798bde4",
+            "name": "Camera",
+            "type": "camera",
+            "position": [
+                -4.759391161399603,
+                1.0,
+                -0.14414021790707388
+            ],
+            "rotation": [
+                -14.94932587659129,
+                -83.7981908342364,
+                -1.6057045639483514
+            ],
+            "scale": [
+                1.0,
+                1.0,
+                1.0
+            ],
+            "color": [
+                0.7,
+                0.7,
+                0.7,
+                0.8
+            ],
+            "file_path": null,
+            "parent_id": null,
+            "children_ids": [],
+            "material": {
+                "base_color": [
+                    0.8,
+                    0.8,
+                    0.8,
+                    1.0
+                ],
+                "roughness": 0.7,
+                "metallic": 0.0,
+                "emissive_color": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "preset": "Plastic"
+            },
+            "active": true,
+            "visible": false,
+            "intensity": 1.0,
+            "range": 10.0,
+            "fov": 60.0
+        }
+    ],
+    "camera": {
+        "pos": [
+            1.6648603956551316e-16,
+            3.7321452147779017,
+            7.281076638890051
+        ],
+        "pitch": -25.0,
+        "yaw": -90.0
+    }
+}

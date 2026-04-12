@@ -1290,6 +1290,11 @@ class IRBackend:
             if kind.name == 'LogicReference':
                 return self._execute_logic_reference(node, kind, widget_vals, ctx)
             
+            elif kind.name == 'Scene Reference':
+                # return just the handle (ID) as the single output
+                obj_id = widget_vals.get('object_id', '')
+                return obj_id
+
             # Handle InterfaceInput - get value from caller's input
             elif kind.name == 'InterfaceInput':
                 input_name = widget_vals.get('name', 'input1')

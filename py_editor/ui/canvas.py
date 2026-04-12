@@ -611,6 +611,8 @@ class LogicEditor(QGraphicsView):
             node.header_color = color1
             # Also set a matching border color
             node.setPen(QPen(color2.lighter(120), 2))
+
+    # create_scene_ref removed (duplicate)
     
     def _add_const_value_widget(self, node, template_name):
         """Add a value input widget to a const node"""
@@ -704,11 +706,15 @@ class LogicEditor(QGraphicsView):
             layout.setContentsMargins(2, 0, 2, 0)
             layout.setSpacing(4)
             
-            # Shorter label
-            short_name = widget_name[:4] if len(widget_name) > 4 else widget_name
-            label = QLabel(short_name + ":")
-            label.setStyleSheet("color: #aaa; font-size: 8px;")
-            layout.addWidget(label)
+            # Suppress labels for certain well-known IDs that are reflected in the title
+            if widget_name in ("object_id", "graphPath"):
+                pass
+            else:
+                # Shorter label
+                short_name = widget_name[:4] if len(widget_name) > 4 else widget_name
+                label = QLabel(short_name + ":")
+                label.setStyleSheet("color: #aaa; font-size: 8px;")
+                layout.addWidget(label)
             
             if widget_type == 'dropdown':
                 combo = QComboBox()
@@ -1433,6 +1439,28 @@ class LogicEditor(QGraphicsView):
 
         selected_nodes = [i for i in self._scene.selectedItems() if isinstance(i, NodeItem)]
 
+        # --- Scene Reference Logic ---
+        has_sel_objs = False
+        sel_objs = []
+        if not target_node and not selected_nodes:
+            if hasattr(self, 'main_window') and self.main_window.scene_editor:
+                sel_objs = [o for o in self.main_window.scene_editor.viewport.scene_objects if o.selected]
+                has_sel_objs = len(sel_objs) > 0
+
+        if has_sel_objs:
+             menu = QMenu()
+             for obj in sel_objs:
+                  a = menu.addAction(f"Create Reference to {obj.name}")
+                  a.triggered.connect(lambda _, o=obj: self._create_scene_object_reference(o.id, o.name, scene_pt))
+             menu.addSeparator()
+             all_nodes_act = menu.addAction("All Nodes...")
+             action = menu.exec(self.mapToGlobal(point))
+             if action == all_nodes_act:
+                  pass # proceed to search dialog
+             else:
+                  return # Reference created
+        # -----------------------------
+
         if len(selected_nodes) > 1:
             menu = QMenu()
             copy_action = QAction("Copy (Ctrl+C)", menu)
@@ -2071,7 +2099,6 @@ class LogicEditor(QGraphicsView):
                 
             c1 = start + QPointF(ctrl_dist, 0)
             c2 = scene_pt - QPointF(ctrl_dist, 0)
-            
             path.cubicTo(c1, c2, scene_pt)
             self.pending_line.setPath(path)
             event.accept()
@@ -2079,66 +2106,52 @@ class LogicEditor(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def dragEnterEvent(self, event):
-        """Accept variable and graph file drags"""
-        if event.mimeData().hasText():
-            text = event.mimeData().text()
-            if text.startswith("variable:"):
+        """Accept variable, graph file, and scene object drags"""
+        mime = event.mimeData()
+        if mime.hasText():
+            text = mime.text()
+            if text.startswith("variable:") or text.startswith("scene_object:") or text.startswith("logic:"):
                 event.acceptProposedAction()
                 return
         
-        # Accept graph file drops
-        if event.mimeData().hasFormat("application/x-nodecanvas-graph"):
+        if mime.hasFormat("application/x-nodecanvas-graph") or mime.hasFormat("application/x-nodecanvas-scene-object"):
             event.acceptProposedAction()
     
     def dragMoveEvent(self, event):
         """Accept drag move"""
-        if event.mimeData().hasText():
-            text = event.mimeData().text()
-            if text.startswith("variable:"):
+        mime = event.mimeData()
+        if mime.hasText():
+            text = mime.text()
+            if text.startswith("variable:") or text.startswith("scene_object:") or text.startswith("logic:"):
                 event.acceptProposedAction()
                 return
         
-        # Accept graph file drops
-        if event.mimeData().hasFormat("application/x-nodecanvas-graph"):
+        if mime.hasFormat("application/x-nodecanvas-graph") or mime.hasFormat("application/x-nodecanvas-scene-object"):
             event.acceptProposedAction()
-    
+
     def dropEvent(self, event):
-        """Handle variable drop or graph file drop"""
-        # Handle variable drops
-        if event.mimeData().hasText():
-            text = event.mimeData().text()
-            if text.startswith("variable:"):
-                parts = text.split(":")
+        """Handle variable drop, graph file drop, or scene object drop"""
+        # Handle formats first for priority
+        mime = event.mimeData()
+        
+        # Handle Scene Object drops (Priority)
+        if mime.hasFormat("application/x-nodecanvas-scene-object"):
+            data_str = mime.data("application/x-nodecanvas-scene-object").data().decode('utf-8')
+            if data_str.startswith("scene_object:"):
+                parts = data_str.split(":")
                 if len(parts) >= 3:
-                    var_name = parts[1]
-                    var_type = parts[2]
-                    
-                    # Drop position in scene coordinates
+                    obj_id = parts[1]
+                    obj_name = parts[2]
                     drop_pos = self.mapToScene(event.position().toPoint())
-                    
-                    # Show menu: Get or Set
-                    from PyQt6.QtWidgets import QMenu
-                    menu = QMenu(self)
-                    get_action = menu.addAction("Get Variable")
-                    set_action = menu.addAction("Set Variable")
-                    
-                    # Execute menu at cursor
-                    action = menu.exec(self.mapToGlobal(event.position().toPoint()))
-                    
-                    if action == get_action:
-                        self._create_variable_accessor(var_name, var_type, "get", drop_pos)
-                    elif action == set_action:
-                        self._create_variable_accessor(var_name, var_type, "set", drop_pos)
-                    
+                    self._create_scene_object_reference(obj_id, obj_name, drop_pos)
                     event.acceptProposedAction()
                     return
-        
-        # Handle graph file drops - offer Call or Reference
-        if event.mimeData().hasFormat("application/x-nodecanvas-graph"):
-            graph_path = event.mimeData().data("application/x-nodecanvas-graph").data().decode('utf-8')
+
+        # Handle graph file drops
+        if mime.hasFormat("application/x-nodecanvas-graph"):
+            graph_path = mime.data("application/x-nodecanvas-graph").data().decode('utf-8')
             drop_pos = self.mapToScene(event.position().toPoint())
             
-            # Show menu: Call Logic or Create Reference
             from PyQt6.QtWidgets import QMenu
             menu = QMenu()
             call_action = menu.addAction("📞 Call Logic (invoke and return)")
@@ -2154,6 +2167,53 @@ class LogicEditor(QGraphicsView):
                 self._create_reference(graph_path, drop_pos)
             
             event.acceptProposedAction()
+            return
+
+        # Handle text-based drops (variables or logic paths)
+        if mime.hasText():
+            text = mime.text()
+            
+            # Text-based scene object fallback
+            if text.startswith("scene_object:"):
+                parts = text.split(":")
+                if len(parts) >= 3:
+                    obj_id = parts[1]
+                    obj_name = parts[2]
+                    drop_pos = self.mapToScene(event.position().toPoint())
+                    self._create_scene_object_reference(obj_id, obj_name, drop_pos)
+                    event.acceptProposedAction()
+                    return
+
+            # Variable drops
+            if text.startswith("variable:"):
+                parts = text.split(":")
+                if len(parts) >= 3:
+                    var_name = parts[1]
+                    var_type = parts[2]
+                    drop_pos = self.mapToScene(event.position().toPoint())
+                    
+                    from PyQt6.QtWidgets import QMenu
+                    menu = QMenu(self)
+                    get_action = menu.addAction("Get Variable")
+                    set_action = menu.addAction("Set Variable")
+                    
+                    action = menu.exec(self.mapToGlobal(event.position().toPoint()))
+                    
+                    if action == get_action:
+                        self._create_variable_accessor(var_name, var_type, "get", drop_pos)
+                    elif action == set_action:
+                        self._create_variable_accessor(var_name, var_type, "set", drop_pos)
+                    
+                    event.acceptProposedAction()
+                    return
+
+            # Logic path drops (prefixed or raw)
+            if text.startswith("logic:"):
+                graph_path = text[6:]
+                drop_pos = self.mapToScene(event.position().toPoint())
+                self._create_call_logic(graph_path, drop_pos)
+                event.acceptProposedAction()
+                return
     
     def _create_call_logic(self, graph_path, pos):
         """Create a CallLogic node - invoke and return.
@@ -2161,62 +2221,34 @@ class LogicEditor(QGraphicsView):
         Fire-and-forget or request-response, stateless by default.
         Like calling a function.
         """
-        from pathlib import Path
-        import json
-        
-        p = Path(graph_path)
-        
-        # Read the target file to get its interface
-        interface_outputs = {}
-        entry_points = []
-        graph_name = p.stem
-        
-        try:
-            with open(p, 'r', encoding='utf-8') as f:
-                graph_data = json.load(f)
+        node = self.add_node_from_template("CallLogic", pos)
+        if node:
+             node.graph_path = graph_path
+             # Set file widget if it exists
+             if 'file' in node.value_widgets:
+                  node.value_widgets['file'].widget().setText(graph_path)
+             # Update title
+             from pathlib import Path
+             node.title.setPlainText(f"Call: {Path(graph_path).stem}")
+        self.graph_changed.emit()
+
+    def _create_scene_object_reference(self, obj_id, obj_name, pos):
+        """Create a 'Scene Reference' node for a specific scene object."""
+        node = self.add_node_from_template("Scene Reference", pos)
+        if node:
+            # Set the values in the internal storage
+            node.pin_values["object_id"] = obj_id
             
-            interface = graph_data.get('interface', {})
-            entry_points = interface.get('entry_points', [])
-            interface_outputs = interface.get('outputs', {})
-            graph_name = interface.get('name', p.stem)
+            # Sync to widgets if they are visible
+            if "object_id" in node.value_widgets:
+                w = node.value_widgets["object_id"].widget()
+                if hasattr(w, 'setText'): w.setText(obj_id)
             
-        except Exception as e:
-            print(f"Could not read interface from {graph_path}: {e}")
-        
-        # Create a CallLogic node with dynamic pins
-        node = NodeItem(self.next_id, f"Call: {graph_name}", canvas=self)
-        node.template_name = "CallLogic"
-        node.graph_path = graph_path
-        self.next_id += 1
-        
-        # Inputs: just exec (entry is implicit)
-        inputs = {"exec": "exec"}
-        
-        # Outputs: exec + data outputs from Return nodes
-        outputs = {"exec": "exec"}
-        for output_name, output_info in interface_outputs.items():
-            output_type = output_info.get('type', 'any') if isinstance(output_info, dict) else output_info
-            outputs[output_name] = output_type
-        
-        node.inputs = inputs
-        node.outputs = outputs
-        node.setup_pins(inputs, outputs)
-        node.process = None
-        
-        node.pin_values['graphPath'] = graph_path
-        
-        entry_str = ', '.join(entry_points) if entry_points else 'OnStart'
-        node.setToolTip(f"Call: {graph_name}\nEntry: {entry_str}\nOutputs: {list(interface_outputs.keys())}")
-        
-        node.header_color = QColor("#6B5B95")  # Purple
-        
-        self._scene.addItem(node)
-        node.setPos(pos)
-        self.nodes.append(node)
-        self.save_state()
-        
-        print(f"Created CallLogic: {p.name}")
-    
+            node.title.setPlainText(f"Ref: {obj_name}")
+            
+        self.graph_changed.emit()
+
+
     def _create_reference(self, graph_path, pos):
         """Create a Reference node - opaque handle.
         

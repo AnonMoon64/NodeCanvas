@@ -130,7 +130,17 @@ NodeCanvas V2 is a **fully functional visual programming environment** with the 
     - **Move**: RGB axis arrows with planar handles and stabilized translation.
     - **Rotate**: Visual rotation rings with Absolute Rigid Parenting (no drift).
     - **Scale**: Proportional scaling with screen-space uniform handles.
+    - **Proper 3D Arrows**: Camera and Directional Light gizmos feature high-quality cylindrical shafts and conical heads for professional visual feedback.
     - **Screen-Space Proximity Picking**: Effortless grabbing of handles regardless of camera distance.
+  - **Simulation Mode (Play Mode)**:
+    - **Instant Possession**: Automatically possess the first `camera` object in the scene and map its transform to the viewport with corrected orientation math.
+    - **Visual Immersion**: Pure black simulation background for cinematic focus.
+    - **Interaction Lock**: Right-click context menus are suppressed during simulation to prevent logic interference.
+    - **Diagnostic Overlay**: Real-time feedback ("● SIMULATION ENGINE ACTIVE") confirms the engine state.
+    - **Emergency Reset**: "Reset View" button to recover if the camera is misplaced.
+    - **Boosted Ambient Light**: Visual clarity in dark scenes by default.
+  - **Logic Canvas Quality**:
+    - **Intelligent Deduplication**: Redundant labels (like `object_id`) are automatically suppressed on reference nodes for a cleaner graph.
   - **Navigation**: UE5-style fly camera (RMB + WASD), orbit, pan, and scroll-zoom.
   - **Context Menus**: Right-click objects for Delete/Rename; right-click Explorer for Create Material.
   - Pixel-accurate picking and ray-plane intersections for precise object manipulation.

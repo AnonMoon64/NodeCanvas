@@ -104,3 +104,96 @@ class NodeEditorDialog(QDialog):
             QMessageBox.critical(self, 'Save Error', str(e))
             return
         self.accept()
+
+class TextEditorDialog(QDialog):
+    """General purpose text editor for logic scripts, UI JSON, and scene files."""
+    def __init__(self, parent=None, filepath=None):
+        super().__init__(parent)
+        self.filepath = filepath
+        self.setWindowTitle(f"Text Editor: {Path(filepath).name}" if filepath else "Text Editor")
+        self.resize(900, 700)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+
+        # Style context matching our dark theme
+        self.setStyleSheet("""
+            QDialog { background: #1e1e1e; font-family: 'Segoe UI', sans-serif; }
+            QPlainTextEdit { 
+                background: #111; 
+                color: #dcdccc; 
+                border: none; 
+                font-family: 'Consolas', 'Courier New', monospace; 
+                font-size: 14px; 
+                padding: 12px;
+            }
+        """)
+
+        self.editor = QPlainTextEdit(self)
+        v.addWidget(self.editor)
+
+        # Bottom bar for status and actions
+        bb = QWidget()
+        bb.setFixedHeight(45)
+        bb.setStyleSheet("background: #252526; border-top: 1px solid #3c3c3c;")
+        bbl = QHBoxLayout(bb)
+        bbl.setContentsMargins(15, 0, 15, 0)
+
+        self.status = QLabel("Ready")
+        self.status.setStyleSheet("color: #777; border: none; font-size: 11px;")
+        bbl.addWidget(self.status)
+
+        bbl.addStretch()
+
+        self.save_btn = QPushButton("Save (Ctrl+S)")
+        self.save_btn.setFixedSize(110, 26)
+        self.save_btn.setStyleSheet("""
+            QPushButton { background: #007acc; color: white; border: none; border-radius: 4px; font-weight: bold; }
+            QPushButton:hover { background: #0062a3; }
+        """)
+        
+        self.close_btn = QPushButton("Close")
+        self.close_btn.setFixedSize(80, 26)
+        self.close_btn.setStyleSheet("""
+            QPushButton { background: #3a3a3a; color: #ccc; border: 1px solid #555; border-radius: 4px; }
+            QPushButton:hover { background: #454545; color: white; }
+        """)
+
+        bbl.addWidget(self.save_btn)
+        bbl.addWidget(self.close_btn)
+        v.addWidget(bb)
+
+        self.save_btn.clicked.connect(self.on_save)
+        self.close_btn.clicked.connect(self.accept)
+
+        if filepath and Path(filepath).exists():
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    self.editor.setPlainText(f.read())
+                self.status.setText(f"File loaded: {filepath}")
+            except Exception as e:
+                self.editor.setPlainText(f"Failed to load file:\n{e}")
+                self.status.setText("Load error")
+
+    def keyPressEvent(self, event):
+        # Allow Ctrl+S to save
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_S:
+            self.on_save()
+            return
+        super().keyPressEvent(event)
+
+    def on_save(self):
+        if not self.filepath:
+             QMessageBox.warning(self, "Save Error", "No file path specified.")
+             return
+        try:
+            with open(self.filepath, 'w', encoding='utf-8') as f:
+                f.write(self.editor.toPlainText())
+            self.status.setText(f"Saved at {Path(self.filepath).name}")
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(3000, lambda: self.status.setText("Ready"))
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save file:\n{e}")
+
