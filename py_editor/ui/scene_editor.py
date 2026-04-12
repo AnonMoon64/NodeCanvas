@@ -523,16 +523,19 @@ def _draw_wireframe_cube(sx=1, sy=1, sz=1, color=OBJECT_COLOR, fill_color=OBJECT
         (-hx,-hy,hz),(hx,-hy,hz),(hx,hy,hz),(-hx,hy,hz),
     ]
     faces = [(0,1,2,3),(4,5,6,7),(0,1,5,4),(2,3,7,6),(0,3,7,4),(1,2,6,5)]
+    normals = [(0,0,-1),(0,0,1),(0,-1,0),(0,1,0),(-1,0,0),(1,0,0)]
     edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
     glColor4f(*fill_color)
-    for f in faces:
+    for i_f, f in enumerate(faces):
         glBegin(GL_QUADS)
+        glNormal3f(*normals[i_f])
         for i in f: glVertex3f(*verts[i])
         glEnd()
+    glDisable(GL_LIGHTING)
     glColor4f(*color); glLineWidth(1.5)
     glBegin(GL_LINES)
     for a, b in edges: glVertex3f(*verts[a]); glVertex3f(*verts[b])
-    glEnd(); glLineWidth(1.0)
+    glEnd(); glLineWidth(1.0); glEnable(GL_LIGHTING)
 
 
 def _draw_wireframe_sphere(radius=0.5, rings=12, segments=16, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
@@ -575,18 +578,21 @@ def _draw_wireframe_cylinder(radius=0.5, height=1.0, segments=16, color=OBJECT_C
     for i in range(segments + 1):
         a = 2.0 * math.pi * i / segments
         cx, cz = math.cos(a), math.sin(a)
+        glNormal3f(cx, 0, cz)
         glVertex3f(radius * cx, hh, radius * cz)
         glVertex3f(radius * cx, -hh, radius * cz)
     glEnd()
     # Caps
     for y in [hh, -hh]:
         glBegin(GL_TRIANGLE_FAN)
+        glNormal3f(0, 1 if y > 0 else -1, 0)
         glVertex3f(0, y, 0)
         for i in range(segments + 1):
             a = 2.0 * math.pi * (i if y > 0 else -i) / segments
             glVertex3f(radius * math.cos(a), y, radius * math.sin(a))
         glEnd()
     # Outline
+    glDisable(GL_LIGHTING)
     glColor4f(*color); glLineWidth(1.5)
     glBegin(GL_LINE_LOOP)
     for i in range(segments):
@@ -603,19 +609,21 @@ def _draw_wireframe_cylinder(radius=0.5, height=1.0, segments=16, color=OBJECT_C
         a = 2.0 * math.pi * i / segments
         x, z = radius * math.cos(a), radius * math.sin(a)
         glVertex3f(x, hh, z); glVertex3f(x, -hh, z)
-    glEnd(); glLineWidth(1.0)
+    glEnd(); glLineWidth(1.0); glEnable(GL_LIGHTING)
 
 
 def _draw_wireframe_plane(sx=2, sz=2, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
     hx, hz = sx/2, sz/2
     glColor4f(*fill_color)
     glBegin(GL_QUADS)
+    glNormal3f(0, 1, 0)
     glVertex3f(-hx,0,-hz); glVertex3f(hx,0,-hz); glVertex3f(hx,0,hz); glVertex3f(-hx,0,hz)
     glEnd()
+    glDisable(GL_LIGHTING)
     glColor4f(*color); glLineWidth(1.5)
     glBegin(GL_LINE_LOOP)
     glVertex3f(-hx,0,-hz); glVertex3f(hx,0,-hz); glVertex3f(hx,0,hz); glVertex3f(-hx,0,hz)
-    glEnd(); glLineWidth(1.0)
+    glEnd(); glLineWidth(1.0); glEnable(GL_LIGHTING)
 
 
 def _draw_wireframe_cone(radius=0.5, height=1.0, segments=16, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
@@ -623,18 +631,23 @@ def _draw_wireframe_cone(radius=0.5, height=1.0, segments=16, color=OBJECT_COLOR
     # Fill
     glColor4f(*fill_color)
     glBegin(GL_TRIANGLE_FAN)
+    glNormal3f(0, 1, 0) # Normal for the slant is more complex, using Up for now
     glVertex3f(0, hh, 0)
     for i in range(segments + 1):
         a = 2.0 * math.pi * i / segments
-        glVertex3f(radius * math.cos(a), -hh, radius * math.sin(a))
+        cx, cz = math.cos(a), math.sin(a)
+        glNormal3f(cx, 0.5, cz) # Rough slant normal
+        glVertex3f(radius * cx, -hh, radius * cz)
     glEnd()
     glBegin(GL_TRIANGLE_FAN)
+    glNormal3f(0, -1, 0)
     glVertex3f(0, -hh, 0)
     for i in range(segments + 1):
         a = 2.0 * math.pi * (-i) / segments
         glVertex3f(radius * math.cos(a), -hh, radius * math.sin(a))
     glEnd()
     # Outline
+    glDisable(GL_LIGHTING)
     glColor4f(*color); glLineWidth(1.5)
     glBegin(GL_LINE_LOOP)
     for i in range(segments):
@@ -645,7 +658,7 @@ def _draw_wireframe_cone(radius=0.5, height=1.0, segments=16, color=OBJECT_COLOR
     for i in range(0, segments, max(1, segments // 8)):
         a = 2.0 * math.pi * i / segments
         glVertex3f(radius * math.cos(a), -hh, radius * math.sin(a)); glVertex3f(0, hh, 0)
-    glEnd(); glLineWidth(1.0)
+    glEnd(); glLineWidth(1.0); glEnable(GL_LIGHTING)
 
 
 def _draw_2d_rect(w=1, h=1, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
