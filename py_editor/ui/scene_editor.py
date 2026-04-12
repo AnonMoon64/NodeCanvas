@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import (
     QColor, QPainter, QFont, QSurfaceFormat, QMouseEvent,
     QWheelEvent, QKeyEvent, QPen, QBrush, QCursor, QDrag,
-    QIcon, QPixmap,
+    QIcon, QPixmap, QShortcut, QKeySequence
 )
 from PyQt6.QtCore import (
     Qt, QTimer, QSize, QPointF, pyqtSignal, QElapsedTimer,
@@ -120,7 +120,7 @@ LIST_SS = """
     }
     QListWidget::item { padding: 5px 8px; border: none; }
     QListWidget::item:hover { background: #2a2d2e; }
-    QListWidget::item:selected { background: #094771; color: #fff; }
+    QListWidget::item:selected, QListWidget::item:selected:!active { background: #094771; color: #fff; }
 """
 TREE_SS = """
     QTreeWidget {
@@ -129,7 +129,7 @@ TREE_SS = """
     }
     QTreeWidget::item { padding: 3px 4px; }
     QTreeWidget::item:hover { background: #2a2d2e; }
-    QTreeWidget::item:selected { background: #094771; color: #fff; }
+    QTreeWidget::item:selected, QTreeWidget::item:selected:!active { background: #094771; color: #fff; }
     QTreeWidget::branch { background: #1e1e1e; }
 """
 PROPS_SS = """
@@ -170,12 +170,15 @@ class SceneObject:
         self.selected = False
         self.color = list(OBJECT_COLOR)
         self.file_path = None
+        self.parent_id = None
+        self.children_ids = []
 
     def to_dict(self) -> dict:
         return {
             'id': self.id, 'name': self.name, 'type': self.obj_type,
             'position': self.position, 'rotation': self.rotation, 'scale': self.scale,
             'color': self.color, 'file_path': self.file_path,
+            'parent_id': self.parent_id, 'children_ids': self.children_ids.copy()
         }
 
     @staticmethod
@@ -184,6 +187,8 @@ class SceneObject:
         obj.id = d.get('id', obj.id)
         obj.color = d.get('color', obj.color)
         obj.file_path = d.get('file_path')
+        obj.parent_id = d.get('parent_id')
+        obj.children_ids = d.get('children_ids', [])
         return obj
 
 
@@ -697,6 +702,33 @@ def _draw_gizmo_scale_3d(size=1.0, hover_part=None):
         # Draw filled-ish wireframe cube
         _draw_wireframe_cube(cube_half*2, cube_half*2, cube_half*2, col, (col[0], col[1], col[2], 0.4))
 
+    # Center box
+    center_sz = s * 0.12
+    uc = get_color("Uniform", (0.9, 0.9, 0.3, GIZMO_ALPHA))
+    glColor4f(uc[0], uc[1], uc[2], 0.6 if hover_part == "Uniform" else 0.15)
+    glBegin(GL_QUADS)
+    glVertex3f(-center_sz,-center_sz,-center_sz); glVertex3f(center_sz,-center_sz,-center_sz)
+    glVertex3f(center_sz,center_sz,-center_sz); glVertex3f(-center_sz,center_sz,-center_sz)
+    glEnd()
+    if hover_part == "Uniform":
+        glColor4f(1,1,0,0.8); glLineWidth(2.0)
+        glBegin(GL_LINE_LOOP)
+        glVertex3f(-center_sz,-center_sz,0); glVertex3f(center_sz,-center_sz,0)
+        glVertex3f(center_sz,center_sz,0); glVertex3f(-center_sz,center_sz,0)
+        glEnd()
+
+    glLineWidth(1.0); glEnable(GL_DEPTH_TEST)
+
+
+def _draw_gizmo_move_2d(size=1.0, hover_part=None):
+    """Draw 2D move gizmo: X and Y arrows with XY plane handle."""
+    glDisable(GL_DEPTH_TEST)
+    s = size
+
+    def get_color(axis, base):
+        if hover_part == axis: return (1.0, 1.0, 0.0, 1.0)
+        return base
+
     glLineWidth(3.5 if hover_part in ("X","Y","XY") else 2.5)
     glBegin(GL_LINES)
     # X axis
@@ -743,12 +775,46 @@ def _draw_gizmo_rotate_2d(size=1.0, hover_part=None):
     glEnd()
     # Center box
     glColor4f(0.9,0.9,0.9,GIZMO_ALPHA)
-    ch = s * 0.08
+    ch = size * 0.08
     glBegin(GL_LINE_LOOP)
     glVertex2f(-ch,-ch); glVertex2f(ch,-ch); glVertex2f(ch,ch); glVertex2f(-ch,ch)
     glEnd()
     glLineWidth(1.0)
     glEnable(GL_DEPTH_TEST)
+
+def _draw_gizmo_scale_2d(size=1.0, hover_part=None):
+    """Draw 2D scale gizmo with solid squares at the ends."""
+    glDisable(GL_DEPTH_TEST)
+    s = size
+
+    def get_color(axis, base):
+        if hover_part == axis or (hover_part == "Uniform"): return (1.0, 1.0, 0.0, 1.0)
+        return base
+
+    glLineWidth(3.5 if hover_part in ("X","Y","Uniform") else 2.5)
+    glBegin(GL_LINES)
+    glColor4f(*get_color("X", (0.95, 0.2, 0.2, GIZMO_ALPHA))); glVertex2f(0,0); glVertex2f(s,0)
+    glColor4f(*get_color("Y", (0.2, 0.95, 0.2, GIZMO_ALPHA))); glVertex2f(0,0); glVertex2f(0,s)
+    glEnd()
+
+    sq = s * 0.12
+    col_x = get_color("X", (0.95, 0.2, 0.2, GIZMO_ALPHA))
+    glColor4f(*col_x)
+    glBegin(GL_QUADS); glVertex2f(s-sq,-sq); glVertex2f(s+sq,-sq); glVertex2f(s+sq,sq); glVertex2f(s-sq,sq); glEnd()
+    
+    col_y = get_color("Y", (0.2, 0.95, 0.2, GIZMO_ALPHA))
+    glColor4f(*col_y)
+    glBegin(GL_QUADS); glVertex2f(-sq,s-sq); glVertex2f(sq,s-sq); glVertex2f(sq,s+sq); glVertex2f(-sq,s+sq); glEnd()
+
+    cu = s * 0.15
+    col_u = get_color("Uniform", (0.9, 0.9, 0.3, GIZMO_ALPHA))
+    glColor4f(col_u[0],col_u[1],col_u[2],0.6 if hover_part=="Uniform" else 0.15)
+    glBegin(GL_QUADS); glVertex2f(0,0); glVertex2f(cu,0); glVertex2f(cu,cu); glVertex2f(0,cu); glEnd()
+    if hover_part == "Uniform":
+        glColor4f(1,1,0,0.8); glLineWidth(2.0)
+        glBegin(GL_LINE_LOOP); glVertex2f(0,0); glVertex2f(cu,0); glVertex2f(cu,cu); glVertex2f(0,cu); glEnd()
+
+    glLineWidth(1.0); glEnable(GL_DEPTH_TEST)
 
 
 def _ray_intersect_aabb(origin, direction, aabb_min, aabb_max):
@@ -781,6 +847,7 @@ if QOpenGLWidget and HAS_OPENGL:
         object_selected = pyqtSignal(object)      # SceneObject or None
         object_dropped = pyqtSignal(str, float, float)  # type, world_x, world_y/z
         object_moved = pyqtSignal()                # after drag completes
+        state_changed = pyqtSignal()               # emitted when scene objects are modified
 
         def __init__(self, parent=None):
             fmt = QSurfaceFormat()
@@ -831,6 +898,9 @@ if QOpenGLWidget and HAS_OPENGL:
 
         def set_transform_mode(self, mode: str):
             self._transform_mode = mode; self.update()
+
+        def set_transform_space(self, space: str):
+            self._transform_space = space; self.update()
 
         def set_grid_size(self, size: float):
             self.grid_size = size; self.update()
@@ -1150,17 +1220,21 @@ if QOpenGLWidget and HAS_OPENGL:
                 if best_axis: return best_axis
             
             elif self._transform_mode == "scale":
-                # Scale boxes at tips
                 axes = [("X", (1,0,0)), ("Y", (0,1,0)), ("Z", (0,0,1))]
                 best_part, best_dist = None, 1e30
                 box_sz = sz * 0.18
                 for name, axis_vec in axes:
+                    if self._transform_space == "Local":
+                        M = _euler_to_matrix(*obj.rotation)
+                        axis_vec = _mat_vec_mul(M, axis_vec)
                     tip = _add(tuple(obj.position), _scale_vec(axis_vec, sz))
-                    amin = [tip[i] - box_sz/2 for i in range(3)]
-                    amax = [tip[i] + box_sz/2 for i in range(3)]
-                    dist = _ray_intersect_aabb(origin, direction, amin, amax)
-                    if dist is not None and dist < best_dist:
-                        best_part = name; best_dist = dist
+                    v = _sub(tip, origin)
+                    t = v[0]*direction[0] + v[1]*direction[1] + v[2]*direction[2]
+                    if t > 0:
+                        closest = _add(origin, _scale_vec(direction, t))
+                        dist = _length(_sub(tip, closest))
+                        if dist < box_sz and t < best_dist:
+                            best_part = name; best_dist = t
                 if best_part: return best_part
                 
                 # Center box
@@ -1308,6 +1382,7 @@ if QOpenGLWidget and HAS_OPENGL:
             if btn == Qt.MouseButton.LeftButton:
                 if self._lmb and self._drag_object:
                     self.object_moved.emit()
+                    self.state_changed.emit()
                 self._lmb = False; self._drag_object = None; self._drag_world_start = None
                 self._active_gizmo_part = None
             elif btn == Qt.MouseButton.RightButton:
@@ -1501,8 +1576,11 @@ if QOpenGLWidget and HAS_OPENGL:
                 f = self._cam3d.front; spd = self._cam3d.speed * 0.3
                 d = 1 if delta > 0 else -1
                 for i in range(3): self._cam3d.pos[i] += f[i]*spd*d
-                new_zoom = max(0.1, min(10.0, self._cam2d.zoom - delta * 0.001))
-                self._cam2d.zoom = new_zoom
+                new_zoom = max(0.1, min(10.0, self._cam2d.zoom_level - delta * 0.001))
+                self._cam2d.zoom_level = new_zoom
+            else:
+                new_zoom = max(0.1, min(10.0, self._cam2d.zoom_level - delta * 0.001))
+                self._cam2d.zoom_level = new_zoom
             self.update()
             event.accept()
 
@@ -1512,12 +1590,65 @@ if QOpenGLWidget and HAS_OPENGL:
             if event.key() == Qt.Key.Key_Delete:
                 self.scene_objects = [o for o in self.scene_objects if not o.selected]
                 self.object_selected.emit(None)
+                self.state_changed.emit()
+                self.update()
+                
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                if event.key() == Qt.Key.Key_D:
+                    self._duplicate_selected()
+                elif event.key() == Qt.Key.Key_C:
+                    self._copy_selected()
+                elif event.key() == Qt.Key.Key_V:
+                    self._paste_selected()
+                    
             event.accept()
 
         def keyReleaseEvent(self, event: QKeyEvent):
             self._keys.discard(event.key())
             if event.key() == Qt.Key.Key_Shift: self._cam3d.speed = 10.0
             event.accept()
+
+        def _duplicate_selected(self):
+            new_objs = []
+            for obj in self.scene_objects:
+                if obj.selected:
+                    new_obj = SceneObject(obj.name + "_copy", obj.obj_type, list(obj.position), list(obj.rotation), list(obj.scale))
+                    new_obj.color = list(obj.color)
+                    new_obj.file_path = obj.file_path
+                    new_obj.selected = True
+                    obj.selected = False
+                    new_objs.append(new_obj)
+            if new_objs:
+                self.scene_objects.extend(new_objs)
+                self.object_selected.emit(new_objs[-1])
+                self.state_changed.emit()
+                self.update()
+                
+        def _copy_selected(self):
+            self._clipboard = []
+            for obj in self.scene_objects:
+                if obj.selected:
+                    d = obj.to_dict()
+                    d['id'] = str(uuid.uuid4())[:8]
+                    self._clipboard.append(d)
+
+        def _paste_selected(self):
+            if not getattr(self, '_clipboard', None): return
+            new_objs = []
+            for o in self.scene_objects: o.selected = False
+            for d in self._clipboard:
+                new_obj = SceneObject.from_dict(d)
+                new_obj.position[0] += self.grid_size
+                new_obj.position[2] += self.grid_size
+                new_obj.name += "_copy"
+                new_obj.id = str(uuid.uuid4())[:8]
+                new_obj.selected = True
+                new_objs.append(new_obj)
+            if new_objs:
+                self.scene_objects.extend(new_objs)
+                self.object_selected.emit(new_objs[-1])
+                self.state_changed.emit()
+                self.update()
 
         def focusOutEvent(self, event):
             self._keys.clear(); self._rmb = False; self._mmb = False; self._lmb = False
@@ -1542,6 +1673,7 @@ if QOpenGLWidget and HAS_OPENGL:
                     QMenu::item:selected { background: #4fc3f7; color: #1a1a1a; }
                 """)
                 del_act = menu.addAction("Delete Object")
+                dup_act = menu.addAction("Duplicate")
                 ren_act = menu.addAction("Rename")
                 action = menu.exec(event.globalPos())
                 
@@ -1555,6 +1687,13 @@ if QOpenGLWidget and HAS_OPENGL:
                         parent = parent.parentWidget()
                     if parent:
                         parent._on_outliner_action(f"delete:{obj_id}")
+                elif action == dup_act:
+                    obj_id = picked.id
+                    parent = self.parentWidget()
+                    while parent and not hasattr(parent, '_on_outliner_action'):
+                        parent = parent.parentWidget()
+                    if parent:
+                        parent._on_outliner_action(f"duplicate:{obj_id}")
                 elif action == ren_act:
                     obj_id = picked.id
                     parent = self.parentWidget()
@@ -2109,6 +2248,14 @@ class SceneToolbar(QWidget):
 
         sep4 = QFrame(); sep4.setFrameShape(QFrame.Shape.VLine); sep4.setStyleSheet("color:#555;")
         layout.addWidget(sep4)
+        
+        self.cam_preset_combo = QComboBox()
+        self.cam_preset_combo.addItems(["Perspective", "Top", "Front", "Right"])
+        self.cam_preset_combo.setStyleSheet(COMBO_SS)
+        layout.addWidget(self.cam_preset_combo)
+
+        sep5 = QFrame(); sep5.setFrameShape(QFrame.Shape.VLine); sep5.setStyleSheet("color:#555;")
+        layout.addWidget(sep5)
         self.play_btn = QPushButton("Play"); self.play_btn.setStyleSheet(BTN_SS)
         self.play_btn.setToolTip("Play scene (future)"); self.play_btn.setEnabled(False)
         layout.addWidget(self.play_btn)
@@ -2166,6 +2313,11 @@ class SceneEditorWidget(QWidget):
         self._ui_builder = None
         self._object_counter = {}
 
+        self.undo_stack = []
+        self.redo_stack = []
+        self._is_undoing = False
+        self.max_undo_steps = 50
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0,0,0,0); outer.setSpacing(0)
 
@@ -2216,13 +2368,15 @@ class SceneEditorWidget(QWidget):
         self.toolbar.grid_size_changed.connect(self.viewport.set_grid_size)
         self.toolbar.transform_changed.connect(self.viewport.set_transform_mode)
         self.toolbar.space_combo.currentTextChanged.connect(self.viewport.set_transform_space)
+        self.toolbar.cam_preset_combo.currentTextChanged.connect(self._on_cam_preset)
 
         self.viewport.object_dropped.connect(self._on_object_dropped)
         self.viewport.object_selected.connect(self._on_object_selected)
         self.viewport.object_moved.connect(self._on_object_moved)
+        self.viewport.state_changed.connect(self._save_state)
 
         self.explorer.object_select_requested.connect(self._on_outliner_action)
-        self.explorer.properties.property_changed.connect(lambda: self.viewport.update())
+        self.explorer.properties.property_changed.connect(self._on_property_changed)
 
         # Set workspace root for asset scanning
         try:
@@ -2231,11 +2385,36 @@ class SceneEditorWidget(QWidget):
         except Exception:
             pass
 
+        # Undo/Redo shortcuts
+        QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self.undo)
+        QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.redo)
+        
+        QTimer.singleShot(0, self._save_state)
+
+    def _on_property_changed(self):
+        self.viewport.update()
+        self._save_state()
+
     def set_ui_builder(self, builder):
         self._ui_builder = builder
         old = self._stack.widget(2)
         self._stack.removeWidget(old); old.deleteLater()
         self._stack.insertWidget(2, builder)
+
+    def _on_cam_preset(self, text):
+        if not hasattr(self.viewport, '_cam3d'): return
+        c = self.viewport._cam3d
+        c2 = self.viewport._cam2d
+        if text == "Perspective":
+            c.pos = [0.0, 5.0, 10.0]; c.pitch = -20.0; c.yaw = -90.0
+        elif text == "Top":
+            c.pos = [0.0, 20.0, 0.0]; c.pitch = -89.9; c.yaw = -90.0
+            c2.x = 0; c2.y = 0;
+        elif text == "Front":
+            c.pos = [0.0, 0.0, 15.0]; c.pitch = 0.0; c.yaw = -90.0
+        elif text == "Right":
+            c.pos = [15.0, 0.0, 0.0]; c.pitch = 0.0; c.yaw = 180.0
+        self.viewport.update()
 
     def _on_mode_changed(self, mode):
         self._current_mode = mode
@@ -2256,6 +2435,42 @@ class SceneEditorWidget(QWidget):
         self._object_counter[obj_type] = count + 1
         display = obj_type.capitalize()
         return f"{display}_{count}" if count > 0 else display
+
+    def _save_state(self):
+        if self._is_undoing: return
+        state = [obj.to_dict() for obj in self.viewport.scene_objects]
+        self.undo_stack.append(state)
+        if len(self.undo_stack) > self.max_undo_steps:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+        
+    def undo(self):
+        if not self.undo_stack: return
+        self._is_undoing = True
+        current_state = [obj.to_dict() for obj in self.viewport.scene_objects]
+        self.redo_stack.append(current_state)
+        last_state = self.undo_stack.pop()
+        self.viewport.scene_objects = [SceneObject.from_dict(d) for d in last_state]
+        self.explorer.update_outliner(self.viewport.scene_objects)
+        selected = [o for o in self.viewport.scene_objects if o.selected]
+        if selected: self.explorer.properties.set_object(selected[-1])
+        else: self.explorer.properties.set_object(None)
+        self.viewport.update()
+        self._is_undoing = False
+        
+    def redo(self):
+        if not self.redo_stack: return
+        self._is_undoing = True
+        current_state = [obj.to_dict() for obj in self.viewport.scene_objects]
+        self.undo_stack.append(current_state)
+        next_state = self.redo_stack.pop()
+        self.viewport.scene_objects = [SceneObject.from_dict(d) for d in next_state]
+        self.explorer.update_outliner(self.viewport.scene_objects)
+        selected = [o for o in self.viewport.scene_objects if o.selected]
+        if selected: self.explorer.properties.set_object(selected[-1])
+        else: self.explorer.properties.set_object(None)
+        self.viewport.update()
+        self._is_undoing = False
 
     def _on_object_dropped(self, type_str, wx, wz):
         if self.viewport.snap_enabled:
@@ -2310,6 +2525,20 @@ class SceneEditorWidget(QWidget):
             self.viewport.scene_objects = [o for o in self.viewport.scene_objects if o.id != obj_id]
             self.explorer.properties.set_object(None)
             self._refresh_outliner(); return
+        elif action_str.startswith("duplicate:"):
+            obj_id = action_str[10:]
+            for obj in list(self.viewport.scene_objects):
+                if obj.id == obj_id:
+                    new_obj = SceneObject(obj.name + "_copy", obj.obj_type, list(obj.position), list(obj.rotation), list(obj.scale))
+                    new_obj.color = list(obj.color)
+                    new_obj.file_path = obj.file_path
+                    self.viewport.scene_objects.append(new_obj)
+                    for o in self.viewport.scene_objects: o.selected = False
+                    new_obj.selected = True
+                    self.explorer.properties.set_object(new_obj)
+                    self.viewport.update()
+                    self._refresh_outliner()
+                    return
         else:
             for o in self.viewport.scene_objects:
                 o.selected = (o.id == action_str)

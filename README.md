@@ -156,7 +156,6 @@ from py_editor.ui import LogicEditor, CanvasView  # Both work, CanvasView is ali
 editor = LogicEditor()
 ```
 
-
 ---
 
 ## 🎨 UI Builder
@@ -207,6 +206,7 @@ Each widget supports **multiple data bindings** - bind different widget properti
 | `placeholder` | Input placeholder text | string |
 
 **How to Add Bindings:**
+
 1. Select a widget in the UI Builder
 2. In the Properties panel, find "Data Bindings"
 3. Click **"+ Add Binding"**
@@ -216,6 +216,7 @@ Each widget supports **multiple data bindings** - bind different widget properti
 7. Click **✕** to remove a binding
 
 **Example: Dynamic Image with Visibility Control**
+
 - Add an Image widget
 - Add binding: `source` → `currentImage` (changes what image is shown)
 - Add binding: `visibility` → `showImage` (bool to show/hide)
@@ -257,7 +258,7 @@ These modify UI widgets at runtime:
 
 ## 🤖 AI Assistant
 
-NodeCanvas includes an integrated **AI assistant** powered by OpenAI:
+NodeCanvas includes an integrated **AI assistant**: WIP
 
 ### Assistant Features
 
@@ -270,10 +271,12 @@ NodeCanvas includes an integrated **AI assistant** powered by OpenAI:
 
 1. Get an API key from [OpenAI](https://platform.openai.com)
 2. Add it to the `.env` file in the project root:
+
    ```
    OPENAI_API_KEY=your-actual-api-key-here
    OPENAI_MODEL=gpt-4o-mini
    ```
+
 3. The status indicator turns green when connected
 
 ### Using Assistant
@@ -338,17 +341,20 @@ NodeCanvas features a powerful **UE5-style variable panel** for managing graph v
 ### Complex Type Editing
 
 **Structs** - Create custom data structures:
+
 - Add fields with name, type, and value
 - Support all types including nested structs
 - Define game entities like `{name: string, health: int, attack: int}`
 
 **Lists** - Dynamic arrays with any element type:
+
 - `List<int>` - List of integers
 - `List<struct>` - List of custom structs (perfect for game data!)
 - `List<vector3>` - List of 3D positions
 - Proper editors for each element type
 
 **Nested Types**:
+
 - `List<struct>` with complex struct definitions
 - `Dict<list>` for complex mappings
 - Unlimited nesting depth
@@ -375,6 +381,7 @@ Create an enemy list for a game:
 NodeCanvas includes powerful nodes for working with complex data:
 
 ### Struct Nodes
+
 | Node | Description |
 |------|-------------|
 | `CreateStruct` | Create a struct with a single field |
@@ -385,6 +392,7 @@ NodeCanvas includes powerful nodes for working with complex data:
 | `StructFields` | Get list of all field names |
 
 ### List Nodes
+
 | Node | Description |
 |------|-------------|
 | `ListFindByField` | Find first item where field matches value |
@@ -434,6 +442,7 @@ NodeCanvas provides audio playback nodes with multi-channel support:
 ### Audio Channels
 
 Use named channels to organize your sounds:
+
 - **Music** - Background music tracks
 - **Effect** - Sound effects (explosions, footsteps)
 - **Voice** - Voice lines and dialogue
@@ -470,12 +479,14 @@ NodeCanvas supports extensible plugins in two formats:
 - **Archive Packages** (`.ncpkg`): ZIP archives with nodes + Python modules
 
 **Installing Plugins:**
+
 1. Open **Settings → Plugins** tab
 2. Click **Add Plugin...**
 3. Select your `.json` or `.ncpkg` file
 4. Nodes appear in the node menu under their category
 
 **Included Plugins:**
+
 - **MathUtilities**: Clamp, Lerp, Abs, Power, SquareRoot, Round
 - **StringUtilities**: StringLength, Concatenate, ToUpperCase, ToLowerCase, StringReplace, StringSplit
 
@@ -528,6 +539,7 @@ python -m py_editor.main
 ### 📅 V3: Extended Libraries & Advanced Nodes (Planned)
 
 #### Built-in Libraries
+
 - Commenting system
 - Math library (trigonometry, vectors, matrices)
 - Custom MQTT library in C
@@ -537,20 +549,24 @@ python -m py_editor.main
 - HTTP/API library
 
 #### Advanced Node Types
+
 - State machine nodes
 
 ### 📅 V4: Multi-Graph Projects & Collaboration (Future)
 
 #### Project System
+
 - Multiple graphs per project
 - Graph-to-graph communication
 - Event bus architecture
 
 #### Collaboration Features
+
 - Version control integration
 - Graph diffing and merging
 
 #### Plugin Marketplace
+
 - Community node packs
 - Template libraries
 - Pre-built systems (game logic, UI kits, etc.)
@@ -571,6 +587,7 @@ results = backend.execute_ir(ir_module)
 ```
 
 This separation allows:
+
 - Backend logic independent of UI
 - Easy code generation targets
 - Optimization passes on IR
@@ -729,6 +746,7 @@ print(INTERPRETERS)  # {'logic': LogicInterpreter, 'anim': AnimInterpreter, 'ui'
 | `UIInterpreter` | `.ui` | Event-driven, persistent state, never finishes |
 
 **Yield/Finish Lifecycle:**
+
 ```python
 # All interpreters support:
 result = interpreter.enter(inputs)     # Start execution
@@ -747,6 +765,7 @@ elif result.state == ExecutionState.FINISHED:
 ### Build System
 
 The build system creates deployable packages with:
+
 - **Composite node inlining** - Flattens composite nodes for codegen
 - **Asset bundling** - Collects audio/images and copies to build folder
 - **GUI wrapper** - Python/PyQt6 GUI that loads the compiled backend
@@ -767,6 +786,7 @@ builder.build(ir_module, ui_data=ui_data, variables=variables)
 ```
 
 **Build Output:**
+
 ```
 my_app/
   main.py              # Entry point
@@ -780,6 +800,7 @@ my_app/
 ```
 
 **Architecture:**
+
 - Python GUI wraps ALL backends (consistent look)
 - C/C++ backends compile to DLL/SO, loaded via ctypes
 - WASM generates Emscripten-compatible C + HTML
@@ -807,6 +828,7 @@ MIT License - see LICENSE file for details
 ## 🙏 Acknowledgments
 
 Inspired by:
+
 - Unreal Engine Blueprints
 - VSCode
 - Blender Geometry Nodes
@@ -821,4 +843,3 @@ Inspired by:
 ---
 
 **Built with Python & PyQt6** | **Visual Programming for Everyone** | **NodeCanvas V3.0**
-
