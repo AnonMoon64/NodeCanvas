@@ -492,6 +492,10 @@ class IRBackend:
         print(f"EXECUTE_IR: nodes={[n.id.id for n in ir_module.nodes]} kinds={[n.kind.__class__.__name__ for n in ir_module.nodes]} composite_templates_keys={comp_keys}")
         print(f"EXECUTE_IR: widget_values keys={list(ir_module.widget_values.keys())} ctx.variables={ctx.variables}")
         
+        # Track current graph path in context for relative path resolution
+        if hasattr(ir_module, 'source_path') and ir_module.source_path:
+            ctx.variables['__current_graph_path__'] = ir_module.source_path
+        
         # Execute nodes in order
         results = {}
         
@@ -876,18 +880,15 @@ class IRBackend:
             print(f"LogicReference: No graph path specified")
             return None
         
-        # Resolve path
-        path = PathLib(graph_path)
-        if not path.is_absolute():
-            # Try relative to current graph's directory
-            current_graph_path = getattr(self.module, 'source_path', '')
-            if current_graph_path:
-                path = PathLib(current_graph_path).parent / graph_path
+        # Resolve path robustly
+        current_graph_path = getattr(self.module, 'source_path', ctx.variables.get('__current_graph_path__', ''))
+        resolved_path = self._resolve_graph_path(graph_path, current_graph_path)
         
-        if not path.exists():
-            print(f"LogicReference: Graph file not found: {path}")
+        if not resolved_path or not PathLib(resolved_path).exists():
+            print(f"LogicReference: Graph file not found: {resolved_path} (original: {graph_path})")
             return None
         
+        path = PathLib(resolved_path)
         print(f"LogicReference: Loading and executing '{path}'")
         
         try:
@@ -1019,6 +1020,51 @@ class IRBackend:
         branch_nodes.sort(key=lambda n: sorted_order.get(n.id.id, 0))
         
         return branch_nodes
+    
+    def _resolve_graph_path(self, path_str: str, current_graph_path: Optional[str] = None) -> Optional[str]:
+        """
+        Robustly resolve a graph path, handling absolute paths from other machines.
+        """
+        if not path_str:
+            return None
+        
+        path = Path(path_str)
+        # 1. Try path as-is
+        if path.exists():
+            return str(path)
+        
+        # 2. Try relative to current_graph_path if available
+        if current_graph_path:
+            current_dir = Path(current_graph_path).parent
+            # Try just the filename in the same directory
+            rel_path = current_dir / path.name
+            if rel_path.exists():
+                return str(rel_path)
+            
+            # Try matching the last few parts of the path (e.g. tests/character.logic)
+            parts = list(path.parts)
+            for i in range(len(parts)-1, 0, -1):
+                sub_path = Path(*parts[i:])
+                resolved = current_dir / sub_path
+                if resolved.exists():
+                    return str(resolved)
+                    
+        # 3. Try relative to current working directory
+        cwd = Path.cwd()
+        rel_cwd = cwd / path.name
+        if rel_cwd.exists():
+            return str(rel_cwd)
+
+        # 4. Search in common places like 'tests' or 'graphs' in CWD
+        for folder in ['tests', 'graphs', 'nodes/graphs']:
+            search_dir = cwd / folder
+            if search_dir.exists():
+                rel_search = search_dir / path.name
+                if rel_search.exists():
+                    return str(rel_search)
+        
+        # Fallback to original path string even if it doesn't exist (to preserve error)
+        return path_str
     
     def _collect_node_results(self, node, result, results, ir_module):
         """Helper to collect results if node is Return or composite output"""
@@ -1594,15 +1640,18 @@ class IRBackend:
 
                 # ===== SPECIAL: CallLogic - execute target graph and return result =====
                 if kind.name == 'CallLogic':
-                    graph_path = widget_vals.get('graphPath')
                     if graph_path:
-                        print(f"CallLogic executing target: {graph_path}")
+                        # Resolve path robustly
+                        current_path = ctx.variables.get('__current_graph_path__')
+                        resolved_path = self._resolve_graph_path(graph_path, current_path)
+                        
+                        print(f"CallLogic executing target: {resolved_path} (original: {graph_path})")
                         try:
                             import json
                             from pathlib import Path
                             
                             # Load target graph
-                            with open(graph_path, 'r', encoding='utf-8') as f:
+                            with open(resolved_path, 'r', encoding='utf-8') as f:
                                 target_graph = json.load(f)
                             
                             # Create a new backend for the subgraph
@@ -1661,13 +1710,20 @@ class IRBackend:
                         graph_path = target
                     
                     if graph_path:
+                        # Resolve path robustly
+                        current_path = ctx.variables.get('__current_graph_path__')
+                        resolved_path = self._resolve_graph_path(graph_path, current_path)
+                        
                         try:
                             import json
                             from pathlib import Path
                             
                             # Load target graph
-                            with open(graph_path, 'r', encoding='utf-8') as f:
+                            with open(resolved_path, 'r', encoding='utf-8') as f:
                                 target_graph = json.load(f)
+                            
+                            # Update source path for the new IR
+                            graph_path = resolved_path
                             
                             # Create a new backend for the subgraph
                             sub_backend = IRBackend()
@@ -1898,7 +1954,7 @@ class IRBackend:
         return None
 
 
-def execute_canvas_graph(canvas_graph: dict, node_templates: dict, canvas_breakpoints: set = None, graph_variables: dict = None) -> Dict[str, Any]:
+def execute_canvas_graph(canvas_graph: dict, node_templates: dict, canvas_breakpoints: set = None, graph_variables: dict = None, source_path: str = None) -> Dict[str, Any]:
     """
     High-level function to execute a canvas graph.
     
@@ -1907,12 +1963,17 @@ def execute_canvas_graph(canvas_graph: dict, node_templates: dict, canvas_breakp
         node_templates: Map of template name -> template data
         canvas_breakpoints: Set of canvas node IDs that have breakpoints
         graph_variables: Dict of variable_name -> default_value for graph-level variables
+        source_path: Optional path to the file this graph was loaded from
     
     Returns:
         Dictionary of execution results including '_canvas_to_ir_map' and '_node_errors'
     """
     backend = IRBackend()
     ir_module = backend.canvas_to_ir(canvas_graph, node_templates)
+    
+    # Track source path if provided
+    if source_path:
+        ir_module.source_path = source_path
     
     # Convert canvas breakpoints to IR node IDs
     ir_breakpoints = set()

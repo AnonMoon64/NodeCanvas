@@ -51,11 +51,11 @@ from PyQt6.QtCore import Qt, QTimer, QMimeData, pyqtSignal
 
 try:
     # prefer package imports when available
-    from py_editor.ui import LogicEditor, CanvasView, NodeEditorDialog, NodeSettingsDialog, CodeGenDialog, UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget
+    from py_editor.ui import LogicEditor, CanvasView, NodeEditorDialog, NodeSettingsDialog, CodeGenDialog, UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget, SceneEditorWidget
     from py_editor.core import load_templates
 except Exception:
     try:
-        from .ui import LogicEditor, CanvasView, NodeEditorDialog, NodeSettingsDialog, CodeGenDialog, UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget
+        from .ui import LogicEditor, CanvasView, NodeEditorDialog, NodeSettingsDialog, CodeGenDialog, UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget, SceneEditorWidget
         from .core import load_templates
     except Exception:
         import sys
@@ -64,7 +64,7 @@ except Exception:
         parent_dir = Path(__file__).resolve().parent.parent
         if str(parent_dir) not in sys.path:
             sys.path.insert(0, str(parent_dir))
-        from py_editor.ui import LogicEditor, CanvasView, NodeEditorDialog, NodeSettingsDialog, CodeGenDialog, UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget
+        from py_editor.ui import LogicEditor, CanvasView, NodeEditorDialog, NodeSettingsDialog, CodeGenDialog, UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget, SceneEditorWidget
         from py_editor.core import load_templates
 
 ASSET_PATH = Path(__file__).resolve().parents[1] / "assets" / "sample_positions.json"
@@ -391,8 +391,10 @@ class FileExplorerWidget(QWidget):
                 if hasattr(self.main_window, 'screen_list'):
                     self.main_window.screen_list.refresh_list()
             
-            # Switch to UI tab (index 3)
-            self.main_window.tabs.setCurrentIndex(3)
+            # Switch to Viewport tab (index 1) in UI mode
+            self.main_window.tabs.setCurrentIndex(1)
+            if hasattr(self.main_window, 'scene_editor'):
+                self.main_window.scene_editor.toolbar.mode_combo.setCurrentText('UI')
             
             self.main_window.current_file = str(path)
             self.main_window.setWindowTitle(f"NodeCanvas - {path.name}")
@@ -2460,18 +2462,20 @@ class MainWindow(QMainWindow):
         self.canvas = LogicEditor()
         self.tabs.addTab(self.canvas, "Logic")
         
-        # Game tab - Runtime preview (stub for now)
-        self.game_tab = self._create_game_tab()
-        self.tabs.addTab(self.game_tab, "Game")
+        # UI Builder (created early, injected into Viewport tab)
+        self.ui_builder = UIBuilderWidget()
+        self.ui_builder.set_main_window(self)
         
-        # Anim tab - Timeline editor (stub for now)
+        # Viewport tab (replaces old Game + UI tabs)
+        self.scene_editor = SceneEditorWidget()
+        self.scene_editor.set_ui_builder(self.ui_builder)
+        self.scene_editor.mode_changed.connect(self._on_viewport_mode_changed)
+        self.game_tab = self.scene_editor
+        self.tabs.addTab(self.game_tab, "Viewport")
+        
+        # Anim tab - Timeline editor
         self.anim_tab = self._create_anim_tab()
         self.tabs.addTab(self.anim_tab, "Anim")
-        
-        # UI tab - Visual UI Builder
-        self.ui_builder = UIBuilderWidget()
-        self.ui_builder.set_main_window(self)  # Pass reference for variable access
-        self.tabs.addTab(self.ui_builder, "UI")
         
         # Connect tab change to dock switching
         self.tabs.currentChanged.connect(self.on_tab_changed)
@@ -2545,33 +2549,8 @@ class MainWindow(QMainWindow):
         self._setup_docks()
 
     def _create_game_tab(self) -> QWidget:
-        """Create the Game tab - runtime preview / game view (stub)"""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(20, 20, 20, 20)
-        
-        # Header
-        header = QLabel("🎮 Game Preview")
-        header.setStyleSheet("font-size: 18px; font-weight: bold; color: #e0e0e0;")
-        layout.addWidget(header)
-        
-        # Description
-        desc = QLabel(
-            "This tab will show a runtime preview of your game.\n\n"
-            "Coming soon:\n"
-            "• Live game preview\n"
-            "• Play/Pause/Stop controls\n"
-            "• Debug overlay\n"
-            "• Performance metrics"
-        )
-        desc.setStyleSheet("color: #888; font-size: 13px;")
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
-        
-        layout.addStretch()
-        
-        widget.setStyleSheet("background-color: #1e1e1e;")
-        return widget
+        """Create the Game tab — delegates to SceneEditorWidget (kept for compatibility)."""
+        return SceneEditorWidget()
     
     def _create_anim_tab(self) -> QWidget:
         """Create the Anim tab - Animation DATA editor.
@@ -3016,9 +2995,9 @@ class MainWindow(QMainWindow):
         current_tab = self.tabs.currentIndex()
         if current_tab == 2:  # Anim tab
             default_filter = "Animation Files (*.anim)"
-        elif current_tab == 3:  # UI tab
+        elif current_tab == 1 and hasattr(self, 'scene_editor') and self.scene_editor._current_mode == 'UI':
             default_filter = "UI Layout Files (*.ui)"
-        else:  # Logic tab (0) or Game tab (1)
+        else:  # Logic tab (0) or Viewport tab (1)
             default_filter = "Logic Files (*.logic)"
         
         file_path, selected_filter = QFileDialog.getSaveFileName(
@@ -3169,7 +3148,9 @@ class MainWindow(QMainWindow):
             if ext == '.anim':
                 self.tabs.setCurrentIndex(2)  # Anim tab
             elif ext == '.ui':
-                self.tabs.setCurrentIndex(3)  # UI tab
+                self.tabs.setCurrentIndex(1)  # Viewport tab in UI mode
+                if hasattr(self, 'scene_editor'):
+                    self.scene_editor.toolbar.mode_combo.setCurrentText('UI')
             else:
                 self.tabs.setCurrentIndex(0)  # Logic tab
             
@@ -3198,8 +3179,8 @@ class MainWindow(QMainWindow):
 
     def run_graph(self):
         """Execute the current graph or Preview UI"""
-        # If UI Builder is active, preview the UI
-        if self.tabs.currentWidget() == self.ui_builder:
+        # If UI Builder is active (Viewport tab in UI mode), preview the UI
+        if self.tabs.currentIndex() == 1 and hasattr(self, 'scene_editor') and self.scene_editor._current_mode == 'UI':
             self.preview_ui()
             return
             
@@ -3224,7 +3205,7 @@ class MainWindow(QMainWindow):
             
             # Execute the graph with variable default values
             print("Executing graph...")
-            results = execute_canvas_graph(graph_data, _templates, canvas_breakpoints, self.canvas.graph_variables)
+            results = execute_canvas_graph(graph_data, _templates, canvas_breakpoints, self.canvas.graph_variables, source_path=getattr(self, 'current_file', None))
             
             # Get the canvas-to-IR mapping, node errors, and computed values
             canvas_to_ir_map = results.pop('_canvas_to_ir_map', {})
@@ -3342,6 +3323,7 @@ class MainWindow(QMainWindow):
             # Execute the full graph with event context
             backend = IRBackend()
             ir_module = backend.canvas_to_ir(graph_data, _templates)
+            ir_module.source_path = getattr(self, 'current_file', None)
             
             # Create execution context with variables loaded
             ctx = ExecutionContext()
@@ -3434,6 +3416,7 @@ class MainWindow(QMainWindow):
             graph_data = self.canvas.export_graph()
             backend = IRBackend()
             ir_module = backend.canvas_to_ir(graph_data, _templates)
+            ir_module.source_path = getattr(self, 'current_file', None)
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to create IR:\n{e}")
             import traceback
@@ -3476,6 +3459,7 @@ class MainWindow(QMainWindow):
             graph_data = self.canvas.export_graph()
             self.execution_backend = IRBackend()
             ir_module = self.execution_backend.canvas_to_ir(graph_data, _templates)
+            ir_module.source_path = getattr(self, 'current_file', None)
             
             # Collect breakpoints from canvas nodes
             breakpoints = set()
@@ -3590,7 +3574,7 @@ class MainWindow(QMainWindow):
             
             # Export and execute
             graph_data = self.canvas.export_graph()
-            results = execute_canvas_graph(graph_data, _templates, set())
+            results = execute_canvas_graph(graph_data, _templates, set(), source_path=getattr(self, 'current_file', None))
             
             # Get mappings and computed values
             canvas_to_ir_map = results.pop('_canvas_to_ir_map', {})
@@ -3721,10 +3705,32 @@ class MainWindow(QMainWindow):
         # Group docks for switching (include chat dock in canvas mode)
         self.canvas_docks = [self.file_dock, self.chat_dock, self.var_dock]
         self.ui_docks = [self.ui_palette_dock, self.ui_props_dock, self.screen_list_dock, self.widget_list_dock]
+        self._viewport_ui_mode = False
+
+    def _on_viewport_mode_changed(self, mode):
+        """Called when the Viewport tab's mode dropdown changes."""
+        self._viewport_ui_mode = (mode == 'UI')
+        # Show/hide UI docks based on Viewport mode
+        if self.tabs.currentIndex() == 1:
+            if self._viewport_ui_mode:
+                for d in self.canvas_docks:
+                    d.hide()
+                for d in self.ui_docks:
+                    d.show()
+            else:
+                for d in self.ui_docks:
+                    d.hide()
 
     def on_tab_changed(self, index):
         """Switch visible docks based on active tab"""
-        # Tab indices: 0=Logic, 1=Game, 2=Anim, 3=UI
+        # Tab indices: 0=Logic, 1=Viewport, 2=Anim
+        
+        # Manage scene editor render loop
+        if hasattr(self, 'scene_editor'):
+            if index != 1:
+                self.scene_editor.on_tab_deactivated()
+            else:
+                self.scene_editor.on_tab_activated()
         
         # Logic tab (0) - show canvas docks
         if index == 0:
@@ -3732,24 +3738,22 @@ class MainWindow(QMainWindow):
                 d.hide()
             for d in self.canvas_docks:
                 d.show()
-        # Game tab (1) - hide all specialized docks for now
+        # Viewport tab (1) - show UI docks only if in UI mode
         elif index == 1:
             for d in self.canvas_docks:
                 d.hide()
-            for d in self.ui_docks:
-                d.hide()
-        # Anim tab (2) - hide all specialized docks for now
+            if getattr(self, '_viewport_ui_mode', False):
+                for d in self.ui_docks:
+                    d.show()
+            else:
+                for d in self.ui_docks:
+                    d.hide()
+        # Anim tab (2) - hide all specialized docks
         elif index == 2:
             for d in self.canvas_docks:
                 d.hide()
             for d in self.ui_docks:
                 d.hide()
-        # UI tab (3) - show UI docks
-        elif index == 3:
-            for d in self.canvas_docks:
-                d.hide()
-            for d in self.ui_docks:
-                d.show()
 
 if __name__ == '__main__':
     # Enable faulthandler to get native crash tracebacks (segfaults, aborts)

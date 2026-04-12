@@ -1,4 +1,4 @@
-# NodeCanvas
+# NodeCanvas - Visual Scripting & Scene Editor
 
 A visual node-based programming environment inspired by Unreal Engine Blueprints. Build logic flows, design UIs, and execute graphs with a modern, intuitive interface.
 
@@ -101,13 +101,36 @@ NodeCanvas V2 is a **fully functional visual programming environment** with the 
   - Export/Import graph data
   - Template library system
   - VS Code-style workspace explorer
+  - **Robust Path Resolution**: Automatically resolves absolute paths from different machines by searching relative to the current graph or workspace.
 
 - **UI/UX**
   - Dark theme optimized for long sessions
   - Grid background for alignment
   - Coordinate and zoom display
   - Context menus for quick actions
-  - Tabbed interface: **Logic**, **Game**, **Anim**, **UI**
+  - Tabbed interface: **Logic**, **Viewport**, **Anim**
+
+- **Viewport Tab (Scene Editor)**
+  - OpenGL-powered 2D/3D viewport embedded via `QOpenGLWidget`
+  - Mode selector: **Pure** (logic-only), **UI** (inline UI Builder), **2D** (orthographic), **3D** (perspective)
+  - **Unified UI Mode**: UI Builder embedded directly in the Viewport tab (no separate UI tab)
+  - **Scene Explorer Panel** (left sidebar):
+    - **Primitives**: Drag-and-drop Cube, Sphere, Cylinder, Plane, Cone (3D) or Rect, Circle, Sprite (2D)
+    - **Project Files**: Full folder tree of the project, filtered to show asset files (FBX/OBJ/GLTF for 3D, PNG/JPG/WebP for 2D)
+    - **Outliner**: Lists all scene objects with selection, rename (double-click), and context menu delete
+    - **Properties Panel**: Position/Rotation/Scale spinboxes with bidirectional sync (edit values updates object, dragging object updates values)
+  - **Transform Gizmos** (UE5-style Interactive):
+    - **Move**: RGB axis arrows with **planar handles** (XY, XZ, YZ). Drag arrows to move along one axis; drag planes to move along two.
+    - **Rotate**: Three colored rotation rings with **highlighting** (X=red, Y=green, Z=blue). Drag rings to rotate around the corresponding axis.
+    - **Scale**: RGB axis lines with cube tips and a **center cube** for uniform scaling.
+    - **Interactive Feedback**: Gizmo parts highlight yellow when hovered.
+    - Gizmos scale proportionally to camera distance (constant screen size).
+  - **Object System**: RMB click to select, LMB drag to move/rotate/scale based on active tool, Delete key to remove.
+  - **Viewport Context Menu**: Right-click any object in the viewport to **Delete** or **Rename** it instantly.
+  - **Pixel-accurate drag**: Object movement uses ray-plane intersection (3D) and screen-to-world mapping (2D).
+  - **3D Mode**: Perspective camera with UE5-style fly (RMB + WASD/QE), MMB pan, scroll zoom
+  - **2D Mode**: Orthographic camera with pan and scroll zoom, XY grid
+  - Infinite adaptive grid, RGB axis gizmo, wireframe primitives with selection highlighting
 
 ### 📁 File Types
 

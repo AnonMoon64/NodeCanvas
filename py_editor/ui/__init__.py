@@ -6,6 +6,7 @@ from .composite_editor import CompositeEditorDialog
 from .node_settings import NodeSettingsDialog
 from .codegen import CodeGenDialog
 from .ui_builder import UIBuilderWidget, WidgetPaletteWidget, PropertyEditor, ScreenListWidget, WidgetListWidget
+from .scene_editor import SceneEditorWidget
 
 __all__ = [
     # Primary export
@@ -24,4 +25,5 @@ __all__ = [
     'PropertyEditor',
     'ScreenListWidget',
     'WidgetListWidget',
+    'SceneEditorWidget',
 ]
