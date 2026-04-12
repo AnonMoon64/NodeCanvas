@@ -30,26 +30,42 @@
             "children_ids": [],
             "material": {
                 "base_color": [
+                    0.1,
                     0.8,
-                    0.8,
-                    0.8,
+                    0.2,
                     1.0
                 ],
-                "roughness": 0.7,
+                "roughness": 0.5,
                 "metallic": 0.0,
                 "emissive_color": [
-                    0.0,
-                    0.0,
-                    0.0,
+                    0.1,
+                    0.8,
+                    0.2,
                     1.0
                 ],
-                "preset": "Plastic"
+                "preset": "Green Glow"
             },
             "active": true,
             "visible": true,
             "intensity": 1.0,
             "range": 10.0,
-            "fov": 60.0
+            "fov": 60.0,
+            "landscape_type": "flat",
+            "landscape_size_mode": "finite",
+            "landscape_size": [
+                10.0,
+                10.0
+            ],
+            "landscape_spawn_enabled": false,
+            "landscape_spawn_list": [],
+            "landscape_spawn_rows": 1,
+            "landscape_spawn_cols": 1,
+            "landscape_spawn_spacing": [
+                2.0,
+                2.0
+            ],
+            "landscape_procedural_amp": 0.5,
+            "landscape_procedural_freq": 1.0
         },
         {
             "id": "1ee93b57",
@@ -100,7 +116,23 @@
             "visible": false,
             "intensity": 1.0,
             "range": 10.0,
-            "fov": 60.0
+            "fov": 60.0,
+            "landscape_type": "flat",
+            "landscape_size_mode": "finite",
+            "landscape_size": [
+                10.0,
+                10.0
+            ],
+            "landscape_spawn_enabled": false,
+            "landscape_spawn_list": [],
+            "landscape_spawn_rows": 1,
+            "landscape_spawn_cols": 1,
+            "landscape_spawn_spacing": [
+                2.0,
+                2.0
+            ],
+            "landscape_procedural_amp": 0.5,
+            "landscape_procedural_freq": 1.0
         },
         {
             "id": "2798bde4",
@@ -151,16 +183,99 @@
             "visible": false,
             "intensity": 1.0,
             "range": 10.0,
-            "fov": 60.0
+            "fov": 60.0,
+            "landscape_type": "flat",
+            "landscape_size_mode": "finite",
+            "landscape_size": [
+                10.0,
+                10.0
+            ],
+            "landscape_spawn_enabled": false,
+            "landscape_spawn_list": [],
+            "landscape_spawn_rows": 1,
+            "landscape_spawn_cols": 1,
+            "landscape_spawn_spacing": [
+                2.0,
+                2.0
+            ],
+            "landscape_procedural_amp": 0.5,
+            "landscape_procedural_freq": 1.0
+        },
+        {
+            "id": "914ab6b4",
+            "name": "Landscape_1",
+            "type": "landscape",
+            "position": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "scale": [
+                1.0,
+                1.0,
+                1.0
+            ],
+            "color": [
+                0.7,
+                0.7,
+                0.7,
+                0.8
+            ],
+            "file_path": null,
+            "parent_id": null,
+            "children_ids": [],
+            "material": {
+                "base_color": [
+                    0.8,
+                    0.8,
+                    0.8,
+                    1.0
+                ],
+                "roughness": 0.7,
+                "metallic": 0.0,
+                "emissive_color": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ],
+                "preset": "Plastic"
+            },
+            "active": true,
+            "visible": true,
+            "intensity": 1.0,
+            "range": 10.0,
+            "fov": 60.0,
+            "landscape_type": "flat",
+            "landscape_size_mode": "finite",
+            "landscape_size": [
+                1000.0,
+                1000.0
+            ],
+            "landscape_spawn_enabled": false,
+            "landscape_spawn_list": [],
+            "landscape_spawn_rows": 1,
+            "landscape_spawn_cols": 1,
+            "landscape_spawn_spacing": [
+                2.0,
+                2.0
+            ],
+            "landscape_procedural_amp": 0.5,
+            "landscape_procedural_freq": 1.0
         }
     ],
     "camera": {
         "pos": [
-            1.6648603956551316e-16,
-            3.7321452147779017,
-            7.281076638890051
+            -3.737954003622713,
+            2.763280711753632,
+            10.672752590079252
         ],
-        "pitch": -25.0,
-        "yaw": -90.0
+        "pitch": -15.099999999999932,
+        "yaw": -79.49999999999969
     }
 }

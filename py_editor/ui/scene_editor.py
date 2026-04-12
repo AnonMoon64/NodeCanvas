@@ -22,12 +22,12 @@ from typing import Optional, Tuple, List, Dict, Any
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
-    QComboBox, QCheckBox, QDoubleSpinBox, QFrame, QSizePolicy,
+    QComboBox, QCheckBox, QDoubleSpinBox, QFrame, QSizePolicy, QSpinBox,
     QToolButton, QButtonGroup, QSpacerItem, QSplitter, QTabBar,
     QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
     QStackedWidget, QAbstractItemView, QMenu, QInputDialog,
     QScrollArea, QGridLayout, QGroupBox, QSlider, QColorDialog,
-    QFormLayout, QMainWindow, QFileDialog,
+    QFormLayout, QMainWindow, QFileDialog, QDialog, QMessageBox,
 )
 from PyQt6.QtGui import (
     QColor, QPainter, QFont, QSurfaceFormat, QMouseEvent,
@@ -38,6 +38,7 @@ from PyQt6.QtCore import (
     Qt, QTimer, QSize, QPointF, pyqtSignal, QElapsedTimer,
     QMimeData, QPoint,
 )
+import json as _json
 
 try:
     from PyQt6.QtOpenGLWidgets import QOpenGLWidget
@@ -187,8 +188,71 @@ class SceneObject:
         self.active = True
         self.visible = (obj_type not in ('camera', 'light_point', 'light_directional'))
         self.intensity = 1.0
+        self.is_procedural = False # Flag for objects spawned by procedural systems
         self.range = 10.0  # For lights
         self.fov = 60.0    # For cameras
+        # Landscape-specific properties (used when obj_type == 'landscape')
+        self.landscape_type = 'procedural'         # 'flat' | 'procedural'
+        self.landscape_size_mode = 'finite'     # 'finite' | 'infinite'
+        self.landscape_chunk_size = 128         # 64 | 128 | 256
+        self.landscape_grid_radius = 1         # 1=3x3, 2=5x5, etc.
+        self.landscape_resolution = 32          # 16 | 32 | 64 | 128
+        self.landscape_render_bias = -0.02
+        self.landscape_seed = 123
+        self.landscape_height_scale = 30.0
+        self.landscape_ocean_level = 0.08
+        self.landscape_ocean_flattening = 0.3
+        self.landscape_noise_layers = [
+            # Layer 1: Base Terrain (LFM) - Dominate Round Hills
+            {'type': 'perlin', 'mode': 'fbm', 'amp': 1.0, 'freq': 0.007, 'octaves': 4, 'persistence': 0.45, 'lacunarity': 2.0, 'weight': 1.2, 'exponent': 1.0},
+            # Layer 2: Mountain Peaks (Ridged) - Sparse Sharp Accents
+            {'type': 'perlin', 'mode': 'ridged', 'amp': 0.65, 'freq': 0.012, 'octaves': 3, 'persistence': 0.5, 'lacunarity': 2.1, 'weight': 0.4, 'exponent': 2.5},
+            # Layer 3: Detail Noise - Fine Variations
+            {'type': 'perlin', 'mode': 'fbm', 'amp': 0.15, 'freq': 0.04, 'octaves': 3, 'persistence': 0.5, 'lacunarity': 2.0, 'weight': 0.15, 'exponent': 1.0}
+        ]
+        self.landscape_biomes = [
+            {
+                'name': 'Deep Ocean',
+                'height_range': [-1000.0, -5.0], 'slope_range': [0.0, 1.0], 'temp_range': [0.0, 1.0], 'hum_range': [0.0, 1.0],
+                'surface': {'color': [0.05, 0.1, 0.3, 1.0], 'roughness': 0.1, 'metallic': 0.2}, 'spawns': []
+            },
+            {
+                'name': 'Shallow Water',
+                'height_range': [-5.0, 0.0], 'slope_range': [0.0, 1.0], 'temp_range': [0.0, 1.0], 'hum_range': [0.0, 1.0],
+                'surface': {'color': [0.1, 0.4, 0.6, 1.0], 'roughness': 0.2, 'metallic': 0.1}, 'spawns': []
+            },
+            {
+                'name': 'Beach',
+                'height_range': [0.0, 2.0], 'slope_range': [0.0, 0.2], 'temp_range': [0.4, 1.0], 'hum_range': [0.0, 1.0],
+                'surface': {'color': [0.85, 0.8, 0.65, 1.0], 'roughness': 0.9, 'metallic': 0.0}, 'spawns': []
+            },
+            {
+                'name': 'Grassland',
+                'height_range': [2.0, 15.0], 'slope_range': [0.0, 0.15], 'temp_range': [0.3, 0.8], 'hum_range': [0.2, 0.7],
+                'surface': {'color': [0.25, 0.4, 0.1, 1.0], 'roughness': 0.8, 'metallic': 0.0}, 'spawns': []
+            },
+            {
+                'name': 'Forest',
+                'height_range': [15.0, 35.0], 'slope_range': [0.15, 0.4], 'temp_range': [0.3, 0.7], 'hum_range': [0.5, 1.0],
+                'surface': {'color': [0.1, 0.25, 0.05, 1.0], 'roughness': 0.9, 'metallic': 0.0}, 'spawns': []
+            },
+            {
+                'name': 'Mountain',
+                'height_range': [35.0, 1000.0], 'slope_range': [0.4, 1.0], 'temp_range': [0.0, 1.0], 'hum_range': [0.0, 1.0],
+                'surface': {'color': [0.4, 0.4, 0.45, 1.0], 'roughness': 0.7, 'metallic': 0.0}, 'spawns': []
+            },
+            {
+                'name': 'Snow Cap',
+                'height_range': [45.0, 1000.0], 'slope_range': [0.0, 1.0], 'temp_range': [0.0, 0.2], 'hum_range': [0.0, 1.0],
+                'surface': {'color': [0.95, 0.95, 1.0, 1.0], 'roughness': 0.3, 'metallic': 0.0}, 'spawns': []
+            }
+        ]
+        self.landscape_spawn_enabled = False
+        self.landscape_spawn_list = []          # Legacy list
+        self.landscape_spawn_rows = 1
+        self.landscape_spawn_cols = 1
+        self.landscape_spawn_spacing = [10.0, 10.0] 
+        self.visualize_climate = False
 
     def get_render_color(self):
         """Get the effective face color from the material base_color."""
@@ -210,7 +274,24 @@ class SceneObject:
             'visible': self.visible,
             'intensity': self.intensity,
             'range': self.range,
-            'fov': self.fov
+            'fov': self.fov,
+            # Landscape data
+            'landscape_type': self.landscape_type,
+            'landscape_size_mode': self.landscape_size_mode,
+            'landscape_render_bias': self.landscape_render_bias,
+            'landscape_seed': self.landscape_seed,
+            'landscape_height_scale': self.landscape_height_scale,
+            'landscape_ocean_level': self.landscape_ocean_level,
+            'landscape_ocean_flattening': self.landscape_ocean_flattening,
+            'landscape_noise_layers': [dict(lyr) for lyr in self.landscape_noise_layers],
+            'landscape_biomes': [dict(b) for b in self.landscape_biomes],
+            'landscape_spawn_enabled': self.landscape_spawn_enabled,
+            'landscape_spawn_rows': self.landscape_spawn_rows,
+            'landscape_spawn_cols': self.landscape_spawn_cols,
+            'landscape_spawn_spacing': self.landscape_spawn_spacing,
+            'visualize_climate': self.visualize_climate,
+            'active': self.active,
+            'is_procedural': self.is_procedural,
         }
 
     @staticmethod
@@ -226,6 +307,68 @@ class SceneObject:
         obj.intensity = d.get('intensity', 1.0)
         obj.range = d.get('range', 10.0)
         obj.fov = d.get('fov', 60.0)
+        obj.is_procedural = d.get('is_procedural', False)
+        # Landscape settings
+        obj.landscape_type = d.get('landscape_type', 'flat')
+        obj.landscape_size_mode = d.get('landscape_size_mode', 'finite')
+        obj.landscape_render_bias = d.get('landscape_render_bias', -0.02)
+        obj.landscape_seed = d.get('landscape_seed', 123)
+        obj.landscape_height_scale = d.get('landscape_height_scale', 30.0)
+        obj.landscape_ocean_level = d.get('landscape_ocean_level', 0.08)
+        obj.landscape_ocean_flattening = d.get('landscape_ocean_flattening', 0.3)
+        
+        # Migration for Noise Layers
+        if 'landscape_noise_layers' in d:
+            obj.landscape_noise_layers = d['landscape_noise_layers']
+        else:
+            amp = d.get('landscape_procedural_amp', 0.5)
+            freq = d.get('landscape_procedural_freq', 1.0)
+            obj.landscape_noise_layers = [{'amp': amp, 'freq': freq, 'offset': [0.0, 0.0], 'octaves': 4}]
+        
+        # Migration for Biomes (Encapsulated)
+        if 'landscape_biomes' in d:
+            biomes = d['landscape_biomes']
+            for b in biomes:
+                if 'surface' not in b:
+                    # Upgrade structure
+                    b['surface'] = {
+                        'color': b.get('color', [0.5, 0.5, 0.5, 1.0]),
+                        'roughness': 0.7, 'metallic': 0.0,
+                        'emissive': [0.0, 0.0, 0.0, 1.0]
+                    }
+                if 'slope_range' not in b:
+                    b['slope_range'] = [0.0, 1.0]
+            obj.landscape_biomes = biomes
+        else:
+            obj.landscape_biomes = [{
+                'name': 'Default', 'height_range': [-1000.0, 1000.0], 'slope_range': [0.0, 1.0],
+                'surface': {'color': [0.5, 0.5, 0.5, 1.0], 'roughness': 0.7, 'metallic': 0.0, 'emissive': [0.0, 0.0, 0.0, 1.0]},
+                'spawns': []
+            }]
+        
+        # Apply strict requirements for default landscape setup if empty or generic
+        if not d.get('landscape_biomes') or len(obj.landscape_biomes) == 1 and obj.landscape_biomes[0]['name'] == 'Default':
+            obj.landscape_biomes = [
+                {'name': 'Ocean',     'height_range': [-1000.0, 0.1],  'slope_range': [0, 1], 'surface': {'color': [0.05, 0.15, 0.6, 1.0], 'roughness': 0.1, 'metallic': 0.0}, 'spawns': []},
+                {'name': 'Beach',     'height_range': [0.1, 0.15],    'slope_range': [0, 0.2], 'surface': {'color': [0.8, 0.7, 0.4, 1.0], 'roughness': 0.9, 'metallic': 0.0}, 'spawns': []},
+                {'name': 'Grassland', 'height_range': [0.15, 0.4],    'slope_range': [0, 0.3], 'surface': {'color': [0.2, 0.5, 0.1, 1.0], 'roughness': 0.8, 'metallic': 0.0}, 'spawns': []},
+                {'name': 'Forest',    'height_range': [0.4, 0.7],     'slope_range': [0, 0.5], 'surface': {'color': [0.1, 0.3, 0.1, 1.0], 'roughness': 0.8, 'metallic': 0.0}, 'spawns': []},
+                {'name': 'Mountain',  'height_range': [0.7, 1.2],     'slope_range': [0, 1.0], 'surface': {'color': [0.4, 0.3, 0.2, 1.0], 'roughness': 0.6, 'metallic': 0.0}, 'spawns': []},
+                {'name': 'Snow',      'height_range': [1.2, 5000.0],  'slope_range': [0, 1.0], 'surface': {'color': [0.95, 0.95, 1.0, 1.0], 'roughness': 0.9, 'metallic': 0.0}, 'spawns': []},
+            ]
+        
+        if not d.get('landscape_noise_layers'):
+            obj.landscape_noise_layers = [
+                {'type': 'perlin', 'amp': 1.0, 'freq': 1.0, 'octaves': 6, 'persistence': 0.5, 'lacunarity': 2.0},
+                {'type': 'worley', 'amp': 0.2, 'freq': 4.0, 'octaves': 1}
+            ]
+
+        obj.landscape_spawn_enabled = d.get('landscape_spawn_enabled', False)
+
+        obj.landscape_spawn_rows = d.get('landscape_spawn_rows', 1)
+        obj.landscape_spawn_cols = d.get('landscape_spawn_cols', 1)
+        obj.landscape_spawn_spacing = d.get('landscape_spawn_spacing', [10.0, 10.0])
+        obj.visualize_climate = d.get('visualize_climate', False)
         return obj
 
 
@@ -539,12 +682,20 @@ def _draw_wireframe_cube(sx=1, sy=1, sz=1, color=OBJECT_COLOR, fill_color=OBJECT
     faces = [(0,1,2,3),(4,5,6,7),(0,1,5,4),(2,3,7,6),(0,3,7,4),(1,2,6,5)]
     normals = [(0,0,-1),(0,0,1),(0,-1,0),(0,1,0),(-1,0,0),(1,0,0)]
     edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+    # If fill is translucent, enable blending and disable depth writes
+    alpha = fill_color[3] if len(fill_color) > 3 else 1.0
+    if alpha < 0.999:
+        glEnable(GL_BLEND); glDepthMask(GL_FALSE)
+    else:
+        glDisable(GL_BLEND); glDepthMask(GL_TRUE)
     glColor4f(*fill_color)
     for i_f, f in enumerate(faces):
         glBegin(GL_QUADS)
         glNormal3f(*normals[i_f])
         for i in f: glVertex3f(*verts[i])
         glEnd()
+    # Restore depth writing for outlines
+    glDepthMask(GL_TRUE); glDisable(GL_BLEND)
     glDisable(GL_LIGHTING)
     glColor4f(*color); glLineWidth(1.5)
     glBegin(GL_LINES)
@@ -554,6 +705,11 @@ def _draw_wireframe_cube(sx=1, sy=1, sz=1, color=OBJECT_COLOR, fill_color=OBJECT
 
 def _draw_wireframe_sphere(radius=0.5, rings=12, segments=16, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
     # Fill
+    alpha = fill_color[3] if len(fill_color) > 3 else 1.0
+    if alpha < 0.999:
+        glEnable(GL_BLEND); glDepthMask(GL_FALSE)
+    else:
+        glDisable(GL_BLEND); glDepthMask(GL_TRUE)
     glColor4f(*fill_color)
     for i in range(rings):
         phi1 = math.pi * i / rings
@@ -569,6 +725,7 @@ def _draw_wireframe_sphere(radius=0.5, rings=12, segments=16, color=OBJECT_COLOR
             glNormal3f(r2/radius * cx, y2/radius, r2/radius * cz)
             glVertex3f(r2 * cx, y2, r2 * cz)
         glEnd()
+    glDepthMask(GL_TRUE); glDisable(GL_BLEND)
     # Outline (disable lighting for wireframe)
     glDisable(GL_LIGHTING)
     glColor4f(*color); glLineWidth(1.5)
@@ -586,6 +743,11 @@ def _draw_wireframe_sphere(radius=0.5, rings=12, segments=16, color=OBJECT_COLOR
 def _draw_wireframe_cylinder(radius=0.5, height=1.0, segments=16, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
     hh = height / 2
     # Fill faces
+    alpha = fill_color[3] if len(fill_color) > 3 else 1.0
+    if alpha < 0.999:
+        glEnable(GL_BLEND); glDepthMask(GL_FALSE)
+    else:
+        glDisable(GL_BLEND); glDepthMask(GL_TRUE)
     glColor4f(*fill_color)
     # Side
     glBegin(GL_QUAD_STRIP)
@@ -605,6 +767,8 @@ def _draw_wireframe_cylinder(radius=0.5, height=1.0, segments=16, color=OBJECT_C
             a = 2.0 * math.pi * (i if y > 0 else -i) / segments
             glVertex3f(radius * math.cos(a), y, radius * math.sin(a))
         glEnd()
+    # Restore depth write and blending for outlines
+    glDepthMask(GL_TRUE); glDisable(GL_BLEND)
     # Outline
     glDisable(GL_LIGHTING)
     glColor4f(*color); glLineWidth(1.5)
@@ -626,23 +790,41 @@ def _draw_wireframe_cylinder(radius=0.5, height=1.0, segments=16, color=OBJECT_C
     glEnd(); glLineWidth(1.0); glEnable(GL_LIGHTING)
 
 
-def _draw_wireframe_plane(sx=2, sz=2, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
+def _draw_wireframe_plane(sx=2, sz=2, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR, flip_winding: bool = False, y_offset: float = 0.0):
     hx, hz = sx/2, sz/2
+    alpha = fill_color[3] if len(fill_color) > 3 else 1.0
+    if alpha < 0.999:
+        glEnable(GL_BLEND); glDepthMask(GL_FALSE)
+    else:
+        glDisable(GL_BLEND); glDepthMask(GL_TRUE)
     glColor4f(*fill_color)
     glBegin(GL_QUADS)
     glNormal3f(0, 1, 0)
-    glVertex3f(-hx,0,-hz); glVertex3f(hx,0,-hz); glVertex3f(hx,0,hz); glVertex3f(-hx,0,hz)
+    if flip_winding:
+        # Emit vertices in reversed winding so the opposite face is considered front
+        glVertex3f(-hx, y_offset, -hz); glVertex3f(-hx, y_offset, hz); glVertex3f(hx, y_offset, hz); glVertex3f(hx, y_offset, -hz)
+    else:
+        glVertex3f(-hx, y_offset, -hz); glVertex3f(hx, y_offset, -hz); glVertex3f(hx, y_offset, hz); glVertex3f(-hx, y_offset, hz)
     glEnd()
+    glDepthMask(GL_TRUE); glDisable(GL_BLEND)
     glDisable(GL_LIGHTING)
     glColor4f(*color); glLineWidth(1.5)
     glBegin(GL_LINE_LOOP)
-    glVertex3f(-hx,0,-hz); glVertex3f(hx,0,-hz); glVertex3f(hx,0,hz); glVertex3f(-hx,0,hz)
+    if flip_winding:
+        glVertex3f(-hx, y_offset, -hz); glVertex3f(-hx, y_offset, hz); glVertex3f(hx, y_offset, hz); glVertex3f(hx, y_offset, -hz)
+    else:
+        glVertex3f(-hx, y_offset, -hz); glVertex3f(hx, y_offset, -hz); glVertex3f(hx, y_offset, hz); glVertex3f(-hx, y_offset, hz)
     glEnd(); glLineWidth(1.0); glEnable(GL_LIGHTING)
 
 
 def _draw_wireframe_cone(radius=0.5, height=1.0, segments=16, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
     hh = height / 2
     # Fill
+    alpha = fill_color[3] if len(fill_color) > 3 else 1.0
+    if alpha < 0.999:
+        glEnable(GL_BLEND); glDepthMask(GL_FALSE)
+    else:
+        glDisable(GL_BLEND); glDepthMask(GL_TRUE)
     glColor4f(*fill_color)
     glBegin(GL_TRIANGLE_FAN)
     glNormal3f(0, 1, 0) # Normal for the slant is more complex, using Up for now
@@ -660,6 +842,7 @@ def _draw_wireframe_cone(radius=0.5, height=1.0, segments=16, color=OBJECT_COLOR
         a = 2.0 * math.pi * (-i) / segments
         glVertex3f(radius * math.cos(a), -hh, radius * math.sin(a))
     glEnd()
+    glDepthMask(GL_TRUE); glDisable(GL_BLEND)
     # Outline
     glDisable(GL_LIGHTING)
     glColor4f(*color); glLineWidth(1.5)
@@ -1010,6 +1193,8 @@ if QOpenGLWidget and HAS_OPENGL:
             self._frame_count = 0
             self._fps_accum = 0.0
             self._current_fps = 0
+            # Debug flag to print camera/light info once at startup
+            self._debug_frame_logged = False
 
             self.grid_size = 1.0
             self.grid_extent = 200
@@ -1147,6 +1332,31 @@ if QOpenGLWidget and HAS_OPENGL:
 
             w, h = self.width(), self.height()
             if w < 1 or h < 1: return
+            # One-time debug dump to help diagnose camera/light issues
+            if not getattr(self, '_debug_frame_logged', False):
+                try:
+                    is_play = getattr(self, 'is_play_mode', False)
+                    cam = getattr(self, '_cam3d', None)
+                    lights = [o for o in self.scene_objects if o.active and 'light' in o.obj_type]
+                    print(f"[VIEW DEBUG] play={is_play} vp={w}x{h} objects={len(self.scene_objects)} lights={len(lights)}")
+                    if cam is not None:
+                        try:
+                            f = cam.front; u = cam.up
+                        except Exception:
+                            f, u = None, None
+                        print(f"[VIEW DEBUG] cam.pos={cam.pos} yaw={cam.yaw} pitch={cam.pitch} fov={cam.fov} front={f} up={u}")
+                    for i, L in enumerate(lights[:8]):
+                        print(f"[VIEW DEBUG] light[{i}] type={L.obj_type} pos={L.position} rot={L.rotation} active={L.active} visible={L.visible}")
+                    # GL error check (if available)
+                    try:
+                        err = glGetError()
+                        if err != GL_NO_ERROR:
+                            print(f"[VIEW DEBUG] GL_ERROR: {err}")
+                    except Exception:
+                        pass
+                except Exception as e:
+                    print(f"[VIEW DEBUG] failed to dump debug info: {e}")
+                self._debug_frame_logged = True
             if self._mode == "3D":
                 self._cam3d.apply_gl(w / max(h, 1))
                 self._setup_scene_lighting() # Update positions each frame
@@ -1319,126 +1529,228 @@ if QOpenGLWidget and HAS_OPENGL:
             glEnd(); glPointSize(1.0)
             glLineWidth(1.0); glEnable(GL_DEPTH_TEST)
 
+        def _draw_single_object_3d(self, obj, is_play):
+            # Must be active to exist, and visible (or we are in editor)
+            if not obj.active: return
+            if is_play and not obj.visible: return
+            
+            glPushMatrix()
+            glTranslatef(*obj.position)
+            glRotatef(obj.rotation[1], 0, 1, 0) # Yaw (Global Up)
+            glRotatef(obj.rotation[0], 1, 0, 0) # Pitch
+            glRotatef(obj.rotation[2], 0, 0, 1) # Roll
+            glScalef(*obj.scale)
+            # Ensure material override flags exist regardless of branch
+            material_override = False
+            was_color_mat = None
+
+            if obj.selected:
+                color = tuple(SELECT_COLOR)
+                fill = (color[0]*0.3, color[1]*0.3, color[2]*0.3, 0.4)
+            else:
+                # Use material base_color for fill (respect alpha)
+                bc = obj.get_render_color()
+                base_alpha = bc[3] if len(bc) > 3 else 1.0
+                color = (bc[0]*0.8, bc[1]*0.8, bc[2]*0.8, 0.9)
+                fill = (bc[0], bc[1], bc[2], base_alpha)
+                # Emissive glow — brighten the wireframe
+                ec = obj.get_emissive_color()
+                if ec[0] > 0.01 or ec[1] > 0.01 or ec[2] > 0.01:
+                    color = (min(1, bc[0] + ec[0]*0.5), min(1, bc[1] + ec[1]*0.5), min(1, bc[2] + ec[2]*0.5), 1.0)
+
+                # Basic fixed-function material mapping: map roughness -> shininess, metallic -> specular tint
+                try:
+                    mat = getattr(obj, 'material', {}) or {}
+                    roughness = float(mat.get('roughness', 0.7))
+                    metallic = float(mat.get('metallic', 0.0))
+                    # Diffuse (base)
+                    diffuse = (fill[0], fill[1], fill[2], fill[3])
+                    # Specular color blends between a low dielectric spec and base color for metals
+                    spec_base = 0.04
+                    specular_color = (
+                        spec_base * (1.0 - metallic) + diffuse[0] * metallic,
+                        spec_base * (1.0 - metallic) + diffuse[1] * metallic,
+                        spec_base * (1.0 - metallic) + diffuse[2] * metallic,
+                    )
+                    # Stronger, more visible specular mapping
+                    spec_strength = max(0.02, (1.0 - roughness) * (0.4 + metallic * 0.8))
+                    shininess = max(1.0, (1.0 - roughness) ** 2 * 256.0)
+
+                    # Decide whether to override color-material with GL material (better for metals)
+                    material_override = (metallic > 0.05)
+                    if material_override:
+                        # Reduce diffuse contribution for metals so specular dominates
+                        diff_scale = max(0.05, 1.0 - 0.85 * metallic)
+                        diffuse_adj = (diffuse[0] * diff_scale, diffuse[1] * diff_scale, diffuse[2] * diff_scale, diffuse[3])
+                        try:
+                            was_color_mat = glIsEnabled(GL_COLOR_MATERIAL)
+                        except Exception:
+                            was_color_mat = False
+                        if was_color_mat:
+                            glDisable(GL_COLOR_MATERIAL)
+                        try:
+                            glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, diffuse_adj)
+                            glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, (specular_color[0] * spec_strength, specular_color[1] * spec_strength, specular_color[2] * spec_strength, 1.0))
+                            glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, shininess)
+                            glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, (ec[0], ec[1], ec[2], 1.0))
+                        except Exception:
+                            pass
+                except Exception:
+                    material_override = False
+                    was_color_mat = None
+            
+            if not obj.active: # In editor mode, darken inactive
+                color = (0.2, 0.2, 0.2, 0.4)
+                fill = (0.1, 0.1, 0.1, 0.2)
+            
+            if obj.selected: glLineWidth(3.0)
+            else: glLineWidth(1.0)
+            t = obj.obj_type
+            # If we applied a material override (for metals), draw while color-material is disabled
+            def _call_draw(func, *args, **kwargs):
+                try:
+                    func(*args, **kwargs)
+                finally:
+                    # Re-enable color material if we disabled it earlier
+                    try:
+                        if material_override and was_color_mat:
+                            glEnable(GL_COLOR_MATERIAL)
+                    except Exception:
+                        pass
+
+            if t == 'cube':
+                if material_override:
+                    _call_draw(_draw_wireframe_cube, 1,1,1, color, fill)
+                else:
+                    _draw_wireframe_cube(1,1,1, color, fill)
+            elif t == 'sphere':
+                if material_override:
+                    _call_draw(_draw_wireframe_sphere, 0.5, color=color, fill_color=fill)
+                else:
+                    _draw_wireframe_sphere(0.5, color=color, fill_color=fill)
+            elif t == 'cylinder':
+                if material_override:
+                    _call_draw(_draw_wireframe_cylinder, 0.5, 1.0, color=color, fill_color=fill)
+                else:
+                    _draw_wireframe_cylinder(0.5, 1.0, color=color, fill_color=fill)
+            elif t == 'plane':
+                if material_override:
+                    _call_draw(_draw_wireframe_plane, 2, 2, color, fill)
+                else:
+                    _draw_wireframe_plane(2, 2, color, fill)
+            elif t == 'cone':
+                if material_override:
+                    _call_draw(_draw_wireframe_cone, 0.5, 1.0, color=color, fill_color=fill)
+                else:
+                    _draw_wireframe_cone(0.5, 1.0, color=color, fill_color=fill)
+            elif t == 'mesh':
+                if material_override:
+                    _call_draw(_draw_wireframe_cube, 1,1,1, color, fill)
+                else:
+                    _draw_wireframe_cube(1,1,1, color, fill)
+            elif t == 'logic':
+                 # Draw a diamond for logic component
+                 glDisable(GL_LIGHTING)
+                 glPushMatrix()
+                 glScalef(0.4, 0.4, 0.4)
+                 glRotatef(45, 1, 0, 1)
+                 _draw_wireframe_cube(1, 1, 1, (0.3, 0.8, 1.0, 1.0), (0.1, 0.4, 0.6, 0.8))
+                 glPopMatrix()
+                 glEnable(GL_LIGHTING)
+            elif t == 'light_point':
+                 glDisable(GL_LIGHTING)
+                 # Glowing yellow sphere
+                 _draw_wireframe_sphere(0.2, 8, 8, (1.0, 1.0, 0.0, 1.0), (1.0, 0.9, 0.2, 0.8))
+                 glEnable(GL_LIGHTING)
+            elif t == 'light_directional':
+                 glDisable(GL_LIGHTING)
+                 # Sun icon: Central sphere + parallel rays
+                 _draw_wireframe_sphere(0.15, 8, 8, (1.0, 0.9, 0.2, 1.0), (1.0, 0.9, 0.1, 0.4))
+                 
+                 # Draw 3 parallel "sun rays"
+                 arr_color = (1.0, 1.0, 0.2, 1.0)
+                 glColor4f(*arr_color)
+                 glLineWidth(2.0)
+                 offsets = [(0.15, 0.15), (-0.15, 0.15), (0, -0.2)]
+                 for ox, oy in offsets:
+                     glBegin(GL_LINES)
+                     glVertex3f(ox, oy, 0); glVertex3f(ox, oy, -1.8)
+                     glEnd()
+                     # Small tips for rays
+                     glPushMatrix()
+                     glTranslatef(ox, oy, -1.8)
+                     glRotatef(-90, 1, 0, 0) # Rotate Y-up cone to point along -Z
+                     _draw_wireframe_cone(0.05, 0.2, 6, arr_color, arr_color)
+                     glPopMatrix()
+
+                 glEnable(GL_LIGHTING)
+
+            elif t == 'landscape':
+                 try:
+                     from .procedural_system import draw_landscape_3d, ensure_spawned
+                     draw_landscape_3d(obj, self)
+                     if getattr(obj, 'landscape_spawn_enabled', False):
+                         ensure_spawned(self, obj, cam_pos=getattr(self, '_cam3d', None).pos if hasattr(self, '_cam3d') else None)
+                 except Exception as e:
+                     print(f"[LANDSCAPE ERROR] {e}")
+
+            elif t == 'camera':
+                 glDisable(GL_LIGHTING)
+                 # Iconic "Film Camera" look
+                 # 1. Main body
+                 glPushMatrix()
+                 glScalef(0.4, 0.4, 0.3)
+                 _draw_wireframe_cube(1, 1, 1, (0.6, 0.8, 1.0, 1.0), (0.2, 0.4, 0.6, 0.3))
+                 glPopMatrix()
+                 
+                 # 2. Two top reels
+                 reel_color = (0.5, 0.7, 1.0, 1.0)
+                 for ox in [-0.15, 0.15]:
+                     glPushMatrix()
+                     glTranslatef(ox, 0.3, 0)
+                     glRotatef(90, 0, 0, 1) # Lay reels flat on top
+                     _draw_wireframe_cylinder(0.18, 0.05, 12, reel_color, (0.2, 0.3, 0.5, 0.5))
+                     glPopMatrix()
+                     
+                 # 3. Lens (pointing along -Z)
+                 glPushMatrix()
+                 glTranslatef(0, 0, -0.25)
+                 glRotatef(-90, 1, 0, 0) # Rotate to point -Z
+                 _draw_wireframe_cylinder(0.12, 0.25, 12, (0.4, 0.7, 1.0, 1.0), (0.1, 0.3, 0.5, 0.6))
+                 glPopMatrix()
+                 
+                 # Forward arrow
+                 # Proper 3D shaft
+                 glPushMatrix()
+                 glTranslatef(0, 0, -1.25)
+                 glRotatef(-90, 1, 0, 0)
+                 _draw_wireframe_cylinder(0.02, 1.5, 6, (0.2, 0.9, 1.0, 1.0), (0.2, 0.9, 1.0, 0.4))
+                 glPopMatrix()
+                 # Arrow Head
+                 glPushMatrix()
+                 glTranslatef(0, 0, -2.0)
+                 glRotatef(-90, 1, 0, 0) # Cone points -Z
+                 _draw_wireframe_cone(0.1, 0.25, color=(0.2, 0.9, 1.0, 1.0), fill_color=(0.1, 0.4, 0.6, 0.6))
+                 glPopMatrix()
+                 
+                 glEnable(GL_LIGHTING)
+
+            glPopMatrix()
+
         # ---- Draw scene objects ----
         def _draw_scene_objects_3d(self):
             is_play = getattr(self, 'is_play_mode', False)
+            
+            # Pass 1: Opaque Ground/Landscapes first to establish depth base
+            # This prevents translucent objects from failing occlusions if drawn first.
             for obj in self.scene_objects:
-                # Must be active to exist, and visible (or we are in editor)
-                if not obj.active: continue
-                if is_play and not obj.visible: continue
-                
-                glPushMatrix()
-                glTranslatef(*obj.position)
-                glRotatef(obj.rotation[1], 0, 1, 0) # Yaw (Global Up)
-                glRotatef(obj.rotation[0], 1, 0, 0) # Pitch
-                glRotatef(obj.rotation[2], 0, 0, 1) # Roll
-                glScalef(*obj.scale)
-                if obj.selected:
-                    color = tuple(SELECT_COLOR)
-                    fill = (color[0]*0.3, color[1]*0.3, color[2]*0.3, 0.4)
-                else:
-                    # Use material base_color for fill
-                    bc = obj.get_render_color()
-                    color = (bc[0]*0.8, bc[1]*0.8, bc[2]*0.8, 0.9)
-                    fill = (bc[0], bc[1], bc[2], 1.0) # Solid faces
-                    # Emissive glow — brighten the wireframe
-                    ec = obj.get_emissive_color()
-                    if ec[0] > 0.01 or ec[1] > 0.01 or ec[2] > 0.01:
-                        color = (min(1, bc[0] + ec[0]*0.5), min(1, bc[1] + ec[1]*0.5), min(1, bc[2] + ec[2]*0.5), 1.0)
-                
-                if not obj.active: # In editor mode, darken inactive
-                    color = (0.2, 0.2, 0.2, 0.4)
-                    fill = (0.1, 0.1, 0.1, 0.2)
-                
-                if obj.selected: glLineWidth(3.0)
-                else: glLineWidth(1.0)
-                t = obj.obj_type
-                if t == 'cube': _draw_wireframe_cube(1,1,1, color, fill)
-                elif t == 'sphere': _draw_wireframe_sphere(0.5, color=color, fill_color=fill)
-                elif t == 'cylinder': _draw_wireframe_cylinder(0.5, 1.0, color=color, fill_color=fill)
-                elif t == 'plane': _draw_wireframe_plane(2, 2, color, fill)
-                elif t == 'cone': _draw_wireframe_cone(0.5, 1.0, color=color, fill_color=fill)
-                elif t == 'mesh': _draw_wireframe_cube(1,1,1, color, fill)
-                elif t == 'logic':
-                     # Draw a diamond for logic component
-                     glDisable(GL_LIGHTING)
-                     glPushMatrix()
-                     glScalef(0.4, 0.4, 0.4)
-                     glRotatef(45, 1, 0, 1)
-                     _draw_wireframe_cube(1, 1, 1, (0.3, 0.8, 1.0, 1.0), (0.1, 0.4, 0.6, 0.8))
-                     glPopMatrix()
-                     glEnable(GL_LIGHTING)
-                elif t == 'light_point':
-                     glDisable(GL_LIGHTING)
-                     # Glowing yellow sphere
-                     _draw_wireframe_sphere(0.2, 8, 8, (1.0, 1.0, 0.0, 1.0), (1.0, 0.9, 0.2, 0.8))
-                     glEnable(GL_LIGHTING)
-                elif t == 'light_directional':
-                     glDisable(GL_LIGHTING)
-                     # Sun icon: Central sphere + parallel rays
-                     _draw_wireframe_sphere(0.15, 8, 8, (1.0, 0.9, 0.2, 1.0), (1.0, 0.9, 0.1, 0.4))
-                     
-                     # Draw 3 parallel "sun rays"
-                     arr_color = (1.0, 1.0, 0.2, 1.0)
-                     glColor4f(*arr_color)
-                     glLineWidth(2.0)
-                     offsets = [(0.15, 0.15), (-0.15, 0.15), (0, -0.2)]
-                     for ox, oy in offsets:
-                         glBegin(GL_LINES)
-                         glVertex3f(ox, oy, 0); glVertex3f(ox, oy, -1.8)
-                         glEnd()
-                         # Small tips for rays
-                         glPushMatrix()
-                         glTranslatef(ox, oy, -1.8)
-                         glRotatef(-90, 1, 0, 0) # Rotate Y-up cone to point along -Z
-                         _draw_wireframe_cone(0.05, 0.2, 6, arr_color, arr_color)
-                         glPopMatrix()
-
-                     glEnable(GL_LIGHTING)
-
-                elif t == 'camera':
-                     glDisable(GL_LIGHTING)
-                     # Iconic "Film Camera" look
-                     # 1. Main body
-                     glPushMatrix()
-                     glScalef(0.4, 0.4, 0.3)
-                     _draw_wireframe_cube(1, 1, 1, (0.6, 0.8, 1.0, 1.0), (0.2, 0.4, 0.6, 0.3))
-                     glPopMatrix()
-                     
-                     # 2. Two top reels
-                     reel_color = (0.5, 0.7, 1.0, 1.0)
-                     for ox in [-0.15, 0.15]:
-                         glPushMatrix()
-                         glTranslatef(ox, 0.3, 0)
-                         glRotatef(90, 0, 0, 1) # Lay reels flat on top
-                         _draw_wireframe_cylinder(0.18, 0.05, 12, reel_color, (0.2, 0.3, 0.5, 0.5))
-                         glPopMatrix()
-                         
-                     # 3. Lens (pointing along -Z)
-                     glPushMatrix()
-                     glTranslatef(0, 0, -0.25)
-                     glRotatef(-90, 1, 0, 0) # Rotate to point -Z
-                     _draw_wireframe_cylinder(0.12, 0.25, 12, (0.4, 0.7, 1.0, 1.0), (0.1, 0.3, 0.5, 0.6))
-                     glPopMatrix()
-                     
-                     # Forward arrow
-                     # Proper 3D shaft
-                     glPushMatrix()
-                     glTranslatef(0, 0, -1.25)
-                     glRotatef(-90, 1, 0, 0)
-                     _draw_wireframe_cylinder(0.02, 1.5, 6, (0.2, 0.9, 1.0, 1.0), (0.2, 0.9, 1.0, 0.4))
-                     glPopMatrix()
-                     # Arrow Head
-                     glPushMatrix()
-                     glTranslatef(0, 0, -2.0)
-                     glRotatef(-90, 1, 0, 0) # Cone points -Z
-                     _draw_wireframe_cone(0.1, 0.25, color=(0.2, 0.9, 1.0, 1.0), fill_color=(0.1, 0.4, 0.6, 0.6))
-                     glPopMatrix()
-                     
-                     glEnable(GL_LIGHTING)
-
-                
-                glPopMatrix()
+                if obj.obj_type == 'landscape':
+                    self._draw_single_object_3d(obj, is_play)
+            
+            # Pass 2: Everything else
+            for obj in self.scene_objects:
+                if obj.obj_type != 'landscape':
+                    self._draw_single_object_3d(obj, is_play)
 
         def _draw_scene_objects_2d(self):
             glDisable(GL_DEPTH_TEST)
@@ -1484,6 +1796,17 @@ if QOpenGLWidget and HAS_OPENGL:
             if not sel: return
             
             center = self._get_selection_center()
+            # Debug: in play mode, dump GL state and object info to help diagnose
+            if getattr(self, 'is_play_mode', False):
+                try:
+                    depth_test = glIsEnabled(GL_DEPTH_TEST)
+                    depth_write = glGetBooleanv(GL_DEPTH_WRITEMASK)
+                    blend = glIsEnabled(GL_BLEND)
+                    poly_off = glIsEnabled(GL_POLYGON_OFFSET_FILL)
+                    obj_report = sel[-1] if sel else None
+                    print(f"[DRAW DEBUG] sel_count={len(sel)} obj={getattr(obj_report,'name',None)} type={getattr(obj_report,'obj_type',None)} pos={getattr(obj_report,'position',None)} depth_test={depth_test} depth_write={depth_write} blend={blend} poly_offset={poly_off}")
+                except Exception as e:
+                    print(f"[DRAW DEBUG] gl state query failed: {e}")
             glPushMatrix()
             glTranslatef(*center)
             
@@ -1529,8 +1852,8 @@ if QOpenGLWidget and HAS_OPENGL:
             # Disable all lights first
             for i in range(8): glDisable(GL_LIGHT0 + i)
             
-            # Ambient intensity: Brighter in play mode for better visibility
-            amb = [0.6, 0.6, 0.6, 1.0] if getattr(self, "is_play_mode", False) else [0.4, 0.4, 0.4, 1.0]
+            # Atmospheric ambient: Muted blue for sky fill
+            amb = [0.2, 0.22, 0.28, 1.0] if not getattr(self, "is_play_mode", False) else [0.3, 0.35, 0.4, 1.0]
             glLightModelfv(GL_LIGHT_MODEL_AMBIENT, amb)
             
             lights = [o for o in self.scene_objects if o.active and "light" in o.obj_type]
@@ -1545,29 +1868,32 @@ if QOpenGLWidget and HAS_OPENGL:
                 glLightfv(light_id, GL_SPECULAR, diffuse)
                 
                 if light.obj_type == 'light_point':
-                    # W = 1.0 for point
                     glLightfv(light_id, GL_POSITION, (*light.position, 1.0))
-                    # Attenuation based on range
                     r = getattr(light, 'range', 10.0)
                     glLightf(light_id, GL_CONSTANT_ATTENUATION, 1.0)
                     glLightf(light_id, GL_LINEAR_ATTENUATION, 2.0 / r)
                     glLightf(light_id, GL_QUADRATIC_ATTENUATION, 1.0 / (r*r))
                 elif light.obj_type == 'light_directional':
-                    # Calculate forward direction
                     yr = math.radians(light.rotation[1] - 90.0)
                     pr = math.radians(-light.rotation[0])
                     dx = math.cos(yr) * math.cos(pr)
                     dy = math.sin(pr)
                     dz = math.sin(yr) * math.cos(pr)
-                    # Vector *towards* the light source is -forward
                     glLightfv(light_id, GL_POSITION, (-dx, -dy, -dz, 0.0))
             
             if not lights:
-                # Default editor light
+                # Default Dual-Light setup for better form definition
+                # 1. Main Sun
                 glEnable(GL_LIGHT0)
-                glLightfv(GL_LIGHT0, GL_POSITION, (5.0, 10.0, 5.0, 1.0))
-                glLightfv(GL_LIGHT0, GL_DIFFUSE, (1.0, 1.0, 1.0, 1.0))
-                glLightfv(GL_LIGHT0, GL_SPECULAR, (1.0, 1.0, 1.0, 1.0))
+                glLightfv(GL_LIGHT0, GL_POSITION, (1.0, 1.0, 0.5, 0.0)) # Directional
+                glLightfv(GL_LIGHT0, GL_DIFFUSE, (1.0, 0.95, 0.9, 1.0))
+                glLightfv(GL_LIGHT0, GL_SPECULAR, (0.5, 0.5, 0.5, 1.0))
+                
+                # 2. Soft Fill/Rim
+                glEnable(GL_LIGHT1)
+                glLightfv(GL_LIGHT1, GL_POSITION, (-1.0, 0.5, -0.5, 0.0)) # Opposing angle
+                glLightfv(GL_LIGHT1, GL_DIFFUSE, (0.15, 0.15, 0.25, 1.0))
+                glLightfv(GL_LIGHT1, GL_SPECULAR, (0.0, 0.0, 0.0, 1.0))
 
         # ---- Object picking ----
         def _pick_object_3d(self, mx, my) -> Optional[SceneObject]:
@@ -2513,7 +2839,160 @@ else:
 
 # ===================================================================
 # Material Slot Widget
+# ===================================================================# ===================================================================
+# Landscape Multi-Data Dialogs
 # ===================================================================
+
+class NoiseLayerDialog(QDialog):
+    def __init__(self, layer_data, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Noise Layer")
+        self.setStyleSheet(PROPS_SS)
+        self.data = layer_data
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        
+        self.type = QComboBox(); self.type.addItems(["perlin", "simplex", "worley"]); self.type.setCurrentText(self.data.get('type', 'perlin')); self.type.setStyleSheet(COMBO_SS)
+        self.amp = QDoubleSpinBox(); self.amp.setRange(0, 1000); self.amp.setValue(self.data.get('amp', 1.0)); self.amp.setStyleSheet(SPIN_SS)
+        self.freq = QDoubleSpinBox(); self.freq.setRange(0, 1000); self.freq.setValue(self.data.get('freq', 1.0)); self.freq.setStyleSheet(SPIN_SS)
+        self.octaves = QSpinBox(); self.octaves.setRange(1, 10); self.octaves.setValue(self.data.get('octaves', 1)); self.octaves.setStyleSheet(SPIN_SS)
+        self.persist = QDoubleSpinBox(); self.persist.setRange(0, 1); self.persist.setValue(self.data.get('persistence', 0.5)); self.persist.setSingleStep(0.1); self.persist.setStyleSheet(SPIN_SS)
+        self.lacun = QDoubleSpinBox(); self.lacun.setRange(1, 4); self.lacun.setValue(self.data.get('lacunarity', 2.0)); self.lacun.setSingleStep(0.1); self.lacun.setStyleSheet(SPIN_SS)
+        self.mode = QComboBox(); self.mode.addItems(["fbm", "ridged", "billow"]); self.mode.setCurrentText(self.data.get('mode', 'fbm')); self.mode.setStyleSheet(COMBO_SS)
+        self.exp = QDoubleSpinBox(); self.exp.setRange(0.1, 5.0); self.exp.setValue(self.data.get('exponent', 1.0)); self.exp.setSingleStep(0.1); self.exp.setStyleSheet(SPIN_SS)
+
+        form.addRow("Mode", self.mode)
+        form.addRow("Type", self.type)
+        form.addRow("Amplitude", self.amp)
+        form.addRow("Frequency", self.freq)
+        form.addRow("Octaves", self.octaves)
+        form.addRow("Persistence", self.persist)
+        form.addRow("Lacunarity", self.lacun)
+        form.addRow("Redistribution (Exp)", self.exp)
+        layout.addLayout(form)
+        
+        btns = QHBoxLayout()
+        ok = QPushButton("Apply"); ok.setStyleSheet(BTN_SS); ok.clicked.connect(self.accept)
+        cancel = QPushButton("Cancel"); cancel.setStyleSheet(BTN_SS); cancel.clicked.connect(self.reject)
+        btns.addWidget(ok); btns.addWidget(cancel)
+        layout.addLayout(btns)
+
+    def get_data(self):
+        return {
+            'type': self.type.currentText(),
+            'mode': self.mode.currentText(),
+            'amp': self.amp.value(),
+            'freq': self.freq.value(),
+            'octaves': self.octaves.value(),
+            'persistence': self.persist.value(),
+            'lacunarity': self.lacun.value(),
+            'exponent': self.exp.value(),
+            'offset': self.data.get('offset', [0.0, 0.0])
+        }
+
+class BiomeDialog(QDialog):
+    def __init__(self, biome_data, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Biome Structure")
+        self.setMinimumWidth(350); self.setStyleSheet(PROPS_SS)
+        self.data = biome_data
+        layout = QVBoxLayout(self)
+        
+        # --- Criteria ---
+        crit = QGroupBox("Climate Criteria (Height, Slope, Temp, Hum)")
+        cl = QFormLayout(crit)
+        self.h_min = QDoubleSpinBox(); self.h_min.setRange(-10000, 10000); self.h_min.setValue(self.data.get('height_range', [0,0])[0]); self.h_min.setStyleSheet(SPIN_SS)
+        self.h_max = QDoubleSpinBox(); self.h_max.setRange(-10000, 10000); self.h_max.setValue(self.data.get('height_range', [0,0])[1]); self.h_max.setStyleSheet(SPIN_SS)
+        self.s_min = QDoubleSpinBox(); self.s_min.setRange(0, 1); self.s_min.setValue(self.data.get('slope_range', [0,0])[0]); self.s_min.setStyleSheet(SPIN_SS)
+        self.s_max = QDoubleSpinBox(); self.s_max.setRange(0, 1); self.s_max.setValue(self.data.get('slope_range', [0,0])[1]); self.s_max.setStyleSheet(SPIN_SS)
+        self.t_min = QDoubleSpinBox(); self.t_min.setRange(0, 1); self.t_min.setValue(self.data.get('temp_range', [0,1])[0]); self.t_min.setStyleSheet(SPIN_SS)
+        self.t_max = QDoubleSpinBox(); self.t_max.setRange(0, 1); self.t_max.setValue(self.data.get('temp_range', [0,1])[1]); self.t_max.setStyleSheet(SPIN_SS)
+        self.hm_min = QDoubleSpinBox(); self.hm_min.setRange(0, 1); self.hm_min.setValue(self.data.get('hum_range', [0,1])[0]); self.hm_min.setStyleSheet(SPIN_SS)
+        self.hm_max = QDoubleSpinBox(); self.hm_max.setRange(0, 1); self.hm_max.setValue(self.data.get('hum_range', [0,1])[1]); self.hm_max.setStyleSheet(SPIN_SS)
+        
+        cl.addRow("Min Height", self.h_min); cl.addRow("Max Height", self.h_max)
+        cl.addRow("Min Slope", self.s_min); cl.addRow("Max Slope", self.s_max)
+        cl.addRow("Min Temp", self.t_min); cl.addRow("Max Temp", self.t_max)
+        cl.addRow("Min Hum", self.hm_min); cl.addRow("Max Hum", self.hm_max)
+        layout.addWidget(crit)
+        
+        # --- Surface Material ---
+        surf = QGroupBox("Surface Appearance")
+        sl = QFormLayout(surf)
+        s_data = self.data.get('surface', {})
+        self.color_btn = QPushButton()
+        c = s_data.get('color', [0.5, 0.5, 0.5, 1.0])
+        self.color_btn.setStyleSheet(f"background: rgb({int(c[0]*255)}, {int(c[1]*255)}, {int(c[2]*255)}); height: 20px; border-radius: 4px;")
+        self.color_btn.clicked.connect(self._pick_color)
+        self.curr_color = list(c)
+        
+        self.rough = QDoubleSpinBox(); self.rough.setRange(0, 1); self.rough.setValue(s_data.get('roughness', 0.7)); self.rough.setStyleSheet(SPIN_SS)
+        self.metal = QDoubleSpinBox(); self.metal.setRange(0, 1); self.metal.setValue(s_data.get('metallic', 0.0)); self.metal.setStyleSheet(SPIN_SS)
+        sl.addRow("Base Color", self.color_btn)
+        sl.addRow("Roughness", self.rough)
+        sl.addRow("Metallic", self.metal)
+        layout.addWidget(surf)
+        
+        # --- Spawns ---
+        spw = QGroupBox("Spawning Rules")
+        spl = QVBoxLayout(spw)
+        self.spawn_list = QListWidget()
+        self.spawn_list.setFixedHeight(80); self.spawn_list.setStyleSheet(LIST_SS)
+        for s in self.data.get('spawns', []):
+            self.spawn_list.addItem(f"{Path(s['assets'][0]).name} (D:{s['density']})")
+        spl.addWidget(self.spawn_list)
+        s_btns = QHBoxLayout()
+        add_s = QPushButton("Add Spawn"); add_s.setStyleSheet(BTN_SS); add_s.clicked.connect(self._add_spawn)
+        rem_s = QPushButton("Remove"); rem_s.setStyleSheet(BTN_SS); rem_s.clicked.connect(self._rem_spawn)
+        s_btns.addWidget(add_s); s_btns.addWidget(rem_s)
+        spl.addLayout(s_btns)
+        layout.addWidget(spw)
+        
+        btns = QHBoxLayout()
+        ok = QPushButton("Save Structure"); ok.setStyleSheet(BTN_SS); ok.clicked.connect(self.accept)
+        cancel = QPushButton("Cancel"); cancel.setStyleSheet(BTN_SS); cancel.clicked.connect(self.reject)
+        btns.addWidget(ok); btns.addWidget(cancel)
+        layout.addLayout(btns)
+
+    def _pick_color(self):
+        c = QColorDialog.getColor(QColor(int(self.curr_color[0]*255), int(self.curr_color[1]*255), int(self.curr_color[2]*255)))
+        if c.isValid():
+            self.curr_color = [c.red()/255.0, c.green()/255.0, c.blue()/255.0, 1.0]
+            self.color_btn.setStyleSheet(f"background: rgb({c.red()}, {c.green()}, {c.blue()}); height: 20px; border-radius: 4px;")
+
+    def _add_spawn(self):
+        asset, ok = QInputDialog.getText(self, "Add Spawn", "Asset Path:")
+        if ok and asset:
+            density, ok2 = QInputDialog.getDouble(self, "Add Spawn", "Density:", 0.1, 0, 1, 2)
+            if ok2:
+                self.spawn_list.addItem(f"{Path(asset).name} (D:{density})")
+                if 'spawns' not in self.data: self.data['spawns'] = []
+                self.data['spawns'].append({'assets': [asset], 'density': density})
+
+    def _rem_spawn(self):
+        it = self.spawn_list.currentItem()
+        if it:
+            idx = self.spawn_list.row(it)
+            self.spawn_list.takeItem(idx)
+            if 'spawns' in self.data: self.data['spawns'].pop(idx)
+
+    def get_data(self):
+        return {
+            'name': self.data.get('name', 'Biome'),
+            'height_range': [self.h_min.value(), self.h_max.value()],
+            'slope_range': [self.s_min.value(), self.s_max.value()],
+            'temp_range': [self.t_min.value(), self.t_max.value()],
+            'hum_range': [self.hm_min.value(), self.hm_max.value()],
+            'surface': {
+                'color': self.curr_color,
+                'roughness': self.rough.value(),
+                'metallic': self.metal.value(),
+                'emissive': [0,0,0,1]
+            },
+            'spawns': self.data.get('spawns', [])
+        }
+
+
 
 class MaterialSlotWidget(QWidget):
     material_dropped = pyqtSignal(str) # filepath
@@ -2638,6 +3117,8 @@ class ObjectPropertiesPanel(QWidget):
             sg.addWidget(spin, 0, i*2+1)
             self._scale_spins.append(spin)
         layout.addWidget(scale_group)
+        # Keep references to top-level content groups so we can hide them when nothing is selected
+        self._content_widgets = [pos_group, rot_group, scale_group]
 
         # ---- Material Section ----
         mat_group = QGroupBox("Material")
@@ -2732,6 +3213,144 @@ class ObjectPropertiesPanel(QWidget):
         mg.addWidget(self._mat_file_label)
 
         layout.addWidget(mat_group)
+        # include material group in content widgets
+        self._content_widgets.append(mat_group)
+
+        # Landscape panel
+        self.land_group = QGroupBox("Landscape")
+        self.land_group.setStyleSheet(PROPS_SS)
+        lg = QVBoxLayout(self.land_group)
+        lg.setContentsMargins(8,6,8,6); lg.setSpacing(6)
+
+        # Basic Settings
+        base_grid = QGridLayout()
+        base_grid.setSpacing(4)
+        base_grid.addWidget(QLabel("Type"), 0, 0)
+        self._land_type = QComboBox()
+        self._land_type.addItems(["Flat", "Procedural"])
+        self._land_type.setStyleSheet(COMBO_SS)
+        self._land_type.currentTextChanged.connect(self._on_land_type_changed)
+        base_grid.addWidget(self._land_type, 0, 1)
+
+        base_grid.addWidget(QLabel("Size Mode"), 1, 0)
+        self._land_size_mode = QComboBox()
+        self._land_size_mode.addItems(["Finite", "Infinite"])
+        self._land_size_mode.setStyleSheet(COMBO_SS)
+        self._land_size_mode.currentTextChanged.connect(self._on_land_size_mode_changed)
+        base_grid.addWidget(self._land_size_mode, 1, 1)
+
+        base_grid.addWidget(QLabel("Seed"), 2, 0)
+        self._land_seed = QSpinBox()
+        self._land_seed.setRange(0, 999999); self._land_seed.setStyleSheet(SPIN_SS)
+        self._land_seed.valueChanged.connect(self._on_land_seed_changed)
+        base_grid.addWidget(self._land_seed, 2, 1)
+
+        base_grid.addWidget(QLabel("Height Scale"), 3, 0)
+        self._land_height_scale = QDoubleSpinBox()
+        self._land_height_scale.setRange(0.1, 500.0); self._land_height_scale.setSingleStep(1.0); self._land_height_scale.setStyleSheet(SPIN_SS)
+        self._land_height_scale.valueChanged.connect(lambda v: self.update_obj_prop('landscape_height_scale', v))
+        base_grid.addWidget(self._land_height_scale, 3, 1)
+        lg.addLayout(base_grid)
+
+        # Climate Visualization Toggle
+        climate_row = QHBoxLayout()
+        self._visualize_climate_cb = QCheckBox("Visualize Climate Heatmap")
+        self._visualize_climate_cb.setStyleSheet("color: #4fc3f7; font-size: 11px; font-weight: bold;")
+        self._visualize_climate_cb.toggled.connect(self._on_visualize_climate_toggled)
+        climate_row.addWidget(self._visualize_climate_cb)
+        lg.addLayout(climate_row)
+
+        # Streaming & Chunking Settings
+        self.chunk_widget = QWidget()
+        chunk_h = QHBoxLayout(self.chunk_widget); chunk_h.setContentsMargins(0,0,0,0)
+        self._land_chunk_size = QComboBox()
+        self._land_chunk_size.addItems(["64", "128", "256"])
+        self._land_chunk_size.setStyleSheet(COMBO_SS)
+        self._land_chunk_size.currentTextChanged.connect(lambda v: self.update_obj_prop('landscape_chunk_size', int(v)))
+        
+        self._land_grid_radius = QSpinBox()
+        self._land_grid_radius.setRange(1, 15); self._land_grid_radius.setStyleSheet(SPIN_SS)
+        self._land_grid_radius.valueChanged.connect(lambda v: self.update_obj_prop('landscape_grid_radius', v))
+        
+        chunk_h.addWidget(QLabel("Chunk size")); chunk_h.addWidget(self._land_chunk_size)
+        chunk_h.addWidget(QLabel("Radius")); chunk_h.addWidget(self._land_grid_radius)
+        lg.addWidget(self.chunk_widget)
+        # Resolution (Detail Level)
+        res_row = QHBoxLayout()
+        res_row.addWidget(QLabel("Detail Level"))
+        self._land_res = QComboBox()
+        self._land_res.addItems(["Low (16)", "Medium (32)", "High (64)", "Very High (128)"])
+        self._land_res.setCurrentText("Medium (32)")
+        self._land_res.setStyleSheet(COMBO_SS)
+        self._land_res.currentTextChanged.connect(self._on_res_changed)
+        res_row.addWidget(self._land_res)
+        lg.addLayout(res_row)
+        
+        # Ocean Settings
+        ocean_row = QHBoxLayout()
+        ocean_row.addWidget(QLabel("Ocean Level"))
+        self._land_ocean_level = QDoubleSpinBox()
+        self._land_ocean_level.setRange(-1.0, 1.0); self._land_ocean_level.setSingleStep(0.01)
+        self._land_ocean_level.setStyleSheet(SPIN_SS)
+        self._land_ocean_level.valueChanged.connect(lambda v: self.update_obj_prop('landscape_ocean_level', v))
+        ocean_row.addWidget(self._land_ocean_level)
+        
+        ocean_row.addWidget(QLabel("Flatten"))
+        self._land_ocean_flat = QDoubleSpinBox()
+        self._land_ocean_flat.setRange(0.0, 1.0); self._land_ocean_flat.setSingleStep(0.05)
+        self._land_ocean_flat.setStyleSheet(SPIN_SS)
+        self._land_ocean_flat.valueChanged.connect(lambda v: self.update_obj_prop('landscape_ocean_flattening', v))
+        ocean_row.addWidget(self._land_ocean_flat)
+        lg.addLayout(ocean_row)
+
+        # Noise Layers
+        lg.addWidget(QLabel("Noise Layers"))
+        self._noise_layers_list = QListWidget()
+        self._noise_layers_list.setFixedHeight(60)
+        self._noise_layers_list.setStyleSheet(LIST_SS)
+        lg.addWidget(self._noise_layers_list)
+        nl_btns = QHBoxLayout()
+        add_nl = QPushButton("Add Layer"); add_nl.setStyleSheet(BTN_SS); add_nl.clicked.connect(self._on_noise_layer_add)
+        rem_nl = QPushButton("Remove"); rem_nl.setStyleSheet(BTN_SS); rem_nl.clicked.connect(self._on_noise_layer_remove)
+        edit_nl = QPushButton("Edit Data"); edit_nl.setStyleSheet(BTN_SS); edit_nl.clicked.connect(self._on_noise_layer_edit)
+        nl_btns.addWidget(add_nl); nl_btns.addWidget(rem_nl); nl_btns.addWidget(edit_nl)
+        lg.addLayout(nl_btns)
+
+        # Biomes
+        lg.addWidget(QLabel("Biomes & Biome Spawns"))
+        self._biomes_list = QListWidget()
+        self._biomes_list.setFixedHeight(60)
+        self._biomes_list.setStyleSheet(LIST_SS)
+        lg.addWidget(self._biomes_list)
+        bm_btns = QHBoxLayout()
+        add_bm = QPushButton("Add Biome"); add_bm.setStyleSheet(BTN_SS); add_bm.clicked.connect(self._on_biome_add)
+        rem_bm = QPushButton("Remove"); rem_bm.setStyleSheet(BTN_SS); rem_bm.clicked.connect(self._on_biome_remove)
+        edit_bm = QPushButton("Edit Structure"); edit_bm.setStyleSheet(BTN_SS); edit_bm.clicked.connect(self._on_biome_edit)
+        bm_btns.addWidget(add_bm); bm_btns.addWidget(rem_bm); bm_btns.addWidget(edit_bm)
+        lg.addLayout(bm_btns)
+
+        # Spawning Control
+        self._spawn_enabled = QCheckBox("Enable Spawning")
+        self._spawn_enabled.setStyleSheet("color: #ccc; font-size: 11px;")
+        self._spawn_enabled.toggled.connect(self._on_spawn_enabled_changed)
+        lg.addWidget(self._spawn_enabled)
+
+        self.spawn_grid_widget = QWidget()
+        sg = QHBoxLayout(self.spawn_grid_widget); sg.setContentsMargins(0,0,0,0)
+        self._spawn_rows = QSpinBox(); self._spawn_rows.setRange(1,500); self._spawn_rows.valueChanged.connect(self._on_spawn_counts_changed)
+        self._spawn_cols = QSpinBox(); self._spawn_cols.setRange(1,500); self._spawn_cols.valueChanged.connect(self._on_spawn_counts_changed)
+        self._spawn_spacing_x = QDoubleSpinBox(); self._spawn_spacing_x.setRange(0.01, 1000); self._spawn_spacing_x.valueChanged.connect(self._on_spawn_spacing_changed)
+        self._spawn_spacing_z = QDoubleSpinBox(); self._spawn_spacing_z.setRange(0.01, 1000); self._spawn_spacing_z.valueChanged.connect(self._on_spawn_spacing_changed)
+        sg.addWidget(QLabel("R")); sg.addWidget(self._spawn_rows)
+        sg.addWidget(QLabel("C")); sg.addWidget(self._spawn_cols)
+        sg.addWidget(self._spawn_spacing_x); sg.addWidget(QLabel("x")); sg.addWidget(self._spawn_spacing_z)
+        lg.addWidget(self.spawn_grid_widget)
+
+        layout.addWidget(self.land_group)
+        self._content_widgets.append(self.land_group)
+        
+        # Ensure minimum width to prevent jumping
+        self.setMinimumWidth(260)
 
         # ---- Component Section (Lights/Camera/Logic) ----
         self.comp_group = QGroupBox("Component Properties")
@@ -2765,28 +3384,146 @@ class ObjectPropertiesPanel(QWidget):
         cg.addRow("FOV", self.fov_spin)
         
         layout.addWidget(self.comp_group)
+        self._content_widgets.append(self.comp_group)
         layout.addStretch()
+        # Start with an empty/hidden properties panel until an object is selected
+        try:
+            self.set_object(None)
+        except Exception:
+            pass
+
+    def _on_res_changed(self, text):
+        if self._updating or not self._current_object: return
+        val = 32
+        if "Low" in text: val = 16
+        elif "Medium" in text: val = 32
+        elif "High" in text: val = 64
+        elif "Very High" in text: val = 128
+        self.update_obj_prop('landscape_resolution', val)
+
+    def _on_land_seed_changed(self, val):
+        if self._updating or not self._current_object: return
+        self._current_object.landscape_seed = val
+        self.property_changed.emit()
+
+    def _on_visualize_climate_toggled(self, val):
+        if self._updating or not self._current_object: return
+        self._current_object.visualize_climate = val
+        self.property_changed.emit()
+
+    def update_obj_prop(self, prop, val):
+        if self._updating or not self._current_object: return
+        setattr(self._current_object, prop, val)
+        self.property_changed.emit()
+
+    def _on_noise_layer_add(self):
+        if not self._current_object: return
+        # Default layer
+        lyr = {'amp': 0.5, 'freq': 1.0, 'offset': [0.0, 0.0], 'octaves': 1, 'mode': 'fbm', 'exponent': 1.0, 'type': 'perlin'}
+        self._current_object.landscape_noise_layers.append(lyr)
+        self._sync_from_object()
+        self.property_changed.emit()
+
+    def _on_noise_layer_remove(self):
+        idx = self._noise_layers_list.currentRow()
+        if idx < 0 or not self._current_object: return
+        if len(self._current_object.landscape_noise_layers) <= 1: return # Keep at least one
+        self._current_object.landscape_noise_layers.pop(idx)
+        self._sync_from_object()
+        self.property_changed.emit()
+
+    def _on_noise_layer_edit(self):
+        idx = self._noise_layers_list.currentRow()
+        if idx < 0 or not self._current_object: return
+        lyr = self._current_object.landscape_noise_layers[idx]
+        dlg = NoiseLayerDialog(lyr, self)
+        if dlg.exec():
+            self._sync_from_object()
+            self.property_changed.emit()
+
+    def _on_biome_add(self):
+        if not self._current_object: return
+        # Default biome template
+        b = {
+            'name': 'New Biome',
+            'height_range': [0.0, 1.0], 'slope_range': [0.0, 1.0],
+            'temp_range': [0.0, 1.0], 'hum_range': [0.0, 1.0],
+            'surface': {'color': [0.5, 0.5, 0.5, 1.0], 'roughness': 0.7, 'metallic': 0.0},
+            'spawns': []
+        }
+        self._current_object.landscape_biomes.append(b)
+        self._sync_from_object()
+        self.property_changed.emit()
+
+    def _on_biome_remove(self):
+        idx = self._biomes_list.currentRow()
+        if idx < 0 or not self._current_object: return
+        if len(self._current_object.landscape_biomes) <= 1: return
+        self._current_object.landscape_biomes.pop(idx)
+        self._sync_from_object()
+        self.property_changed.emit()
+
+    def _on_biome_edit(self):
+        idx = self._biomes_list.currentRow()
+        if idx < 0 or not self._current_object: return
+        biome = self._current_object.landscape_biomes[idx]
+        dlg = BiomeDialog(biome, self)
+        if dlg.exec():
+            # Update the reference
+            self._current_object.landscape_biomes[idx] = dlg.get_data()
+            self._sync_from_object()
+            self.property_changed.emit()
 
     def set_object(self, obj: Optional[SceneObject]):
         """Set the selected object to display in the panel."""
         self._current_object = obj
         if obj:
+            # Ensure the content area is visible when an object is selected
+            try:
+                for w in getattr(self, '_content_widgets', []):
+                    w.setVisible(True)
+            except Exception:
+                pass
             self._title.setText(f"  {obj.name}  ({obj.obj_type})")
             self._title.setStyleSheet("color: #4fc3f7; font-size: 11px; font-weight: bold;")
             
             # Visibility of component properties
             is_light = "light" in obj.obj_type
             is_cam = obj.obj_type == "camera"
+            is_land = obj.obj_type == 'landscape'
             self.comp_group.setVisible(is_light or is_cam or obj.obj_type == "logic")
             self.intensity_spin.setVisible(is_light)
             self.range_spin.setVisible(is_light)
             self.fov_spin.setVisible(is_cam)
+            # Landscape panel visibility
+            if is_land:
+                self._land_type.setCurrentText(obj.landscape_type.capitalize())
+                self._land_size_mode.setCurrentText(obj.landscape_size_mode.capitalize())
+                self._land_seed.setValue(obj.landscape_seed)
+                self._land_height_scale.setValue(float(getattr(obj, 'landscape_height_scale', 30.0)))
+                self._visualize_climate_cb.setChecked(getattr(obj, 'visualize_climate', False))
+                self.land_group.setVisible(True)
+            else:
+                self.land_group.setVisible(False)
             
             self._sync_from_object()
         else:
             self._title.setText("  No Selection")
             self._title.setStyleSheet("color: #888; font-size: 11px; font-weight: bold;")
             self.comp_group.setVisible(False)
+            # Hide landscape and reset material UI when nothing is selected
+            try:
+                for w in getattr(self, '_content_widgets', []):
+                    w.setVisible(False)
+            except Exception:
+                pass
+            try:
+                if hasattr(self, '_mat_slot'):
+                    self._mat_slot.set_material(None)
+                if hasattr(self, '_base_color_btn'):
+                    self._base_color_btn.setStyleSheet("background: #ccc; border: 1px solid #555; border-radius: 3px;")
+            except Exception:
+                pass
             self._clear_spins()
 
     def _sync_from_object(self):
@@ -2798,6 +3535,7 @@ class ObjectPropertiesPanel(QWidget):
             self._pos_spins[i].setValue(obj.position[i])
             self._rot_spins[i].setValue(obj.rotation[i])
             self._scale_spins[i].setValue(obj.scale[i])
+        
         # Sync material UI
         mat = obj.material
         preset = mat.get('preset', 'Custom')
@@ -2825,16 +3563,76 @@ class ObjectPropertiesPanel(QWidget):
         self.intensity_spin.setValue(obj.intensity)
         self.range_spin.setValue(obj.range)
         self.fov_spin.setValue(obj.fov)
+
+        # Sync landscape values when applicable
+        if obj.obj_type == 'landscape':
+            try:
+                lmode = getattr(obj, 'landscape_size_mode', 'finite')
+                lt_str = 'Procedural' if getattr(obj, 'landscape_type', 'flat') == 'procedural' else 'Flat'
+                
+                # Prevent signals while updating
+                for w in (self._land_type, self._land_size_mode, self._land_chunk_size, self._land_grid_radius,
+                          self._spawn_enabled, self._spawn_rows, self._spawn_cols, self._spawn_spacing_x, self._spawn_spacing_z,
+                          self._land_seed, self._land_res, self._land_ocean_level, self._land_ocean_flat, self._land_height_scale):
+                    try: w.blockSignals(True)
+                    except Exception: pass
+
+                self._land_type.setCurrentText(lt_str)
+                self._land_size_mode.setCurrentText(lmode.capitalize())
+
+                # Sync Streaming, Chunking & Res
+                if hasattr(self, 'chunk_widget'): self.chunk_widget.setVisible(True)
+                
+                self._land_chunk_size.setCurrentText(str(int(getattr(obj, 'landscape_chunk_size', 128))))
+                self._land_grid_radius.setValue(int(getattr(obj, 'landscape_grid_radius', 1)))
+                self._land_grid_radius.setEnabled(lmode == 'infinite')
+                
+                res_val = int(getattr(obj, 'landscape_resolution', 32))
+                res_map = {16: "Low (16)", 32: "Medium (32)", 64: "High (64)", 128: "Very High (128)"}
+                self._land_res.setCurrentText(res_map.get(res_val, "Medium (32)"))
+                
+                self._land_height_scale.setValue(float(getattr(obj, 'landscape_height_scale', 30.0)))
+                self._land_ocean_level.setValue(float(getattr(obj, 'landscape_ocean_level', 0.08)))
+                self._land_ocean_flat.setValue(float(getattr(obj, 'landscape_ocean_flattening', 0.3)))
+                
+                self._spawn_enabled.setChecked(getattr(obj, 'landscape_spawn_enabled', False))
+                self._land_seed.setValue(int(getattr(obj, 'landscape_seed', 123)))
+
+                # Sync Noise Layers List
+                self._noise_layers_list.clear()
+                for i, lyr in enumerate(getattr(obj, 'landscape_noise_layers', [])):
+                    self._noise_layers_list.addItem(f"L{i}: Amp={lyr.get('amp')} Freq={lyr.get('freq')} Oct={lyr.get('octaves')}")
+                
+                # Sync Biomes List
+                self._biomes_list.clear()
+                for b in getattr(obj, 'landscape_biomes', []):
+                    hr = b.get('height_range', [-1000, 1000]); sr = b.get('slope_range', [0,1])
+                    self._biomes_list.addItem(f"{b.get('name')}: H[{hr[0]:.0f},{hr[1]:.0f}] S[{sr[0]:.1f},{sr[1]:.1f}]")
+
+                self._spawn_rows.setValue(int(getattr(obj, 'landscape_spawn_rows', 1)))
+                self._spawn_cols.setValue(int(getattr(obj, 'landscape_spawn_cols', 1)))
+                sp = getattr(obj, 'landscape_spawn_spacing', [10.0, 10.0])
+                self._spawn_spacing_x.setValue(sp[0]); self._spawn_spacing_z.setValue(sp[1])
+            except Exception as e:
+                print(f"Sync error: {e}")
+            finally:
+                for w in (self._land_type, self._land_size_mode, self._land_chunk_size, self._land_grid_radius,
+                          self._spawn_enabled, self._spawn_rows, self._spawn_cols, self._spawn_spacing_x, self._spawn_spacing_z,
+                          self._land_seed, self._land_res):
+                    try: w.blockSignals(False)
+                    except Exception: pass
         
         self._updating = False
 
     def _on_active_changed(self, val):
         if self._updating or not self._current_object: return
-        self._current_object.active = val; self.property_changed.emit()
+        self._current_object.active = val
+        self.property_changed.emit()
 
     def _on_visible_changed(self, val):
         if self._updating or not self._current_object: return
-        self._current_object.visible = val; self.property_changed.emit()
+        self._current_object.visible = val
+        self.property_changed.emit()
 
     def _on_intensity_changed(self, val):
         if self._updating or not self._current_object: return
@@ -2856,6 +3654,30 @@ class ObjectPropertiesPanel(QWidget):
         self._updating = True
         for s in self._pos_spins + self._rot_spins + self._scale_spins:
             s.setValue(0)
+        # Also clear material UI to default/empty state
+        try:
+            if hasattr(self, '_mat_preset'):
+                try:
+                    self._mat_preset.blockSignals(True)
+                    self._mat_preset.setCurrentText('Custom')
+                finally:
+                    self._mat_preset.blockSignals(False)
+            if hasattr(self, '_mat_slot'):
+                self._mat_slot.set_material(None)
+            if hasattr(self, '_base_color_btn'):
+                self._base_color_btn.setStyleSheet("background: #ccc; border: 1px solid #555; border-radius: 3px;")
+            if hasattr(self, '_roughness_slider'):
+                self._roughness_slider.setValue(70); self._roughness_val.setText("0.70")
+            if hasattr(self, '_metallic_slider'):
+                self._metallic_slider.setValue(0); self._metallic_val.setText("0.00")
+            if hasattr(self, '_emissive_btn'):
+                self._emissive_btn.setStyleSheet("background: #000; border: 1px solid #555; border-radius: 3px;")
+            if hasattr(self, '_mat_file_label'):
+                self._mat_file_label.setText("")
+            if hasattr(self, 'land_group'):
+                self.land_group.setVisible(False)
+        except Exception:
+            pass
         self._updating = False
 
     def _on_pos_changed(self):
@@ -2945,6 +3767,133 @@ class ObjectPropertiesPanel(QWidget):
             self._current_object.material['preset'] = 'Custom'
             self._sync_from_object()
             self.property_changed.emit()
+
+    # ---- Landscape handlers ----
+    def _on_land_type_changed(self, text):
+        if self._updating or not self._current_object: return
+        self._current_object.landscape_type = 'procedural' if text.lower().startswith('p') else 'flat'
+        self.property_changed.emit()
+
+    def _on_land_size_mode_changed(self, text):
+        if self._updating or not self._current_object: return
+        mode = 'infinite' if text.lower().startswith('i') else 'finite'
+        self._current_object.landscape_size_mode = mode
+        # Toggle widgets
+        if hasattr(self, 'size_widget'): self.size_widget.setVisible(mode == 'finite')
+        if hasattr(self, 'spawn_grid_widget'): self.spawn_grid_widget.setVisible(mode == 'finite')
+        self.property_changed.emit()
+
+    def _on_land_size_changed(self, _val=None):
+        if self._updating or not self._current_object: return
+        self._current_object.landscape_size = [self._land_width.value(), self._land_depth.value()]
+        self.property_changed.emit()
+
+    def _on_spawn_enabled_changed(self, val):
+        if self._updating or not self._current_object: return
+        self._current_object.landscape_spawn_enabled = bool(val)
+        self.property_changed.emit()
+        # Manage spawn lifecycle on the active viewport if available
+        parent = self.parent()
+        while parent and not hasattr(parent, 'viewport'):
+            parent = parent.parent()
+        vp = getattr(parent, 'viewport', None)
+        if vp:
+            try:
+                from .procedural_system import ensure_spawned, clear_spawns
+                if val: ensure_spawned(vp, self._current_object)
+                else: clear_spawns(vp, self._current_object)
+            except Exception as e:
+                print(f"[LANDSCAPE SPAWN] {e}")
+
+    def _on_spawn_add(self):
+        if not self._current_object: return
+        root = getattr(self, '_workspace_root', '')
+        files, _ = QFileDialog.getOpenFileNames(self, "Add Spawn Assets", root or "", "Assets (*.*)")
+        if not files: return
+        lst = getattr(self._current_object, 'landscape_spawn_list', []) or []
+        for f in files:
+            lst.append(f)
+            it = QListWidgetItem(Path(f).name)
+            it.setData(Qt.ItemDataRole.UserRole, f)
+            self._spawn_list.addItem(it)
+        self._current_object.landscape_spawn_list = lst
+        self.property_changed.emit()
+        # If enabled, spawn newly added assets
+        if getattr(self._current_object, 'landscape_spawn_enabled', False):
+            parent = self.parent()
+            while parent and not hasattr(parent, 'viewport'):
+                parent = parent.parent()
+            vp = getattr(parent, 'viewport', None)
+            if vp:
+                try:
+                    from .procedural_system import ensure_spawned
+                    ensure_spawned(vp, self._current_object)
+                except Exception as e:
+                    print(f"[LANDSCAPE SPAWN] {e}")
+
+    def _on_spawn_remove(self):
+        if not self._current_object: return
+        sel = self._spawn_list.selectedItems()
+        if not sel: return
+        for it in sel:
+            p = it.data(Qt.ItemDataRole.UserRole)
+            try:
+                self._current_object.landscape_spawn_list.remove(p)
+            except Exception:
+                pass
+            self._spawn_list.takeItem(self._spawn_list.row(it))
+        self.property_changed.emit()
+        # Refresh spawned instances
+        parent = self.parent()
+        while parent and not hasattr(parent, 'viewport'):
+            parent = parent.parent()
+        vp = getattr(parent, 'viewport', None)
+        if vp:
+            try:
+                from .procedural_system import clear_spawns, ensure_spawned
+                clear_spawns(vp, self._current_object)
+                if getattr(self._current_object, 'landscape_spawn_enabled', False):
+                    ensure_spawned(vp, self._current_object)
+            except Exception as e:
+                print(f"[LANDSCAPE SPAWN] {e}")
+
+    def _on_spawn_counts_changed(self, _val=None):
+        if self._updating or not self._current_object: return
+        self._current_object.landscape_spawn_rows = int(self._spawn_rows.value())
+        self._current_object.landscape_spawn_cols = int(self._spawn_cols.value())
+        self.property_changed.emit()
+        # respawn if needed
+        parent = self.parent()
+        while parent and not hasattr(parent, 'viewport'):
+            parent = parent.parent()
+        vp = getattr(parent, 'viewport', None)
+        if vp and getattr(self._current_object, 'landscape_spawn_enabled', False):
+            try:
+                from .procedural_system import clear_spawns, ensure_spawned
+                clear_spawns(vp, self._current_object); ensure_spawned(vp, self._current_object)
+            except Exception as e:
+                print(f"[LANDSCAPE SPAWN] {e}")
+
+    def _on_spawn_spacing_changed(self, _val=None):
+        if self._updating or not self._current_object: return
+        self._current_object.landscape_spawn_spacing = [self._spawn_spacing_x.value(), self._spawn_spacing_z.value()]
+        self.property_changed.emit()
+        parent = self.parent()
+        while parent and not hasattr(parent, 'viewport'):
+            parent = parent.parent()
+        vp = getattr(parent, 'viewport', None)
+        if vp and getattr(self._current_object, 'landscape_spawn_enabled', False):
+            try:
+                from .procedural_system import clear_spawns, ensure_spawned
+                clear_spawns(vp, self._current_object); ensure_spawned(vp, self._current_object)
+            except Exception as e:
+                print(f"[LANDSCAPE SPAWN] {e}")
+
+    def _on_proc_params_changed(self, _val=None):
+        if self._updating or not self._current_object: return
+        self._current_object.landscape_procedural_amp = float(self._proc_amp.value())
+        self._current_object.landscape_procedural_freq = float(self._proc_freq.value())
+        self.property_changed.emit()
 
 class OutlinerTreeWidget(QTreeWidget):
     """Custom tree widget for the scene outliner with drag-and-drop parenting."""
@@ -3290,7 +4239,7 @@ class SceneExplorerPanel(QWidget):
         
         if self._mode == "3D":
              categories = {
-                 "Basic Shapes": [("Cube","cube"),("Sphere","sphere"),("Cylinder","cylinder"),("Plane","plane"),("Cone","cone")],
+                 "Basic Shapes": [("Cube","cube"),("Sphere","sphere"),("Cylinder","cylinder"),("Plane","plane"),("Landscape","landscape"),("Cone","cone")],
                  "Lighting": [("Point Light","light_point"),("Directional Light","light_directional")],
                  "Camera": [("Camera","camera")]
              }
@@ -3996,6 +4945,8 @@ class SceneEditorWidget(QWidget):
         # Use injected global panels or fallback (fallback only for safety)
         self.explorer = explorer
         self.properties = properties
+        if self.explorer:
+            self.explorer.properties = properties
         self.properties_stack = QStackedWidget()
         if self.properties:
             self.properties_stack.addWidget(self.properties)
@@ -4105,7 +5056,8 @@ class SceneEditorWidget(QWidget):
 
     def _save_state(self):
         if self._is_undoing: return
-        state = [obj.to_dict() for obj in self.viewport.scene_objects]
+        # Filter out procedurally spawned objects so they don't bloat undo history
+        state = [obj.to_dict() for obj in self.viewport.scene_objects if not getattr(obj, 'is_procedural', False)]
         self.undo_stack.append(state)
         if len(self.undo_stack) > self.max_undo_steps:
             self.undo_stack.pop(0)
@@ -4117,8 +5069,8 @@ class SceneEditorWidget(QWidget):
         if not self.undo_stack: return
         self._is_undoing = True
         
-        # Save where we are now to redo stack
-        current_state = [obj.to_dict() for obj in self.viewport.scene_objects]
+        # Save where we are now to redo stack (filtering out procedural objects)
+        current_state = [obj.to_dict() for obj in self.viewport.scene_objects if not getattr(obj, 'is_procedural', False)]
         
         # Pop the most recent state
         last_state = self.undo_stack.pop()
@@ -4142,7 +5094,7 @@ class SceneEditorWidget(QWidget):
     def redo(self):
         if not self.redo_stack: return
         self._is_undoing = True
-        current_state = [obj.to_dict() for obj in self.viewport.scene_objects]
+        current_state = [obj.to_dict() for obj in self.viewport.scene_objects if not getattr(obj, 'is_procedural', False)]
         self.undo_stack.append(current_state)
         next_state = self.redo_stack.pop()
         self.viewport.scene_objects = [SceneObject.from_dict(d) for d in next_state]
@@ -4228,7 +5180,9 @@ class SceneEditorWidget(QWidget):
 
     def _on_play_clicked(self):
         """Open a live simulation window."""
-        self.sim = SimulationWindow(self.viewport.scene_objects)
+        # Pass `self` so SimulationWindow can fall back to the editor camera
+        # if the scene contains no camera object.
+        self.sim = SimulationWindow(self.viewport.scene_objects, parent=self)
         self.sim.show()
 
 
@@ -4354,7 +5308,10 @@ class SceneEditorWidget(QWidget):
         self.viewport.stop_render_loop()
 
     def get_scene_data(self) -> dict:
-        return {'mode': self._current_mode, 'objects': [o.to_dict() for o in self.viewport.scene_objects]}
+        return {
+            'mode': self._current_mode,
+            'objects': [o.to_dict() for o in self.viewport.scene_objects if not getattr(o, 'is_procedural', False)]
+        }
 
     def load_scene_data(self, data: dict):
         self._current_mode = data.get('mode', '3D')
@@ -4410,22 +5367,43 @@ class SimulationWindow(QMainWindow):
         
         # Deep copy objects for simulation
         self.viewport.scene_objects = [SceneObject.from_dict(o.to_dict()) for o in scene_objects]
-        
-        # Take position of the first camera in the scene if it exists
+
+        # Prefer an explicit camera object from the scene. If none exists,
+        # fall back to the editor camera (if a parent editor was provided).
         cam_obj = next((o for o in self.viewport.scene_objects if o.obj_type == 'camera'), None)
         if cam_obj:
-            # Sync editor camera to this object's position/rotation
+            # Use the scene camera position/rotation
             self.viewport._cam3d.pos = [float(x) for x in cam_obj.position]
-            # Map Euler to Camera3D yaw/pitch (Editor Camera Y=0 is -90 Yaw)
-            self.viewport._cam3d.yaw = float(cam_obj.rotation[1]) - 90.0
-            self.viewport._cam3d.pitch = -float(cam_obj.rotation[0])
-            # Use FOV if available
+            # Map Euler to Camera3D yaw/pitch — adjust for scene coordinate conventions
+            # Rotation stored as [pitch, yaw, roll] in scene objects.
+            # Use +90 to align the scene camera forward vector with the in-scene yaw axis.
+            self.viewport._cam3d.yaw = float(cam_obj.rotation[1]) + 90.0
+            # Flip pitch sign to match scene rotation convention (down/up)
+            self.viewport._cam3d.pitch = float(cam_obj.rotation[0])
             self.viewport._cam3d.fov = float(getattr(cam_obj, 'fov', 60.0))
             self.viewport._active_cam_name = cam_obj.name
             print(f"[RE-DEBUG] Possessing camera '{cam_obj.name}' at {self.viewport._cam3d.pos}")
+            try:
+                print(f"[RE-DEBUG] cam.front={self.viewport._cam3d.front} cam.up={self.viewport._cam3d.up}")
+            except Exception as _e:
+                print(f"[RE-DEBUG] failed to compute cam vectors: {_e}")
+        elif parent and hasattr(parent, 'viewport') and hasattr(parent.viewport, '_cam3d'):
+            # No scene camera — copy the editor camera so the simulation view matches
+            src = parent.viewport._cam3d
+            self.viewport._cam3d.pos = list(src.pos)
+            self.viewport._cam3d.yaw = float(src.yaw)
+            self.viewport._cam3d.pitch = float(src.pitch)
+            self.viewport._cam3d.fov = float(getattr(src, 'fov', 60.0))
+            self.viewport._active_cam_name = getattr(parent.viewport, '_active_cam_name', 'Editor Camera')
+            print(f"[RE-DEBUG] No scene camera found — using editor camera at {self.viewport._cam3d.pos}")
+            try:
+                print(f"[RE-DEBUG] cam.front={self.viewport._cam3d.front} cam.up={self.viewport._cam3d.up}")
+            except Exception as _e:
+                print(f"[RE-DEBUG] failed to compute cam vectors: {_e}")
         else:
+            # No scene camera and no editor parent camera — use defaults from Camera3D
             self.viewport._active_cam_name = "Default Editor"
-            print("[RE-DEBUG] No camera found in scene, using editor default.")
+            print("[RE-DEBUG] No camera found in scene or editor; using default camera.")
         
         # In Play mode, we hide non-visible objects
         for o in self.viewport.scene_objects: 
@@ -4452,3 +5430,191 @@ class SimulationWindow(QMainWindow):
         self.viewport.stop_render_loop()
         print("--- Simulation Ended ---")
         event.accept()
+
+# ===================================================================
+# Specialized Data Structure Dialogs
+# ===================================================================
+
+class NoiseLayerDialog(QDialog):
+    def __init__(self, data, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Noise Layer Settings")
+        self.setStyleSheet(PANEL_SS + SPIN_SS + COMBO_SS + BTN_SS)
+        self.resize(320, 400)
+        self.data = dict(data)
+        
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        
+        self.type_cb = QComboBox()
+        self.type_cb.addItems(["perlin", "simplex", "worley"])
+        self.type_cb.setCurrentText(self.data.get('type', 'perlin'))
+        form.addRow("Noise Algorithm", self.type_cb)
+        
+        self.amp_spin = QDoubleSpinBox()
+        self.amp_spin.setRange(0, 1000); self.amp_spin.setValue(self.data.get('amp', 1.0))
+        form.addRow("Amplitude", self.amp_spin)
+        
+        self.freq_spin = QDoubleSpinBox()
+        self.freq_spin.setDecimals(4); self.freq_spin.setRange(0.0001, 10.0); self.freq_spin.setValue(self.data.get('freq', 1.0))
+        form.addRow("Frequency/Scale", self.freq_spin)
+        
+        self.oct_spin = QSpinBox()
+        self.oct_spin.setRange(1, 12); self.oct_spin.setValue(self.data.get('octaves', 1))
+        form.addRow("Octaves", self.oct_spin)
+        
+        self.pers_spin = QDoubleSpinBox()
+        self.pers_spin.setRange(0.0, 1.0); self.pers_spin.setValue(self.data.get('persistence', 0.5))
+        form.addRow("Persistence", self.pers_spin)
+        
+        self.lac_spin = QDoubleSpinBox()
+        self.lac_spin.setRange(1.0, 4.0); self.lac_spin.setValue(self.data.get('lacunarity', 2.0))
+        form.addRow("Lacunarity", self.lac_spin)
+        
+        self.mode_cb = QComboBox()
+        self.mode_cb.addItems(["fbm", "ridged", "billow"])
+        self.mode_cb.setCurrentText(self.data.get('mode', 'fbm'))
+        form.addRow("Generation Mode", self.mode_cb)
+
+        self.exp_spin = QDoubleSpinBox()
+        self.exp_spin.setRange(0.1, 5.0); self.exp_spin.setValue(self.data.get('exponent', 1.0))
+        form.addRow("Redistribution (Exp)", self.exp_spin)
+
+        self.weight_spin = QDoubleSpinBox()
+        self.weight_spin.setRange(0.0, 2.0); self.weight_spin.setSingleStep(0.05); self.weight_spin.setValue(self.data.get('weight', 1.0))
+        form.addRow("Blending Weight", self.weight_spin)
+        
+        layout.addLayout(form)
+        
+        btns = QHBoxLayout()
+        ok = QPushButton("Save Settings"); ok.clicked.connect(self.accept)
+        cancel = QPushButton("Cancel"); cancel.clicked.connect(self.reject)
+        btns.addWidget(ok); btns.addWidget(cancel)
+        layout.addLayout(btns)
+
+    def exec(self):
+        if super().exec():
+            self.data['type'] = self.type_cb.currentText()
+            self.data['mode'] = self.mode_cb.currentText()
+            self.data['amp'] = self.amp_spin.value()
+            self.data['freq'] = self.freq_spin.value()
+            self.data['octaves'] = self.oct_spin.value()
+            self.data['persistence'] = self.pers_spin.value()
+            self.data['lacunarity'] = self.lac_spin.value()
+            self.data['exponent'] = self.exp_spin.value()
+            self.data['weight'] = self.weight_spin.value()
+            return True
+        return False
+
+class BiomeDialog(QDialog):
+    def __init__(self, data, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Biome Ecological Rule Editor")
+        self.setStyleSheet(PANEL_SS + SPIN_SS + BTN_SS)
+        self.resize(400, 550)
+        self.data = _json.loads(_json.dumps(data)) # Deep copy
+        
+        import json as _json_local
+        self._json_mod = _json_local
+
+        layout = QVBoxLayout(self)
+        
+        # Identity
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("Biome Name:"))
+        self.name_edit = QLineEdit(self.data.get('name', 'New Biome'))
+        name_row.addWidget(self.name_edit)
+        layout.addLayout(name_row)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        form = QFormLayout(content)
+        
+        # Ranges
+        def add_range_row(label, key, parent_form):
+            row = QHBoxLayout()
+            r = self.data.get(key, [0, 1])
+            s1 = QDoubleSpinBox(); s1.setRange(-5000, 5000); s1.setValue(r[0])
+            s2 = QDoubleSpinBox(); s2.setRange(-5000, 5000); s2.setValue(r[1])
+            row.addWidget(s1); row.addWidget(QLabel("to")); row.addWidget(s2)
+            parent_form.addRow(label, row)
+            return s1, s2
+
+        self.h1, self.h2 = add_range_row("Height Range", "height_range", form)
+        self.s1, self.s2 = add_range_row("Slope (0-1)", "slope_range", form)
+        self.t1, self.t2 = add_range_row("Temp (0-1)", "temp_range", form)
+        self.hm1, self.hm2 = add_range_row("Hum (0-1)", "hum_range", form)
+        
+        # Surface
+        form.addRow(QLabel("<b>Surface Aesthetics</b>"))
+        surf = self.data.get('surface', {})
+        
+        self.color_btn = QPushButton()
+        self.color_btn.setFixedHeight(20)
+        c = surf.get('color', [0.5, 0.5, 0.5, 1.0])
+        self.color_btn.setStyleSheet(f"background: rgba({int(c[0]*255)}, {int(c[1]*255)}, {int(c[2]*255)}, 255);")
+        self.color_btn.clicked.connect(self._pick_color)
+        form.addRow("Surface Color", self.color_btn)
+        
+        self.rough_spin = QDoubleSpinBox(); self.rough_spin.setRange(0, 1); self.rough_spin.setValue(surf.get('roughness', 0.7))
+        form.addRow("Roughness", self.rough_spin)
+        
+        self.met_spin = QDoubleSpinBox(); self.met_spin.setRange(0, 1); self.met_spin.setValue(surf.get('metallic', 0.0))
+        form.addRow("Metallic", self.met_spin)
+
+        # Spawns
+        form.addRow(QLabel("<b>Vegetation / Assets</b>"))
+        self.spawn_list = QListWidget()
+        for s in self.data.get('spawns', []): self.spawn_list.addItem(Path(s).name)
+        form.addRow(self.spawn_list)
+        
+        s_btns = QHBoxLayout()
+        add_s = QPushButton("Add Mesh"); add_s.clicked.connect(self._add_spawn)
+        rem_s = QPushButton("Remove"); rem_s.clicked.connect(self._rem_spawn)
+        s_btns.addWidget(add_s); s_btns.addWidget(rem_s)
+        form.addRow(s_btns)
+        
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+        
+        btns = QHBoxLayout()
+        ok = QPushButton("Save Biome Structure"); ok.clicked.connect(self.accept)
+        cancel = QPushButton("Discard"); cancel.clicked.connect(self.reject)
+        btns.addWidget(ok); btns.addWidget(cancel)
+        layout.addLayout(btns)
+
+    def _pick_color(self):
+        c = self.data['surface'].get('color', [0.5, 0.5, 0.5, 1.0])
+        color = QColorDialog.getColor(QColor(int(c[0]*255), int(c[1]*255), int(c[2]*255)), self)
+        if color.isValid():
+            self.data['surface']['color'] = [color.redF(), color.greenF(), color.blueF(), 1.0]
+            self.color_btn.setStyleSheet(f"background: {color.name()};")
+
+    def _add_spawn(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Select Mesh Assets", "", "Meshes (*.fbx *.obj *.glb)")
+        if files:
+            # We add a new "spawn layer" for these assets with default density
+            layer = {'assets': files, 'density': 0.1}
+            self.data.setdefault('spawns', []).append(layer)
+            for f in files:
+                self.spawn_list.addItem(f"[{layer['density']}] {Path(f).name}")
+
+    def _rem_spawn(self):
+        idx = self.spawn_list.currentRow()
+        if idx >= 0:
+            # Note: This is a bit simplified; removing from a list that shows all assets in all layers
+            # requires slightly more complex index mapping. For now, we'll clear the layer or item.
+            # Real implementation would allow editing the layer directly.
+            self.data['spawns'].pop(idx) if idx < len(self.data['spawns']) else None
+            self.spawn_list.takeItem(idx)
+
+    def get_data(self):
+        self.data['name'] = self.name_edit.text()
+        self.data['height_range'] = [self.h1.value(), self.h2.value()]
+        self.data['slope_range'] = [self.s1.value(), self.s2.value()]
+        self.data['temp_range'] = [self.t1.value(), self.t2.value()]
+        self.data['hum_range'] = [self.hm1.value(), self.hm2.value()]
+        self.data['surface']['roughness'] = self.rough_spin.value()
+        self.data['surface']['metallic'] = self.met_spin.value()
+        return self.data

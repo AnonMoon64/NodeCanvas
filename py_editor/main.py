@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
     QGraphicsScene,
     QGraphicsItem,
     QCheckBox,
+    QSizePolicy,
 )
 from PyQt6.QtGui import QIcon, QAction, QColor, QDrag, QFont, QTextCursor, QPainter
 from PyQt6.QtCore import Qt, QTimer, QMimeData, pyqtSignal
@@ -2463,6 +2464,11 @@ class MainWindow(QMainWindow):
             QTabBar::tab:selected { color: #4fc3f7; border-bottom: 2px solid #4fc3f7; background: #1e1e1e; }
             QTabBar::tab:hover { color: #ccc; background: #333; }
         """)
+        # Ensure the main tab widget expands with the window
+        try:
+            self.tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        except Exception:
+            pass
         self.setCentralWidget(self.tabs)
         
         # Logic tab (formerly Canvas) - Node graph editor
@@ -2587,7 +2593,8 @@ class MainWindow(QMainWindow):
         
         # Left panel - State list
         left_panel = QWidget()
-        left_panel.setFixedWidth(200)
+        # Allow left panel to be resized by using a minimum width rather than fixed
+        left_panel.setMinimumWidth(160)
         left_panel.setStyleSheet("background: #252525; border-right: 1px solid #444;")
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(10, 10, 10, 10)
@@ -2716,7 +2723,8 @@ class MainWindow(QMainWindow):
         
         # Right panel - Properties
         right_panel = QWidget()
-        right_panel.setFixedWidth(250)
+        # Use minimum width so layouts can still shrink/grow
+        right_panel.setMinimumWidth(200)
         right_panel.setStyleSheet("background: #252525; border-left: 1px solid #444;")
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(10, 10, 10, 10)
@@ -3710,18 +3718,31 @@ class MainWindow(QMainWindow):
         self.file_dock = QDockWidget("Explorer", self)
         self.file_dock.setWidget(self.explorer)
         self.file_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea)
+        # Allow docks to be moved and floated by the user so layouts remain resizable
+        try:
+            self.file_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        except Exception:
+            pass
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.file_dock)
         
         self.var_panel = VariablePanelWidget(self)
         self.var_dock = QDockWidget("Variables", self)
         self.var_dock.setWidget(self.var_panel)
         self.var_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        try:
+            self.var_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        except Exception:
+            pass
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.var_dock)
         self.variable_panel = self.var_panel
 
         self.prop_dock = QDockWidget("Properties", self)
         self.prop_dock.setWidget(self.properties)
         self.prop_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        try:
+            self.prop_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        except Exception:
+            pass
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.prop_dock)
         
         # Stack vars above properties
@@ -3889,6 +3910,13 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
+    # Optional debug: auto-open SimulationWindow when env var NODECANVAS_AUTO_PLAY=1
+    try:
+        if os.environ.get('NODECANVAS_AUTO_PLAY') == '1':
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(500, lambda: w.scene_editor._on_play_clicked())
+    except Exception:
+        pass
     # Debug hooks: global exception logging and quit/destroy notifications
     import traceback as _traceback
     def _excepthook(exc_type, exc_value, exc_tb):
