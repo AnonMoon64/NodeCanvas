@@ -23,10 +23,11 @@ from typing import Optional, Tuple, List, Dict, Any
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QCheckBox, QDoubleSpinBox, QFrame, QSizePolicy,
-    QToolButton, QButtonGroup, QSpacerItem, QSplitter,
+    QToolButton, QButtonGroup, QSpacerItem, QSplitter, QTabBar,
     QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
     QStackedWidget, QAbstractItemView, QMenu, QInputDialog,
-    QScrollArea, QGridLayout, QGroupBox,
+    QScrollArea, QGridLayout, QGroupBox, QSlider, QColorDialog,
+    QFormLayout,
 )
 from PyQt6.QtGui import (
     QColor, QPainter, QFont, QSurfaceFormat, QMouseEvent,
@@ -65,6 +66,16 @@ SELECT_COLOR       = (0.310, 0.765, 0.969, 1.0)    # #4fc3f7
 OBJECT_COLOR       = (0.7,   0.7,   0.7,   0.8)    # default wireframe
 OBJECT_FACE_COLOR  = (0.25,  0.25,  0.28,  0.4)    # subtle fill
 GIZMO_ALPHA        = 0.9
+
+# PBR Material Presets
+MATERIAL_PRESETS = {
+    'Plastic':    {'base_color': [0.8, 0.8, 0.8, 1.0], 'roughness': 0.7, 'metallic': 0.0, 'emissive_color': [0.0, 0.0, 0.0, 1.0]},
+    'Glass':      {'base_color': [0.9, 0.95, 1.0, 0.4], 'roughness': 0.1, 'metallic': 0.0, 'emissive_color': [0.0, 0.0, 0.0, 1.0]},
+    'Metal':      {'base_color': [0.8, 0.8, 0.85, 1.0], 'roughness': 0.3, 'metallic': 1.0, 'emissive_color': [0.0, 0.0, 0.0, 1.0]},
+    'Green Glow': {'base_color': [0.1, 0.8, 0.2, 1.0], 'roughness': 0.5, 'metallic': 0.0, 'emissive_color': [0.1, 0.8, 0.2, 1.0]},
+}
+DEFAULT_MATERIAL = dict(MATERIAL_PRESETS['Plastic'])
+DEFAULT_MATERIAL['preset'] = 'Plastic'
 
 # Stylesheet fragments
 TOOLBAR_SS = """
@@ -172,13 +183,24 @@ class SceneObject:
         self.file_path = None
         self.parent_id = None
         self.children_ids = []
+        self.material = dict(DEFAULT_MATERIAL)
+
+    def get_render_color(self):
+        """Get the effective face color from the material base_color."""
+        bc = self.material.get('base_color', [0.7, 0.7, 0.7, 1.0])
+        return tuple(bc)
+
+    def get_emissive_color(self):
+        ec = self.material.get('emissive_color', [0.0, 0.0, 0.0, 1.0])
+        return tuple(ec)
 
     def to_dict(self) -> dict:
         return {
             'id': self.id, 'name': self.name, 'type': self.obj_type,
             'position': self.position, 'rotation': self.rotation, 'scale': self.scale,
             'color': self.color, 'file_path': self.file_path,
-            'parent_id': self.parent_id, 'children_ids': self.children_ids.copy()
+            'parent_id': self.parent_id, 'children_ids': self.children_ids.copy(),
+            'material': dict(self.material),
         }
 
     @staticmethod
@@ -189,6 +211,7 @@ class SceneObject:
         obj.file_path = d.get('file_path')
         obj.parent_id = d.get('parent_id')
         obj.children_ids = d.get('children_ids', [])
+        obj.material = d.get('material', dict(DEFAULT_MATERIAL))
         return obj
 
 
@@ -512,7 +535,25 @@ def _draw_wireframe_cube(sx=1, sy=1, sz=1, color=OBJECT_COLOR, fill_color=OBJECT
     glEnd(); glLineWidth(1.0)
 
 
-def _draw_wireframe_sphere(radius=0.5, rings=12, segments=16, color=OBJECT_COLOR):
+def _draw_wireframe_sphere(radius=0.5, rings=12, segments=16, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
+    # Fill
+    glColor4f(*fill_color)
+    for i in range(rings):
+        phi1 = math.pi * i / rings
+        phi2 = math.pi * (i + 1) / rings
+        y1, r1 = radius * math.cos(phi1), radius * math.sin(phi1)
+        y2, r2 = radius * math.cos(phi2), radius * math.sin(phi2)
+        glBegin(GL_QUAD_STRIP)
+        for j in range(segments + 1):
+            theta = 2.0 * math.pi * j / segments
+            cx, cz = math.cos(theta), math.sin(theta)
+            glNormal3f(r1/radius * cx, y1/radius, r1/radius * cz)
+            glVertex3f(r1 * cx, y1, r1 * cz)
+            glNormal3f(r2/radius * cx, y2/radius, r2/radius * cz)
+            glVertex3f(r2 * cx, y2, r2 * cz)
+        glEnd()
+    # Outline (disable lighting for wireframe)
+    glDisable(GL_LIGHTING)
     glColor4f(*color); glLineWidth(1.5)
     for i in range(rings + 1):
         phi = math.pi * i / rings
@@ -522,19 +563,30 @@ def _draw_wireframe_sphere(radius=0.5, rings=12, segments=16, color=OBJECT_COLOR
             theta = 2.0 * math.pi * j / segments
             glVertex3f(r * math.cos(theta), y, r * math.sin(theta))
         glEnd()
-    for j in range(segments):
-        theta = 2.0 * math.pi * j / segments
-        glBegin(GL_LINE_STRIP)
-        for i in range(rings + 1):
-            phi = math.pi * i / rings
-            y = radius * math.cos(phi); r = radius * math.sin(phi)
-            glVertex3f(r * math.cos(theta), y, r * math.sin(theta))
-        glEnd()
-    glLineWidth(1.0)
+    glLineWidth(1.0); glEnable(GL_LIGHTING)
 
 
-def _draw_wireframe_cylinder(radius=0.5, height=1.0, segments=16, color=OBJECT_COLOR):
+def _draw_wireframe_cylinder(radius=0.5, height=1.0, segments=16, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
     hh = height / 2
+    # Fill faces
+    glColor4f(*fill_color)
+    # Side
+    glBegin(GL_QUAD_STRIP)
+    for i in range(segments + 1):
+        a = 2.0 * math.pi * i / segments
+        cx, cz = math.cos(a), math.sin(a)
+        glVertex3f(radius * cx, hh, radius * cz)
+        glVertex3f(radius * cx, -hh, radius * cz)
+    glEnd()
+    # Caps
+    for y in [hh, -hh]:
+        glBegin(GL_TRIANGLE_FAN)
+        glVertex3f(0, y, 0)
+        for i in range(segments + 1):
+            a = 2.0 * math.pi * (i if y > 0 else -i) / segments
+            glVertex3f(radius * math.cos(a), y, radius * math.sin(a))
+        glEnd()
+    # Outline
     glColor4f(*color); glLineWidth(1.5)
     glBegin(GL_LINE_LOOP)
     for i in range(segments):
@@ -566,8 +618,23 @@ def _draw_wireframe_plane(sx=2, sz=2, color=OBJECT_COLOR, fill_color=OBJECT_FACE
     glEnd(); glLineWidth(1.0)
 
 
-def _draw_wireframe_cone(radius=0.5, height=1.0, segments=16, color=OBJECT_COLOR):
+def _draw_wireframe_cone(radius=0.5, height=1.0, segments=16, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
     hh = height / 2
+    # Fill
+    glColor4f(*fill_color)
+    glBegin(GL_TRIANGLE_FAN)
+    glVertex3f(0, hh, 0)
+    for i in range(segments + 1):
+        a = 2.0 * math.pi * i / segments
+        glVertex3f(radius * math.cos(a), -hh, radius * math.sin(a))
+    glEnd()
+    glBegin(GL_TRIANGLE_FAN)
+    glVertex3f(0, -hh, 0)
+    for i in range(segments + 1):
+        a = 2.0 * math.pi * (-i) / segments
+        glVertex3f(radius * math.cos(a), -hh, radius * math.sin(a))
+    glEnd()
+    # Outline
     glColor4f(*color); glLineWidth(1.5)
     glBegin(GL_LINE_LOOP)
     for i in range(segments):
@@ -1015,6 +1082,16 @@ if QOpenGLWidget and HAS_OPENGL:
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
             glEnable(GL_LINE_SMOOTH); glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)
             glEnable(GL_MULTISAMPLE)
+            
+            # Simple Lighting
+            glEnable(GL_LIGHTING)
+            glEnable(GL_LIGHT0)
+            glEnable(GL_COLOR_MATERIAL)
+            glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
+            glLightfv(GL_LIGHT0, GL_POSITION, (5.0, 10.0, 5.0, 1.0))
+            glLightfv(GL_LIGHT0, GL_DIFFUSE, (1.0, 1.0, 1.0, 1.0))
+            glLightfv(GL_LIGHT0, GL_AMBIENT, (0.3, 0.3, 0.3, 1.0))
+            glEnable(GL_NORMALIZE)
 
         def resizeGL(self, w, h):
             glViewport(0, 0, w, h)
@@ -1183,16 +1260,26 @@ if QOpenGLWidget and HAS_OPENGL:
                 glRotatef(obj.rotation[0], 1, 0, 0) # Pitch
                 glRotatef(obj.rotation[2], 0, 0, 1) # Roll
                 glScalef(*obj.scale)
-                color = tuple(SELECT_COLOR) if obj.selected else tuple(obj.color)
-                fill = (color[0]*0.3, color[1]*0.3, color[2]*0.3, 0.4) if obj.selected else OBJECT_FACE_COLOR
+                if obj.selected:
+                    color = tuple(SELECT_COLOR)
+                    fill = (color[0]*0.3, color[1]*0.3, color[2]*0.3, 0.4)
+                else:
+                    # Use material base_color for fill
+                    bc = obj.get_render_color()
+                    color = (bc[0]*0.8, bc[1]*0.8, bc[2]*0.8, 0.9)
+                    fill = (bc[0], bc[1], bc[2], 1.0) # Solid faces
+                    # Emissive glow — brighten the wireframe
+                    ec = obj.get_emissive_color()
+                    if ec[0] > 0.01 or ec[1] > 0.01 or ec[2] > 0.01:
+                        color = (min(1, bc[0] + ec[0]*0.5), min(1, bc[1] + ec[1]*0.5), min(1, bc[2] + ec[2]*0.5), 1.0)
                 if obj.selected: glLineWidth(3.0)
                 else: glLineWidth(1.0)
                 t = obj.obj_type
                 if t == 'cube': _draw_wireframe_cube(1,1,1, color, fill)
-                elif t == 'sphere': _draw_wireframe_sphere(0.5, color=color)
-                elif t == 'cylinder': _draw_wireframe_cylinder(0.5, 1.0, color=color)
+                elif t == 'sphere': _draw_wireframe_sphere(0.5, color=color, fill_color=fill)
+                elif t == 'cylinder': _draw_wireframe_cylinder(0.5, 1.0, color=color, fill_color=fill)
                 elif t == 'plane': _draw_wireframe_plane(2, 2, color, fill)
-                elif t == 'cone': _draw_wireframe_cone(0.5, 1.0, color=color)
+                elif t == 'cone': _draw_wireframe_cone(0.5, 1.0, color=color, fill_color=fill)
                 elif t == 'mesh': _draw_wireframe_cube(1,1,1, color, fill)
                 glPopMatrix()
 
@@ -1203,8 +1290,13 @@ if QOpenGLWidget and HAS_OPENGL:
                 glTranslatef(obj.position[0], obj.position[1], 0)
                 glRotatef(obj.rotation[2], 0, 0, 1)
                 glScalef(obj.scale[0], obj.scale[1], 1)
-                color = tuple(SELECT_COLOR) if obj.selected else tuple(obj.color)
-                fill = (color[0]*0.3, color[1]*0.3, color[2]*0.3, 0.3) if obj.selected else OBJECT_FACE_COLOR
+                if obj.selected:
+                    color = tuple(SELECT_COLOR)
+                    fill = (color[0]*0.3, color[1]*0.3, color[2]*0.3, 0.3)
+                else:
+                    bc = obj.get_render_color()
+                    color = (bc[0]*0.8, bc[1]*0.8, bc[2]*0.8, 0.9)
+                    fill = (bc[0]*0.5, bc[1]*0.5, bc[2]*0.5, bc[3] if len(bc) > 3 else 0.4)
                 t = obj.obj_type
                 if t in ('rect', 'sprite', 'mesh'): _draw_2d_rect(1, 1, color, fill)
                 elif t == 'circle': _draw_2d_circle(0.5, color=color, fill_color=fill)
@@ -1413,6 +1505,47 @@ if QOpenGLWidget and HAS_OPENGL:
                     if abs(wx - cp[0]) < hit_sz and abs(wy - cp[1]) < hit_sz: return part
 
             return None
+
+        def _get_selection_center(self) -> Tuple[float, float, float]:
+            sel = [o for o in self.scene_objects if o.selected]
+            if not sel: return (0, 0, 0)
+            avg = [0.0, 0.0, 0.0]
+            for o in sel:
+                for i in range(3): avg[i] += o.position[i]
+            return (avg[0]/len(sel), avg[1]/len(sel), avg[2]/len(sel))
+
+        def _get_selection_bounds(self) -> Tuple[Tuple[float, float, float], float]:
+            """Returns (center, radius) of the selection bounding sphere."""
+            sel = [o for o in self.scene_objects if o.selected]
+            if not sel: return (0, 0, 0), 1.0
+            center = self._get_selection_center()
+            max_r = 1.0
+            for o in sel:
+                d = _length(_sub(o.position, center))
+                # rough sphere radius from scale
+                r = _length(o.scale) * 0.5
+                max_r = max(max_r, d + r)
+            return center, max_r
+
+        def _focus_selected(self):
+            sel = [o for o in self.scene_objects if o.selected]
+            if not sel: return
+            
+            center, radius = self._get_selection_bounds()
+            
+            if self._mode == "3D":
+                # Position camera back from center along current front vector
+                f = self._cam3d.front
+                # Perspective framing: distance = radius / sin(fov/2)
+                # We use radius * 2.5 as a comfortable heuristic
+                dist = radius * 2.5
+                self._cam3d.pos = list(_sub(center, _scale_vec(f, dist)))
+            else:
+                self._cam2d.x, self._cam2d.y = center[0], center[1]
+                # Adjust zoom to fit radius + margin
+                self._cam2d.zoom_level = radius * 1.5
+            
+            self.update()
 
         def mousePressEvent(self, event: QMouseEvent):
             btn = event.button()
@@ -1956,7 +2089,7 @@ if QOpenGLWidget and HAS_OPENGL:
                     
                     for o in sel:
                         self.scene_objects.remove(o)
-                    self._refresh_outliner()
+                    self.state_changed.emit()
                     self.update()
                 event.accept()
                 return
@@ -1968,6 +2101,11 @@ if QOpenGLWidget and HAS_OPENGL:
                     self._copy_selected()
                 elif event.key() == Qt.Key.Key_V:
                     self._paste_selected()
+                elif event.key() == Qt.Key.Key_A:
+                    # Select All
+                    for o in self.scene_objects: o.selected = True
+                    self.update()
+                    self.object_selected.emit(self.scene_objects[-1] if self.scene_objects else None)
                     
             event.accept()
 
@@ -1995,11 +2133,9 @@ if QOpenGLWidget and HAS_OPENGL:
                 new_objs.append(new_obj)
             
             self.scene_objects.extend(new_objs)
-            self._refresh_outliner()
-            self.update()
-            self.object_selected.emit(new_objs[-1])
             self.state_changed.emit()
             self.update()
+            self.object_selected.emit(new_objs[-1])
                 
         def _copy_selected(self):
             self._clipboard = []
@@ -2090,8 +2226,27 @@ if QOpenGLWidget and HAS_OPENGL:
             event.acceptProposedAction()
 
         def dropEvent(self, event):
+            import json as _json
             obj_type = event.mimeData().text()
             mx, my = event.position().x(), event.position().y()
+
+            # Handle material drops — apply to object under cursor
+            if obj_type.startswith("mat:"):
+                mat_path = obj_type[4:]
+                picked = self._pick_object_3d(int(mx), int(my)) if self._mode == "3D" else self._pick_object_2d(int(mx), int(my))
+                if picked:
+                    try:
+                        with open(mat_path, 'r') as f:
+                            mat_data = _json.load(f)
+                        mat_data['file'] = mat_path
+                        picked.material = mat_data
+                        self.state_changed.emit()
+                        self.update()
+                    except Exception as e:
+                        print(f"Failed to load material: {e}")
+                event.acceptProposedAction()
+                return
+
             if self._mode == "3D":
                 origin, direction = self._cam3d.screen_to_ray(int(mx), int(my), self.width(), self.height())
                 if abs(direction[1]) > 1e-9:
@@ -2112,13 +2267,20 @@ else:
         object_selected = pyqtSignal(object)
         object_dropped = pyqtSignal(str, float, float)
         object_moved = pyqtSignal()
+        state_changed = pyqtSignal()
         def __init__(self, parent=None):
             super().__init__(parent)
             self._mode = "3D"; self.show_grid = True; self.snap_enabled = False
             self.grid_size = 1.0; self.scene_objects = []; self._transform_mode = "move"
+            self._transform_space = "Global"
         def set_mode(self, m): self._mode = m; self.update()
         def start_render_loop(self): pass
         def stop_render_loop(self): pass
+        def set_show_grid(self, v): self.show_grid = v
+        def set_snap_enabled(self, v): self.snap_enabled = v
+        def set_grid_size(self, v): self.grid_size = v
+        def set_transform_mode(self, m): self._transform_mode = m
+        def set_transform_space(self, s): self._transform_space = s
         def paintEvent(self, event):
             p = QPainter(self); p.fillRect(self.rect(), QColor("#1a1a1a"))
             p.setPen(QColor("#888")); p.setFont(QFont("Segoe UI",14))
@@ -2205,6 +2367,89 @@ class ObjectPropertiesPanel(QWidget):
             self._scale_spins.append(spin)
         layout.addWidget(scale_group)
 
+        # ---- Material Section ----
+        mat_group = QGroupBox("Material")
+        mat_group.setStyleSheet(PROPS_SS)
+        mg = QVBoxLayout(mat_group)
+        mg.setContentsMargins(8,6,8,6); mg.setSpacing(6)
+
+        # Preset dropdown
+        preset_row = QHBoxLayout()
+        preset_lbl = QLabel("Preset")
+        preset_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
+        preset_row.addWidget(preset_lbl)
+        self._mat_preset = QComboBox()
+        self._mat_preset.addItems(['Plastic', 'Glass', 'Metal', 'Green Glow', 'Custom'])
+        self._mat_preset.setStyleSheet(COMBO_SS)
+        self._mat_preset.currentTextChanged.connect(self._on_mat_preset_changed)
+        preset_row.addWidget(self._mat_preset, 1)
+        mg.addLayout(preset_row)
+
+        # Base Color button
+        bc_row = QHBoxLayout()
+        bc_lbl = QLabel("Base Color")
+        bc_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
+        bc_row.addWidget(bc_lbl)
+        self._base_color_btn = QPushButton()
+        self._base_color_btn.setFixedSize(60, 20)
+        self._base_color_btn.setStyleSheet("background: #ccc; border: 1px solid #555; border-radius: 3px;")
+        self._base_color_btn.clicked.connect(self._pick_base_color)
+        bc_row.addWidget(self._base_color_btn)
+        mg.addLayout(bc_row)
+
+        # Roughness slider
+        rough_row = QHBoxLayout()
+        rough_lbl = QLabel("Roughness")
+        rough_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
+        rough_row.addWidget(rough_lbl)
+        self._roughness_slider = QSlider(Qt.Orientation.Horizontal)
+        self._roughness_slider.setRange(0, 100)
+        self._roughness_slider.setValue(70)
+        self._roughness_slider.setStyleSheet("QSlider::groove:horizontal{background:#333;height:6px;border-radius:3px;}QSlider::handle:horizontal{background:#4fc3f7;width:14px;margin:-4px 0;border-radius:7px;}")
+        self._roughness_slider.valueChanged.connect(self._on_roughness_changed)
+        rough_row.addWidget(self._roughness_slider, 1)
+        self._roughness_val = QLabel("0.70")
+        self._roughness_val.setFixedWidth(32)
+        self._roughness_val.setStyleSheet("color: #ccc; font-size: 10px;")
+        rough_row.addWidget(self._roughness_val)
+        mg.addLayout(rough_row)
+
+        # Metallic slider
+        met_row = QHBoxLayout()
+        met_lbl = QLabel("Metallic")
+        met_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
+        met_row.addWidget(met_lbl)
+        self._metallic_slider = QSlider(Qt.Orientation.Horizontal)
+        self._metallic_slider.setRange(0, 100)
+        self._metallic_slider.setValue(0)
+        self._metallic_slider.setStyleSheet(self._roughness_slider.styleSheet())
+        self._metallic_slider.valueChanged.connect(self._on_metallic_changed)
+        met_row.addWidget(self._metallic_slider, 1)
+        self._metallic_val = QLabel("0.00")
+        self._metallic_val.setFixedWidth(32)
+        self._metallic_val.setStyleSheet("color: #ccc; font-size: 10px;")
+        met_row.addWidget(self._metallic_val)
+        mg.addLayout(met_row)
+
+        # Emissive Color button
+        ec_row = QHBoxLayout()
+        ec_lbl = QLabel("Emissive")
+        ec_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
+        ec_row.addWidget(ec_lbl)
+        self._emissive_btn = QPushButton()
+        self._emissive_btn.setFixedSize(60, 20)
+        self._emissive_btn.setStyleSheet("background: #000; border: 1px solid #555; border-radius: 3px;")
+        self._emissive_btn.clicked.connect(self._pick_emissive_color)
+        ec_row.addWidget(self._emissive_btn)
+        mg.addLayout(ec_row)
+
+        # Material file label
+        self._mat_file_label = QLabel("")
+        self._mat_file_label.setStyleSheet("color: #666; font-size: 10px; font-style: italic;")
+        mg.addWidget(self._mat_file_label)
+
+        layout.addWidget(mat_group)
+
         layout.addStretch()
 
     def set_object(self, obj: Optional[SceneObject]):
@@ -2228,6 +2473,25 @@ class ObjectPropertiesPanel(QWidget):
             self._pos_spins[i].setValue(obj.position[i])
             self._rot_spins[i].setValue(obj.rotation[i])
             self._scale_spins[i].setValue(obj.scale[i])
+        # Sync material UI
+        mat = obj.material
+        preset = mat.get('preset', 'Custom')
+        idx = self._mat_preset.findText(preset)
+        self._mat_preset.setCurrentIndex(idx if idx >= 0 else self._mat_preset.count() - 1)
+        bc = mat.get('base_color', [0.8, 0.8, 0.8, 1.0])
+        self._base_color_btn.setStyleSheet(
+            f"background: rgb({int(bc[0]*255)},{int(bc[1]*255)},{int(bc[2]*255)}); border: 1px solid #555; border-radius: 3px;"
+        )
+        self._roughness_slider.setValue(int(mat.get('roughness', 0.7) * 100))
+        self._roughness_val.setText(f"{mat.get('roughness', 0.7):.2f}")
+        self._metallic_slider.setValue(int(mat.get('metallic', 0.0) * 100))
+        self._metallic_val.setText(f"{mat.get('metallic', 0.0):.2f}")
+        ec = mat.get('emissive_color', [0, 0, 0, 1])
+        self._emissive_btn.setStyleSheet(
+            f"background: rgb({int(ec[0]*255)},{int(ec[1]*255)},{int(ec[2]*255)}); border: 1px solid #555; border-radius: 3px;"
+        )
+        mat_file = mat.get('file', '')
+        self._mat_file_label.setText(Path(mat_file).name if mat_file else '')
         self._updating = False
 
     def refresh_from_object(self):
@@ -2257,6 +2521,55 @@ class ObjectPropertiesPanel(QWidget):
         for i in range(3):
             self._current_object.scale[i] = self._scale_spins[i].value()
         self.property_changed.emit()
+
+    # ---- Material handlers ----
+    def _on_mat_preset_changed(self, preset_name):
+        if self._updating or not self._current_object: return
+        if preset_name in MATERIAL_PRESETS:
+            self._current_object.material = dict(MATERIAL_PRESETS[preset_name])
+            self._current_object.material['preset'] = preset_name
+            self._sync_from_object()
+            self.property_changed.emit()
+
+    def _pick_base_color(self):
+        if not self._current_object: return
+        bc = self._current_object.material.get('base_color', [0.8, 0.8, 0.8, 1.0])
+        color = QColorDialog.getColor(QColor(int(bc[0]*255), int(bc[1]*255), int(bc[2]*255)), self, "Base Color")
+        if color.isValid():
+            self._current_object.material['base_color'] = [color.redF(), color.greenF(), color.blueF(), bc[3] if len(bc) > 3 else 1.0]
+            self._current_object.material['preset'] = 'Custom'
+            self._sync_from_object()
+            self.property_changed.emit()
+
+    def _on_roughness_changed(self, val):
+        if self._updating or not self._current_object: return
+        self._current_object.material['roughness'] = val / 100.0
+        self._current_object.material['preset'] = 'Custom'
+        self._roughness_val.setText(f"{val / 100.0:.2f}")
+        self._mat_preset.blockSignals(True)
+        self._mat_preset.setCurrentText('Custom')
+        self._mat_preset.blockSignals(False)
+        self.property_changed.emit()
+
+    def _on_metallic_changed(self, val):
+        if self._updating or not self._current_object: return
+        self._current_object.material['metallic'] = val / 100.0
+        self._current_object.material['preset'] = 'Custom'
+        self._metallic_val.setText(f"{val / 100.0:.2f}")
+        self._mat_preset.blockSignals(True)
+        self._mat_preset.setCurrentText('Custom')
+        self._mat_preset.blockSignals(False)
+        self.property_changed.emit()
+
+    def _pick_emissive_color(self):
+        if not self._current_object: return
+        ec = self._current_object.material.get('emissive_color', [0, 0, 0, 1])
+        color = QColorDialog.getColor(QColor(int(ec[0]*255), int(ec[1]*255), int(ec[2]*255)), self, "Emissive Color")
+        if color.isValid():
+            self._current_object.material['emissive_color'] = [color.redF(), color.greenF(), color.blueF(), 1.0]
+            self._current_object.material['preset'] = 'Custom'
+            self._sync_from_object()
+            self.property_changed.emit()
 
 class OutlinerTreeWidget(QTreeWidget):
     """Custom tree widget for the scene outliner with drag-and-drop parenting."""
@@ -2334,10 +2647,13 @@ class SceneExplorerPanel(QWidget):
 
     primitive_dragged = pyqtSignal(str)
     object_select_requested = pyqtSignal(str)
+    material_open_requested = pyqtSignal(str)  # emitted with .material filepath
+    mode_changed = pyqtSignal(str)   # emitted when sub-mode tabs change (3D/2D...)
 
     ASSET_3D_EXTS = {'.fbx', '.obj', '.gltf', '.glb', '.dae', '.stl', '.ply'}
     ASSET_2D_EXTS = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.bmp', '.tga'}
-    ALL_ASSET_EXTS = ASSET_3D_EXTS | ASSET_2D_EXTS
+    MATERIAL_EXTS = {'.material'}
+    ALL_ASSET_EXTS = ASSET_3D_EXTS | ASSET_2D_EXTS | MATERIAL_EXTS
     # Folders and extensions to skip entirely
     SKIP_DIRS = {'__pycache__', 'node_modules', '.git', '.gemini', '.vscode', '.idea', 'venv', 'env'}
     SKIP_EXTS = {'.py', '.pyc', '.pyo', '.md', '.txt', '.json', '.logic', '.anim', '.ui', '.cfg', '.ini', '.yml', '.yaml', '.toml', '.lock'}
@@ -2354,17 +2670,12 @@ class SceneExplorerPanel(QWidget):
         main_layout.setContentsMargins(0,0,0,0); main_layout.setSpacing(0)
 
         # Title bar
-        title = QLabel("  SCENE EXPLORER")
+        title = QLabel("  EXPLORER")
         title.setFixedHeight(28)
         title.setStyleSheet("background: #252526; color: #888; font-size: 11px; font-weight: bold; border-bottom: 1px solid #3c3c3c;")
         main_layout.addWidget(title)
 
-        # Vertical splitter for explorer sections above and properties below
-        self._panel_splitter = QSplitter(Qt.Orientation.Vertical, self)
-        self._panel_splitter.setStyleSheet("QSplitter::handle { background: #3c3c3c; height: 2px; }")
-        main_layout.addWidget(self._panel_splitter, 1)
-
-        # Upper section: scroll area with primitives, assets, outliner
+        # Content area (scrollable sections)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { border: none; background: #252526; }")
@@ -2405,9 +2716,12 @@ class SceneExplorerPanel(QWidget):
         self._assets_section.content_layout.addWidget(refresh_btn)
         scroll_layout.addWidget(self._assets_section)
         self.assets_tree.startDrag = self._start_asset_drag
+        self.assets_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.assets_tree.customContextMenuRequested.connect(self._assets_context_menu)
+        self.assets_tree.itemDoubleClicked.connect(self._on_asset_double_clicked)
 
         # ---- Outliner section ----
-        self._outliner_section = _CollapsibleSection("OUTLINER")
+        self._outliner_section = _CollapsibleSection("OUTLINE")
         self.outliner_tree = OutlinerTreeWidget()
         self.outliner_tree.setHeaderHidden(True)
         self.outliner_tree.setStyleSheet(TREE_SS)
@@ -2426,17 +2740,21 @@ class SceneExplorerPanel(QWidget):
 
         scroll_layout.addStretch()
         scroll.setWidget(scroll_content)
-        self._panel_splitter.addWidget(scroll)
-
-        # Lower section: Properties panel
-        self.properties = ObjectPropertiesPanel(self)
-        self._panel_splitter.addWidget(self.properties)
-
-        self._panel_splitter.setSizes([400, 250])
+        main_layout.addWidget(scroll, 1)
 
     def set_workspace_root(self, path):
         self._workspace_root = Path(path) if path else None
         self.refresh_assets()
+
+    def _on_mode_tab_changed(self, idx):
+        modes = ["3D", "2D", "Pure", "UI"]
+        mode = modes[idx]
+        self._mode = mode
+        self.mode_changed.emit(mode)
+        # Visibility logic for sections
+        is_vp = mode in ("2D", "3D")
+        self._primitives_section.setVisible(is_vp)
+        self._outliner_section.setVisible(is_vp)
 
     def set_mode(self, mode):
         self._mode = mode
@@ -2478,7 +2796,11 @@ class SceneExplorerPanel(QWidget):
         if not file_path: return
         drag = QDrag(self.assets_tree)
         mime = QMimeData()
-        mime.setText(f"file:{file_path}")
+        # Prefix .material files with 'mat:' so viewport can differentiate
+        if file_path.endswith('.material'):
+            mime.setText(f"mat:{file_path}")
+        else:
+            mime.setText(f"file:{file_path}")
         drag.setMimeData(mime)
         px = QPixmap(140, 24); px.fill(QColor("#333"))
         p = QPainter(px)
@@ -2505,7 +2827,7 @@ class SceneExplorerPanel(QWidget):
         root_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
         root_item.setExpanded(True)
 
-        exts = self.ASSET_3D_EXTS if self._mode == "3D" else self.ASSET_2D_EXTS
+        exts = (self.ASSET_3D_EXTS if self._mode == "3D" else self.ASSET_2D_EXTS) | self.MATERIAL_EXTS
         self._scan_dir_full(root, root_item, exts)
 
         # Remove empty child folders (keeps the root even if empty)
@@ -2543,6 +2865,44 @@ class SceneExplorerPanel(QWidget):
                     item.removeChild(child)
                     continue
             i += 1
+
+    # ---- Asset double-click ----
+    def _on_asset_double_clicked(self, item, col):
+        file_path = item.data(0, Qt.ItemDataRole.UserRole)
+        if file_path and file_path.endswith('.material'):
+            self.material_open_requested.emit(file_path)
+
+    # ---- Assets context menu ----
+    def _assets_context_menu(self, pos):
+        import json as _json
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { background: #2a2a2a; color: #e0e0e0; border: 1px solid #555; }
+            QMenu::item { padding: 6px 20px; }
+            QMenu::item:selected { background: #4fc3f7; color: #1a1a1a; }
+        """)
+        create_mat_act = menu.addAction("Create Material")
+        action = menu.exec(self.assets_tree.mapToGlobal(pos))
+        if action == create_mat_act:
+            root = self._workspace_root
+            if not root: return
+            # Find next available name
+            i = 1
+            while True:
+                name = f"material_{i:03d}.material"
+                path = root / name
+                if not path.exists(): break
+                i += 1
+            # Write default Green Glow material
+            mat_data = dict(MATERIAL_PRESETS['Green Glow'])
+            mat_data['name'] = path.stem
+            mat_data['preset'] = 'Green Glow'
+            try:
+                with open(str(path), 'w') as f:
+                    _json.dump(mat_data, f, indent=2)
+                self.refresh_assets()
+            except Exception as e:
+                print(f"Failed to create material: {e}")
 
     # ---- Outliner ----
     def update_outliner(self, objects: List[SceneObject]):
@@ -2634,17 +2994,15 @@ class SceneToolbar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("SceneToolbar"); self.setFixedHeight(40)
+        self.setObjectName("SceneToolbar"); self.setFixedHeight(32)
         self.setStyleSheet(TOOLBAR_SS)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8,4,8,4); layout.setSpacing(6)
+        layout.setContentsMargins(8,0,8,0); layout.setSpacing(6)
 
-        mode_label = QLabel("Mode:"); mode_label.setStyleSheet(LABEL_SS)
-        layout.addWidget(mode_label)
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Pure", "UI", "2D", "3D"])
-        self.mode_combo.setCurrentText("3D"); self.mode_combo.setStyleSheet(COMBO_SS)
-        self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
+        self.mode_combo.addItems(["3D", "2D", "Pure", "UI"])
+        self.mode_combo.setStyleSheet(COMBO_SS)
+        self.mode_combo.currentTextChanged.connect(self.mode_changed.emit)
         layout.addWidget(self.mode_combo)
 
         sep1 = QFrame(); sep1.setFrameShape(QFrame.Shape.VLine); sep1.setStyleSheet("color:#555;")
@@ -2703,7 +3061,9 @@ class SceneToolbar(QWidget):
         self.play_btn.setToolTip("Play scene (future)"); self.play_btn.setEnabled(False)
         layout.addWidget(self.play_btn)
 
-    def _on_mode_changed(self, text):
+    def _on_mode_tab_changed(self, idx):
+        modes = ["3D", "2D", "Pure", "UI"]
+        text = modes[idx]
         self.mode_changed.emit(text)
         is_vp = text in ("2D", "3D")
         for w in (self.move_btn, self.rotate_btn, self.scale_btn, self.grid_check, self.snap_check, self.grid_spin, self.space_combo):
@@ -2738,6 +3098,177 @@ class PurePlaceholder(QWidget):
 
 
 # ===================================================================
+# Material Editor Panel (opens when double-clicking .material files)
+# ===================================================================
+
+class MaterialEditorPanel(QWidget):
+    """Inline material property editor for .material JSON files."""
+    material_saved = pyqtSignal(str)  # emitted with filepath after save
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("background: #252526;")
+        self._file_path = None
+        self._mat_data = {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        # Header
+        self._title = QLabel("Material Editor")
+        self._title.setStyleSheet("color: #4fc3f7; font-size: 14px; font-weight: bold;")
+        layout.addWidget(self._title)
+
+        self._file_label = QLabel("")
+        self._file_label.setStyleSheet("color: #888; font-size: 10px;")
+        layout.addWidget(self._file_label)
+
+        # Preset
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("Preset"))
+        self._preset_combo = QComboBox()
+        self._preset_combo.addItems(['Plastic', 'Glass', 'Metal', 'Green Glow', 'Custom'])
+        self._preset_combo.setStyleSheet(COMBO_SS)
+        self._preset_combo.currentTextChanged.connect(self._on_preset_changed)
+        preset_row.addWidget(self._preset_combo, 1)
+        layout.addLayout(preset_row)
+
+        # Base Color
+        bc_row = QHBoxLayout()
+        bc_row.addWidget(QLabel("Base Color"))
+        self._bc_btn = QPushButton()
+        self._bc_btn.setFixedSize(60, 20)
+        self._bc_btn.setStyleSheet("background: #ccc; border: 1px solid #555; border-radius: 3px;")
+        self._bc_btn.clicked.connect(self._pick_base_color)
+        bc_row.addWidget(self._bc_btn)
+        layout.addLayout(bc_row)
+
+        # Roughness
+        r_row = QHBoxLayout()
+        r_row.addWidget(QLabel("Roughness"))
+        self._r_slider = QSlider(Qt.Orientation.Horizontal)
+        self._r_slider.setRange(0, 100); self._r_slider.setValue(70)
+        self._r_slider.setStyleSheet("QSlider::groove:horizontal{background:#333;height:6px;border-radius:3px;}QSlider::handle:horizontal{background:#4fc3f7;width:14px;margin:-4px 0;border-radius:7px;}")
+        self._r_slider.valueChanged.connect(self._on_value_changed)
+        r_row.addWidget(self._r_slider, 1)
+        self._r_val = QLabel("0.70")
+        self._r_val.setFixedWidth(32)
+        r_row.addWidget(self._r_val)
+        layout.addLayout(r_row)
+
+        # Metallic
+        m_row = QHBoxLayout()
+        m_row.addWidget(QLabel("Metallic"))
+        self._m_slider = QSlider(Qt.Orientation.Horizontal)
+        self._m_slider.setRange(0, 100); self._m_slider.setValue(0)
+        self._m_slider.setStyleSheet(self._r_slider.styleSheet())
+        self._m_slider.valueChanged.connect(self._on_value_changed)
+        m_row.addWidget(self._m_slider, 1)
+        self._m_val = QLabel("0.00")
+        self._m_val.setFixedWidth(32)
+        m_row.addWidget(self._m_val)
+        layout.addLayout(m_row)
+
+        # Emissive
+        e_row = QHBoxLayout()
+        e_row.addWidget(QLabel("Emissive"))
+        self._ec_btn = QPushButton()
+        self._ec_btn.setFixedSize(60, 20)
+        self._ec_btn.setStyleSheet("background: #000; border: 1px solid #555; border-radius: 3px;")
+        self._ec_btn.clicked.connect(self._pick_emissive_color)
+        e_row.addWidget(self._ec_btn)
+        layout.addLayout(e_row)
+
+        # Save button
+        save_btn = QPushButton("Save Material")
+        save_btn.setStyleSheet("""
+            QPushButton { background: #4CAF50; color: white; border: none;
+                         padding: 8px; border-radius: 4px; font-weight: bold; }
+            QPushButton:hover { background: #66BB6A; }
+        """)
+        save_btn.clicked.connect(self._save)
+        layout.addWidget(save_btn)
+
+        layout.addStretch()
+
+        # Style all labels
+        for child in self.findChildren(QLabel):
+            if child != self._title and child != self._file_label:
+                child.setStyleSheet("color: #aaa; font-size: 11px;")
+
+    def load_material(self, filepath):
+        import json as _json
+        self._file_path = filepath
+        try:
+            with open(filepath, 'r') as f:
+                self._mat_data = _json.load(f)
+        except Exception:
+            self._mat_data = dict(DEFAULT_MATERIAL)
+        self._file_label.setText(Path(filepath).name)
+        self._title.setText(f"Material: {self._mat_data.get('name', Path(filepath).stem)}")
+        self._sync_ui()
+
+    def _sync_ui(self):
+        d = self._mat_data
+        idx = self._preset_combo.findText(d.get('preset', 'Custom'))
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.setCurrentIndex(idx if idx >= 0 else self._preset_combo.count() - 1)
+        self._preset_combo.blockSignals(False)
+        bc = d.get('base_color', [0.8, 0.8, 0.8, 1.0])
+        self._bc_btn.setStyleSheet(f"background: rgb({int(bc[0]*255)},{int(bc[1]*255)},{int(bc[2]*255)}); border: 1px solid #555; border-radius: 3px;")
+        self._r_slider.blockSignals(True); self._r_slider.setValue(int(d.get('roughness', 0.7) * 100)); self._r_slider.blockSignals(False)
+        self._r_val.setText(f"{d.get('roughness', 0.7):.2f}")
+        self._m_slider.blockSignals(True); self._m_slider.setValue(int(d.get('metallic', 0.0) * 100)); self._m_slider.blockSignals(False)
+        self._m_val.setText(f"{d.get('metallic', 0.0):.2f}")
+        ec = d.get('emissive_color', [0, 0, 0, 1])
+        self._ec_btn.setStyleSheet(f"background: rgb({int(ec[0]*255)},{int(ec[1]*255)},{int(ec[2]*255)}); border: 1px solid #555; border-radius: 3px;")
+
+    def _on_preset_changed(self, name):
+        if name in MATERIAL_PRESETS:
+            self._mat_data = dict(MATERIAL_PRESETS[name])
+            self._mat_data['preset'] = name
+            self._mat_data['name'] = Path(self._file_path).stem if self._file_path else 'material'
+            self._sync_ui()
+
+    def _pick_base_color(self):
+        bc = self._mat_data.get('base_color', [0.8, 0.8, 0.8, 1.0])
+        color = QColorDialog.getColor(QColor(int(bc[0]*255), int(bc[1]*255), int(bc[2]*255)), self, "Base Color")
+        if color.isValid():
+            self._mat_data['base_color'] = [color.redF(), color.greenF(), color.blueF(), 1.0]
+            self._mat_data['preset'] = 'Custom'
+            self._sync_ui()
+
+    def _pick_emissive_color(self):
+        ec = self._mat_data.get('emissive_color', [0, 0, 0, 1])
+        color = QColorDialog.getColor(QColor(int(ec[0]*255), int(ec[1]*255), int(ec[2]*255)), self, "Emissive Color")
+        if color.isValid():
+            self._mat_data['emissive_color'] = [color.redF(), color.greenF(), color.blueF(), 1.0]
+            self._mat_data['preset'] = 'Custom'
+            self._sync_ui()
+
+    def _on_value_changed(self):
+        self._mat_data['roughness'] = self._r_slider.value() / 100.0
+        self._mat_data['metallic'] = self._m_slider.value() / 100.0
+        self._r_val.setText(f"{self._mat_data['roughness']:.2f}")
+        self._m_val.setText(f"{self._mat_data['metallic']:.2f}")
+        self._mat_data['preset'] = 'Custom'
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.setCurrentText('Custom')
+        self._preset_combo.blockSignals(False)
+
+    def _save(self):
+        import json as _json
+        if not self._file_path: return
+        try:
+            with open(self._file_path, 'w') as f:
+                _json.dump(self._mat_data, f, indent=2)
+            self.material_saved.emit(self._file_path)
+        except Exception as e:
+            print(f"Failed to save material: {e}")
+
+
+# ===================================================================
 # Main Scene Editor Container
 # ===================================================================
 
@@ -2765,19 +3296,19 @@ class SceneEditorWidget(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0,0,0,0); outer.setSpacing(0)
 
+        # Central area: Toolbar + Stack
+        self.central_container = QWidget()
+        central_layout = QVBoxLayout(self.central_container)
+        central_layout.setContentsMargins(0,0,0,0); central_layout.setSpacing(0)
+        
         self.toolbar = SceneToolbar(self)
-        outer.addWidget(self.toolbar)
-
-        self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
-        self._splitter.setStyleSheet("QSplitter::handle { background: #3c3c3c; width: 2px; }")
-        outer.addWidget(self._splitter, 1)
-
-        self.explorer = SceneExplorerPanel(self)
-        self._splitter.addWidget(self.explorer)
+        central_layout.addWidget(self.toolbar)
 
         self._stack = QStackedWidget(self)
         self._stack.setStyleSheet("background: #1e1e1e;")
-        self._splitter.addWidget(self._stack)
+        central_layout.addWidget(self._stack, 1)
+        
+        outer.addWidget(self.central_container)
 
         self.viewport = SceneViewport(self)
         self._stack.addWidget(self.viewport)         # 0
@@ -2790,7 +3321,14 @@ class SceneEditorWidget(QWidget):
         self._ui_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._stack.addWidget(self._ui_placeholder)   # 2
 
-        self._splitter.setSizes([240, 800])
+        # Explorer and Properties are still created but not added to layout here; 
+        # MainWindow will put them in Docks.
+        self.explorer = SceneExplorerPanel(self)
+        
+        self.properties_stack = QStackedWidget()
+        self.properties = ObjectPropertiesPanel(self)
+        self.properties_stack.addWidget(self.properties)
+        self.properties_stack.setMinimumWidth(220)
 
         # FPS timer
         self._fps_timer = QTimer(self)
@@ -2807,7 +3345,6 @@ class SceneEditorWidget(QWidget):
         self._outliner_dirty = True
 
         # Connect signals
-        self.toolbar.mode_changed.connect(self._on_mode_changed)
         self.toolbar.grid_toggled.connect(self.viewport.set_show_grid)
         self.toolbar.snap_toggled.connect(self.viewport.set_snap_enabled)
         self.toolbar.grid_size_changed.connect(self.viewport.set_grid_size)
@@ -2822,14 +3359,19 @@ class SceneEditorWidget(QWidget):
 
         self.explorer.object_select_requested.connect(self._on_outliner_action)
         self.explorer.outliner_tree.reparent_requested.connect(self._on_reparent_requested)
-        self.explorer.properties.property_changed.connect(self._on_property_changed)
+        self.explorer.material_open_requested.connect(self._open_material_editor)
+        self.toolbar.mode_changed.connect(self._on_mode_changed)
+        self.properties.property_changed.connect(self._on_property_changed)
+
+        # Material editor (lazy)
+        self._material_editor = None
 
         # Set workspace root for asset scanning
+        from PyQt6.QtGui import QShortcut, QKeySequence
         try:
             ws = Path(__file__).resolve().parents[2]
             self.explorer.set_workspace_root(ws)
-        except Exception:
-            pass
+        except Exception: pass
 
         # Undo/Redo shortcuts
         QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self.undo)
@@ -2840,6 +3382,19 @@ class SceneEditorWidget(QWidget):
     def _on_property_changed(self):
         self.viewport.update()
         self._save_state()
+
+    def _open_material_editor(self, filepath):
+        """Open material editor in the property stack."""
+        if not self._material_editor:
+            self._material_editor = MaterialEditorPanel(self)
+            self._material_editor.material_saved.connect(lambda fp: self.explorer.refresh_assets())
+            self.properties_stack.addWidget(self._material_editor)
+        self._material_editor.load_material(filepath)
+        self.properties_stack.setCurrentWidget(self._material_editor)
+
+    def _show_properties_panel(self):
+        """Restore the object properties panel."""
+        self.properties_stack.setCurrentWidget(self.properties)
 
     def set_ui_builder(self, builder):
         self._ui_builder = builder
@@ -2889,6 +3444,8 @@ class SceneEditorWidget(QWidget):
         if len(self.undo_stack) > self.max_undo_steps:
             self.undo_stack.pop(0)
         self.redo_stack.clear()
+        self._outliner_dirty = True
+        self._refresh_outliner()
         
     def undo(self):
         if not self.undo_stack: return
@@ -2899,8 +3456,8 @@ class SceneEditorWidget(QWidget):
         self.viewport.scene_objects = [SceneObject.from_dict(d) for d in last_state]
         self.explorer.update_outliner(self.viewport.scene_objects)
         selected = [o for o in self.viewport.scene_objects if o.selected]
-        if selected: self.explorer.properties.set_object(selected[-1])
-        else: self.explorer.properties.set_object(None)
+        if selected: self.properties.set_object(selected[-1])
+        else: self.properties.set_object(None)
         self.viewport.update()
         self._is_undoing = False
         
@@ -2913,8 +3470,8 @@ class SceneEditorWidget(QWidget):
         self.viewport.scene_objects = [SceneObject.from_dict(d) for d in next_state]
         self.explorer.update_outliner(self.viewport.scene_objects)
         selected = [o for o in self.viewport.scene_objects if o.selected]
-        if selected: self.explorer.properties.set_object(selected[-1])
-        else: self.explorer.properties.set_object(None)
+        if selected: self.properties.set_object(selected[-1])
+        else: self.properties.set_object(None)
         self.viewport.update()
         self._is_undoing = False
 
@@ -2946,7 +3503,8 @@ class SceneEditorWidget(QWidget):
         self._refresh_outliner()
 
     def _on_object_selected(self, obj):
-        self.explorer.properties.set_object(obj)
+        self._show_properties_panel()
+        self.properties.set_object(obj)
         self._refresh_outliner()
 
     def _on_reparent_requested(self, child_id, parent_id):
@@ -2970,14 +3528,14 @@ class SceneEditorWidget(QWidget):
         for o in self.viewport.scene_objects:
             o.selected = (o.id == obj_id)
         selected = next((o for o in self.viewport.scene_objects if o.selected), None)
-        self.explorer.properties.set_object(selected)
+        self.properties.set_object(selected)
         self.viewport.update()
 
     def _on_object_moved(self):
         """Called after user finishes dragging an object — sync properties panel."""
         sel = [o for o in self.viewport.scene_objects if o.selected]
         if sel:
-            self.explorer.properties.refresh_from_object()
+            self.properties.refresh_from_object()
 
     def _refresh_outliner(self):
         if not hasattr(self, "_outliner_dirty") or not self._outliner_dirty:
@@ -3005,26 +3563,35 @@ class SceneEditorWidget(QWidget):
                         self._save_state(); self._refresh_outliner()
                     return
         elif action_str.startswith("delete:"):
+            sel = [o for o in self.viewport.scene_objects if o.selected]
             obj_id = action_str[7:]
-            self.viewport.scene_objects = [o for o in self.viewport.scene_objects if o.id != obj_id]
-            self.explorer.properties.set_object(None)
+            # If the deleted ID is part of selection, delete all
+            if any(o.id == obj_id for o in sel):
+                ids_to_del = {o.id for o in sel}
+                self.viewport.scene_objects = [o for o in self.viewport.scene_objects if o.id not in ids_to_del]
+            else:
+                self.viewport.scene_objects = [o for o in self.viewport.scene_objects if o.id != obj_id]
+            self.properties.set_object(None)
             self._save_state(); self._refresh_outliner(); return
         elif action_str.startswith("duplicate:"):
             obj_id = action_str[10:]
-            for obj in list(self.viewport.scene_objects):
-                if obj.id == obj_id:
-                    new_obj = SceneObject(obj.name + "_copy", obj.obj_type, list(obj.position), list(obj.rotation), list(obj.scale))
-                    new_obj.color = list(obj.color)
-                    new_obj.file_path = obj.file_path
-                    self.viewport.scene_objects.append(new_obj)
-                    for o in self.viewport.scene_objects: o.selected = False
-                    new_obj.selected = True
-                    self.explorer.properties.set_object(new_obj)
-                    self.viewport.update()
-                    self._outliner_dirty = True
-                    self._refresh_outliner()
-                    self._save_state()
-                    return
+            sel = [o for o in self.viewport.scene_objects if o.selected]
+            # Batch duplicate if the target is in the selection
+            targets = sel if any(o.id == obj_id for o in sel) else [o for o in self.viewport.scene_objects if o.id == obj_id]
+            
+            new_selection = []
+            for obj in list(targets):
+                new_obj = SceneObject(obj.name + "_copy", obj.obj_type, [v+1.0 for v in obj.position], list(obj.rotation), list(obj.scale))
+                new_obj.color = list(obj.color)
+                new_obj.file_path = obj.file_path
+                self.viewport.scene_objects.append(new_obj)
+                new_selection.append(new_obj)
+            
+            for o in self.viewport.scene_objects: o.selected = False
+            for o in new_selection: o.selected = True
+            if new_selection: self.properties.set_object(new_selection[-1])
+            self.viewport.update()
+            self._outliner_dirty = True; self._refresh_outliner(); self._save_state(); return
         elif action_str.startswith("reparent:"):
             _, child_id, parent_id = action_str.split(":", 2)
             c_obj = next((o for o in self.viewport.scene_objects if o.id == child_id), None)
@@ -3065,7 +3632,7 @@ class SceneEditorWidget(QWidget):
             for o in self.viewport.scene_objects:
                 o.selected = (o.id == action_str)
                 if o.selected:
-                    self.explorer.properties.set_object(o)
+                    self.properties.set_object(o)
             self.viewport.update(); self._refresh_outliner()
 
     def _update_cam_info(self):

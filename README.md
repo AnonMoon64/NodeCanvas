@@ -112,26 +112,28 @@ NodeCanvas V2 is a **fully functional visual programming environment** with the 
 
 - **Viewport Tab (Scene Editor)**
   - OpenGL-powered 2D/3D viewport embedded via `QOpenGLWidget`
-  - Mode selector: **Pure** (logic-only), **UI** (inline UI Builder), **2D** (orthographic), **3D** (perspective)
-  - **Unified UI Mode**: UI Builder embedded directly in the Viewport tab (no separate UI tab)
-  - **Scene Explorer Panel** (left sidebar):
-    - **Primitives**: Drag-and-drop Cube, Sphere, Cylinder, Plane, Cone (3D) or Rect, Circle, Sprite (2D)
-    - **Project Files**: Full folder tree of the project, filtered to show asset files (FBX/OBJ/GLTF for 3D, PNG/JPG/WebP for 2D)
-    - **Outliner**: Lists all scene objects with selection, rename (double-click), and context menu delete
-    - **Properties Panel**: Position/Rotation/Scale spinboxes with bidirectional sync (edit values updates object, dragging object updates values)
-  - **Transform Gizmos** (Premium UE5-Style & High Reliability):
-    - **Move**: RGB axis arrows with **planar handles** (XY, XZ, YZ). Uses stabilized intersection planes for jitter-free 3D translation.
-    - **Rotate**: Three colored rotation rings. Supports **Absolute Rigid Parenting** (children follow parent pivot and orientation with zero drift).
-    - **Scale**: Redesigned with **thick shafts and solid cubes**. Supports **Proportional Pivot-Scaling** and **Screen-Space Uniform Scale** handles.
-    - **Interactive Feedback (Bulletproof)**: Uses **Screen-Space Proximity Picking** (24px radius) ensuring handles are 100% effortless to grab from any angle or camera distance.
-    - **Initial State Snapshots**: Transformations use absolute snapshots from the start of drag, eliminating cumulative "spinning" or "exploding" artifacts.
-    - Gizmos scale proportionally to camera distance (constant screen size).
-  - **Object System**: RMB click to select, LMB drag to move/rotate/scale based on active tool, Delete key to remove.
-  - **Viewport Context Menu**: Right-click any object in the viewport to **Delete** or **Rename** it instantly.
-  - **Pixel-accurate drag**: Object movement uses ray-plane intersection (3D) and screen-to-world mapping (2D).
-  - **3D Mode**: Perspective camera with UE5-style fly (RMB + WASD/QE), MMB pan, scroll zoom
-  - **2D Mode**: Orthographic camera with pan and scroll zoom, XY grid
-  - Infinite adaptive grid, RGB axis gizmo, wireframe primitives with selection highlighting
+  - **Premium 3-Way Splitter Layout**: [Explorer | Viewport | Properties] structure matches professional DCC tools.
+  - **High-Fidelity Tabbed Modes**: **3D** (perspective), **2D** (orthographic), **Pure** (logic-only), and **UI** (inline UI Builder) integrated as consistent tabs.
+  - **Advanced Material System (PBR)**:
+    - Dedicated **Material Editor** panel for editing `.material` JSON files.
+    - Support for **Base Color**, **Roughness**, **Metallic**, and **Emissive** properties.
+    - **Presets**: High-quality presets (Plastic, Glass, Metal, Green Glow) for rapid prototyping.
+    - **Drag-and-Drop**: Drag `.material` files from the explorer directly onto objects in the viewport.
+  - **Explorer Panel** (left sidebar):
+    - **Primitives**: 3D (Cube, Sphere, Cylinder, Plane, Cone) and 2D (Rect, Circle, Sprite) drag-and-drop.
+    - **Project Files**: Full folder tree with asset filtering and **Create Material** context menu.
+    - **Outline**: Unified scene hierarchy with selection and reparenting support.
+  - **Properties Panel** (right sidebar):
+    - Dedicated transform section (Pos/Rot/Scale).
+    - **Inline Material Editor**: Quick access to material settings when an object is selected.
+  - **Transform Gizmos** (Premium UE5-Style):
+    - **Move**: RGB axis arrows with planar handles and stabilized translation.
+    - **Rotate**: Visual rotation rings with Absolute Rigid Parenting (no drift).
+    - **Scale**: Proportional scaling with screen-space uniform handles.
+    - **Screen-Space Proximity Picking**: Effortless grabbing of handles regardless of camera distance.
+  - **Navigation**: UE5-style fly camera (RMB + WASD), orbit, pan, and scroll-zoom.
+  - **Context Menus**: Right-click objects for Delete/Rename; right-click Explorer for Create Material.
+  - Pixel-accurate picking and ray-plane intersections for precise object manipulation.
 
 ### 📁 File Types
 
@@ -254,6 +256,16 @@ These modify UI widgets at runtime:
 5. Create `OnUIButtonPressed` nodes for each button
 6. Connect to `SetVariable` nodes to increment/decrement
 7. Run preview - buttons update the label!
+
+---
+
+### Examples: To be added
+
+- Platformer starter
+- RPG inventory starter
+- Calculator UI starter
+- Tower defense starter
+- Dialogue system starter
 
 ---
 

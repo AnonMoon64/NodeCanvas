@@ -35,10 +35,6 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QColorDialog,
-    QTextEdit,
-    QSplitter,
-    QFrame,
-    QSizePolicy,
     QPlainTextEdit,
     QTextBrowser,
     QGraphicsView,
@@ -2445,8 +2441,9 @@ class VariablePanelWidget(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("NodeCanvas")
-        self.resize(1200, 800)
+        self.setWindowTitle("NodeCanvas Professional")
+        self.setWindowIcon(QIcon(os.path.join(os.path.dirname(__file__), "images", "icon.ico")))
+        self.resize(1600, 1000)
 
         # ensure templates are loaded from disk (consistent registry)
         try:
@@ -2456,6 +2453,16 @@ class MainWindow(QMainWindow):
 
         # Create tab widget for main content
         self.tabs = QTabWidget()
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane { border: none; }
+            QTabBar::tab {
+                background: #2a2a2a; color: #888; padding: 8px 18px;
+                border: none; border-bottom: 2px solid transparent;
+                font-size: 12px; font-weight: bold;
+            }
+            QTabBar::tab:selected { color: #4fc3f7; border-bottom: 2px solid #4fc3f7; background: #1e1e1e; }
+            QTabBar::tab:hover { color: #ccc; background: #333; }
+        """)
         self.setCentralWidget(self.tabs)
         
         # Logic tab (formerly Canvas) - Node graph editor
@@ -2481,7 +2488,7 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
         toolbar = QToolBar("Main")
-        self.addToolBar(toolbar)
+        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, toolbar)
 
         save_act = QAction("Save", self)
         save_act.triggered.connect(self.save)
@@ -3702,24 +3709,30 @@ class MainWindow(QMainWindow):
 
         self.ui_props.property_changed.connect(update_item_visuals)
 
+        # --- Viewport Mode Docks ---
+        self.vp_explorer_dock = QDockWidget("Explorer", self)
+        self.vp_explorer_dock.setWidget(self.scene_editor.explorer)
+        self.vp_explorer_dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.vp_explorer_dock)
+        self.vp_explorer_dock.hide()
+
+        self.vp_props_dock = QDockWidget("Properties", self)
+        self.vp_props_dock.setWidget(self.scene_editor.properties_stack)
+        self.vp_props_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.vp_props_dock)
+        self.vp_props_dock.hide()
+
         # Group docks for switching (include chat dock in canvas mode)
         self.canvas_docks = [self.file_dock, self.chat_dock, self.var_dock]
+        self.viewport_docks = [self.vp_explorer_dock, self.vp_props_dock]
         self.ui_docks = [self.ui_palette_dock, self.ui_props_dock, self.screen_list_dock, self.widget_list_dock]
         self._viewport_ui_mode = False
 
     def _on_viewport_mode_changed(self, mode):
-        """Called when the Viewport tab's mode dropdown changes."""
+        """Called when the Viewport tab's mode changes."""
         self._viewport_ui_mode = (mode == 'UI')
-        # Show/hide UI docks based on Viewport mode
-        if self.tabs.currentIndex() == 1:
-            if self._viewport_ui_mode:
-                for d in self.canvas_docks:
-                    d.hide()
-                for d in self.ui_docks:
-                    d.show()
-            else:
-                for d in self.ui_docks:
-                    d.hide()
+        # Trigger dock update
+        self.on_tab_changed(self.tabs.currentIndex())
 
     def on_tab_changed(self, index):
         """Switch visible docks based on active tab"""
@@ -3732,26 +3745,25 @@ class MainWindow(QMainWindow):
             else:
                 self.scene_editor.on_tab_activated()
         
+        # Hide all context-specific docks first by default
+        for d in self.canvas_docks + self.ui_docks + self.viewport_docks:
+            d.hide()
+
         # Logic tab (0) - show canvas docks
         if index == 0:
-            for d in self.ui_docks:
-                d.hide()
             for d in self.canvas_docks:
                 d.show()
-        # Viewport tab (1) - show UI docks only if in UI mode
+        # Viewport tab (1) - show Viewport docks, or UI docks if in UI mode
         elif index == 1:
-            for d in self.canvas_docks:
-                d.hide()
-            if getattr(self, '_viewport_ui_mode', False):
+            if self._viewport_ui_mode:
                 for d in self.ui_docks:
                     d.show()
             else:
-                for d in self.ui_docks:
-                    d.hide()
-        # Anim tab (2) - hide all specialized docks
+                for d in self.viewport_docks:
+                    d.show()
+        # Anim tab (2) - specialized docks managed in anim module, or none for now
         elif index == 2:
-            for d in self.canvas_docks:
-                d.hide()
+            pass
             for d in self.ui_docks:
                 d.hide()
 
