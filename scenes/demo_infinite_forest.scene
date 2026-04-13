@@ -1,0 +1,92 @@
+{
+  "mode": "3D",
+  "camera_3d": {
+    "pos": [0.0, 25.0, 50.0],
+    "yaw": -90.0,
+    "pitch": -20.0,
+    "fov": 60.0
+  },
+  "objects": [
+    {
+      "name": "InfiniteForest",
+      "obj_type": "landscape",
+      "position": [0, 0, 0],
+      "rotation": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "visible": true,
+      "active": true,
+      "landscape_size_mode": "infinite",
+      "landscape_grid_radius": 2,
+      "landscape_chunk_size": 128.0,
+      "landscape_resolution": 32,
+      "landscape_height_scale": 45.0,
+      "landscape_seed": 42,
+      "landscape_spawn_enabled": true,
+      "landscape_noise_layers": [
+        {"type": "perlin", "amp": 1.0, "freq": 0.005, "octaves": 4, "persistence": 0.5, "lacunarity": 2.0, "weight": 1.0, "mode": "fbm", "exponent": 1.0}
+      ],
+      "landscape_biomes": [
+        {
+          "name": "Ocean", 
+          "height_range": [-1000.0, -2.0], 
+          "slope_range": [0, 1], 
+          "surface": {"color": [0.05, 0.1, 0.4, 1.0], "roughness": 0.1, "metallic": 0.0},
+          "spawns": []
+        },
+        {
+          "name": "Beach", 
+          "height_range": [-2.0, 1.0], 
+          "slope_range": [0, 0.2], 
+          "surface": {"color": [0.8, 0.7, 0.5, 1.0], "roughness": 0.9, "metallic": 0.0},
+          "spawns": []
+        },
+        {
+          "name": "Grassland", 
+          "height_range": [1.0, 15.0], 
+          "slope_range": [0, 0.4], 
+          "surface": {"color": [0.2, 0.5, 0.1, 1.0], "roughness": 0.8, "metallic": 0.0},
+          "spawns": [
+            {"assets": ["models/FBX/Bush_Common.fbx", "models/FBX/Bush_Common_Flowers.fbx"], "density": 0.15},
+            {"assets": ["models/FBX/Grass_Common_Tall.fbx"], "density": 0.2}
+          ]
+        },
+        {
+          "name": "Forest", 
+          "height_range": [15.0, 45.0], 
+          "slope_range": [0, 0.6], 
+          "surface": {"color": [0.1, 0.3, 0.1, 1.0], "roughness": 0.8, "metallic": 0.0},
+          "spawns": [
+            {"assets": ["models/FBX/CommonTree_1.fbx", "models/FBX/CommonTree_2.fbx"], "density": 0.1},
+            {"assets": ["models/FBX/Bush_Common.fbx"], "density": 0.05}
+          ]
+        },
+         {
+          "name": "Mountain", 
+          "height_range": [45.0, 1000.0], 
+          "slope_range": [0, 1.0], 
+          "surface": {"color": [0.4, 0.4, 0.4, 1.0], "roughness": 0.7, "metallic": 0.0},
+          "spawns": [
+             {"assets": ["models/FBX/Rock_Medium_1.fbx", "models/FBX/Rock_Medium_2.fbx"], "density": 0.1}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PlayerCam",
+      "obj_type": "camera",
+      "position": [0, 25, 50],
+      "rotation": [-20, 0, 0],
+      "visible": true,
+      "active": true
+    },
+    {
+       "name": "Sun",
+       "obj_type": "light_point",
+       "position": [100, 200, 100],
+       "color": [1.0, 0.9, 0.8, 1.0],
+       "intensity": 2.0,
+       "visible": true,
+       "active": true
+    }
+  ]
+}

@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
     QStackedWidget, QAbstractItemView, QMenu, QInputDialog,
     QScrollArea, QGridLayout, QGroupBox, QSlider, QColorDialog,
-    QFormLayout, QMainWindow, QFileDialog, QDialog, QMessageBox,
+    QFormLayout, QMainWindow, QFileDialog, QDialog, QMessageBox, QLayout,
 )
 from PyQt6.QtGui import (
     QColor, QPainter, QFont, QSurfaceFormat, QMouseEvent,
@@ -51,6 +51,8 @@ try:
     HAS_OPENGL = True
 except ImportError:
     HAS_OPENGL = False
+    
+from .procedural_ocean import render_ocean_gpu, init_ocean_gpu
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +75,7 @@ MATERIAL_PRESETS = {
     'Plastic':    {'base_color': [0.8, 0.8, 0.8, 1.0], 'roughness': 0.7, 'metallic': 0.0, 'emissive_color': [0.0, 0.0, 0.0, 1.0]},
     'Glass':      {'base_color': [0.9, 0.95, 1.0, 0.4], 'roughness': 0.1, 'metallic': 0.0, 'emissive_color': [0.0, 0.0, 0.0, 1.0]},
     'Metal':      {'base_color': [0.8, 0.8, 0.85, 1.0], 'roughness': 0.3, 'metallic': 1.0, 'emissive_color': [0.0, 0.0, 0.0, 1.0]},
+    'Water':      {'base_color': [0.0, 0.3, 0.6, 0.6], 'roughness': 0.05, 'metallic': 0.1, 'emissive_color': [0.0, 0.0, 0.0, 1.0]},
     'Green Glow': {'base_color': [0.1, 0.8, 0.2, 1.0], 'roughness': 0.5, 'metallic': 0.0, 'emissive_color': [0.1, 0.8, 0.2, 1.0]},
 }
 DEFAULT_MATERIAL = dict(MATERIAL_PRESETS['Plastic'])
@@ -184,7 +187,12 @@ class SceneObject:
         self.file_path = None
         self.parent_id = None
         self.children_ids = []
-        self.material = dict(DEFAULT_MATERIAL)
+        self.ocean_opacity = 0.6
+        if self.obj_type == 'ocean':
+            self.material = dict(MATERIAL_PRESETS['Water'])
+            self.material['preset'] = 'Water'
+        else:
+            self.material = dict(DEFAULT_MATERIAL)
         self.active = True
         self.visible = (obj_type not in ('camera', 'light_point', 'light_directional'))
         self.intensity = 1.0
@@ -202,6 +210,7 @@ class SceneObject:
         self.landscape_height_scale = 30.0
         self.landscape_ocean_level = 0.08
         self.landscape_ocean_flattening = 0.3
+        self.landscape_tip_smoothing = 0.1
         self.landscape_noise_layers = [
             # Layer 1: Base Terrain (LFM) - Dominate Round Hills
             {'type': 'perlin', 'mode': 'fbm', 'amp': 1.0, 'freq': 0.007, 'octaves': 4, 'persistence': 0.45, 'lacunarity': 2.0, 'weight': 1.2, 'exponent': 1.0},
@@ -253,6 +262,16 @@ class SceneObject:
         self.landscape_spawn_cols = 1
         self.landscape_spawn_spacing = [10.0, 10.0] 
         self.visualize_climate = False
+        # Ocean-specific properties (GPU Shader driven)
+        self.ocean_wave_speed = 5.0
+        self.ocean_wave_scale = 1.0
+        self.ocean_wave_steepness = 0.15
+        self.ocean_foam_amount = 0.1
+        self.ocean_fft_resolution = 128
+        self.ocean_wave_choppiness = 1.5
+        self.ocean_wave_intensity = 1.0
+        self.ocean_use_fft = True
+        self.opacity = 0.8
 
     def get_render_color(self):
         """Get the effective face color from the material base_color."""
@@ -283,8 +302,12 @@ class SceneObject:
             'landscape_height_scale': self.landscape_height_scale,
             'landscape_ocean_level': self.landscape_ocean_level,
             'landscape_ocean_flattening': self.landscape_ocean_flattening,
+            'landscape_tip_smoothing': self.landscape_tip_smoothing,
             'landscape_noise_layers': [dict(lyr) for lyr in self.landscape_noise_layers],
             'landscape_biomes': [dict(b) for b in self.landscape_biomes],
+            'landscape_chunk_size': self.landscape_chunk_size,
+            'landscape_grid_radius': self.landscape_grid_radius,
+            'landscape_resolution': self.landscape_resolution,
             'landscape_spawn_enabled': self.landscape_spawn_enabled,
             'landscape_spawn_rows': self.landscape_spawn_rows,
             'landscape_spawn_cols': self.landscape_spawn_cols,
@@ -292,6 +315,14 @@ class SceneObject:
             'visualize_climate': self.visualize_climate,
             'active': self.active,
             'is_procedural': self.is_procedural,
+            'ocean_wave_speed': self.ocean_wave_speed,
+            'ocean_wave_scale': self.ocean_wave_scale,
+            'ocean_wave_steepness': self.ocean_wave_steepness,
+            'ocean_foam_amount': self.ocean_foam_amount,
+            'ocean_fft_resolution': self.ocean_fft_resolution,
+            'ocean_wave_choppiness': self.ocean_wave_choppiness,
+            'ocean_wave_intensity': self.ocean_wave_intensity,
+            'ocean_use_fft': self.ocean_use_fft,
         }
 
     @staticmethod
@@ -316,6 +347,10 @@ class SceneObject:
         obj.landscape_height_scale = d.get('landscape_height_scale', 30.0)
         obj.landscape_ocean_level = d.get('landscape_ocean_level', 0.08)
         obj.landscape_ocean_flattening = d.get('landscape_ocean_flattening', 0.3)
+        obj.landscape_tip_smoothing = d.get('landscape_tip_smoothing', 0.1)
+        obj.landscape_chunk_size = d.get('landscape_chunk_size', 128.0)
+        obj.landscape_grid_radius = d.get('landscape_grid_radius', 1)
+        obj.landscape_resolution = d.get('landscape_resolution', 32)
         
         # Migration for Noise Layers
         if 'landscape_noise_layers' in d:
@@ -349,12 +384,13 @@ class SceneObject:
         # Apply strict requirements for default landscape setup if empty or generic
         if not d.get('landscape_biomes') or len(obj.landscape_biomes) == 1 and obj.landscape_biomes[0]['name'] == 'Default':
             obj.landscape_biomes = [
-                {'name': 'Ocean',     'height_range': [-1000.0, 0.1],  'slope_range': [0, 1], 'surface': {'color': [0.05, 0.15, 0.6, 1.0], 'roughness': 0.1, 'metallic': 0.0}, 'spawns': []},
-                {'name': 'Beach',     'height_range': [0.1, 0.15],    'slope_range': [0, 0.2], 'surface': {'color': [0.8, 0.7, 0.4, 1.0], 'roughness': 0.9, 'metallic': 0.0}, 'spawns': []},
-                {'name': 'Grassland', 'height_range': [0.15, 0.4],    'slope_range': [0, 0.3], 'surface': {'color': [0.2, 0.5, 0.1, 1.0], 'roughness': 0.8, 'metallic': 0.0}, 'spawns': []},
-                {'name': 'Forest',    'height_range': [0.4, 0.7],     'slope_range': [0, 0.5], 'surface': {'color': [0.1, 0.3, 0.1, 1.0], 'roughness': 0.8, 'metallic': 0.0}, 'spawns': []},
-                {'name': 'Mountain',  'height_range': [0.7, 1.2],     'slope_range': [0, 1.0], 'surface': {'color': [0.4, 0.3, 0.2, 1.0], 'roughness': 0.6, 'metallic': 0.0}, 'spawns': []},
-                {'name': 'Snow',      'height_range': [1.2, 5000.0],  'slope_range': [0, 1.0], 'surface': {'color': [0.95, 0.95, 1.0, 1.0], 'roughness': 0.9, 'metallic': 0.0}, 'spawns': []},
+                {'name': 'Deep Ocean', 'height_range': [-1000.0, -5.0],  'slope_range': [0, 1], 'surface': {'color': [0.05, 0.1, 0.4, 1.0], 'roughness': 0.1, 'metallic': 0.0}, 'spawns': []},
+                {'name': 'Ocean',      'height_range': [-5.0, -1.0],   'slope_range': [0, 1], 'surface': {'color': [0.1, 0.2, 0.6, 1.0], 'roughness': 0.1, 'metallic': 0.0},  'spawns': []},
+                {'name': 'Beach',      'height_range': [-1.0, 0.5],    'slope_range': [0, 0.2], 'surface': {'color': [0.8, 0.7, 0.4, 1.0], 'roughness': 0.9, 'metallic': 0.0}, 'spawns': []},
+                {'name': 'Grassland',  'height_range': [0.5, 5.0],     'slope_range': [0, 0.3], 'surface': {'color': [0.2, 0.5, 0.1, 1.0], 'roughness': 0.8, 'metallic': 0.0}, 'spawns': []},
+                {'name': 'Forest',     'height_range': [5.0, 15.0],    'slope_range': [0, 0.5], 'surface': {'color': [0.1, 0.3, 0.1, 1.0], 'roughness': 0.8, 'metallic': 0.0}, 'spawns': []},
+                {'name': 'Mountain',   'height_range': [15.0, 25.0],   'slope_range': [0, 1.0], 'surface': {'color': [0.4, 0.3, 0.2, 1.0], 'roughness': 0.6, 'metallic': 0.0}, 'spawns': []},
+                {'name': 'Snow',       'height_range': [25.0, 5000.0], 'slope_range': [0, 1.0], 'surface': {'color': [0.95, 0.95, 1.0, 1.0], 'roughness': 0.9, 'metallic': 0.0}, 'spawns': []},
             ]
         
         if not d.get('landscape_noise_layers'):
@@ -369,6 +405,15 @@ class SceneObject:
         obj.landscape_spawn_cols = d.get('landscape_spawn_cols', 1)
         obj.landscape_spawn_spacing = d.get('landscape_spawn_spacing', [10.0, 10.0])
         obj.visualize_climate = d.get('visualize_climate', False)
+        # Ocean properties
+        obj.ocean_wave_speed = d.get('ocean_wave_speed', 5.0)
+        obj.ocean_wave_scale = d.get('ocean_wave_scale', 1.0)
+        obj.ocean_wave_steepness = d.get('ocean_wave_steepness', 0.15)
+        obj.ocean_foam_amount = d.get('ocean_foam_amount', 0.1)
+        obj.ocean_fft_resolution = d.get('ocean_fft_resolution', 128)
+        obj.ocean_wave_choppiness = d.get('ocean_wave_choppiness', 1.5)
+        obj.ocean_wave_intensity = d.get('ocean_wave_intensity', 1.0)
+        obj.ocean_use_fft = d.get('ocean_use_fft', True)
         return obj
 
 
@@ -885,6 +930,45 @@ def _draw_2d_circle(radius=0.5, segments=32, color=OBJECT_COLOR, fill_color=OBJE
     glEnd(); glLineWidth(1.0)
 
 
+def _draw_billboard_bush(color=OBJECT_COLOR, fill_color=(0.2, 0.5, 0.1, 0.6)):
+    """Draws a 3-plane 'Triple-X' billboard for high-fidelity 3D volume."""
+    for i in range(3):
+        angle = i * 60.0
+        glPushMatrix()
+        glRotatef(angle, 0, 1, 0)
+        
+        # Fill
+        glColor4f(*fill_color)
+        glBegin(GL_QUADS)
+        glVertex3f(-0.5, 0, 0); glVertex3f(0.5, 0, 0); glVertex3f(0.5, 1.0, 0); glVertex3f(-0.5, 1.0, 0)
+        glEnd()
+        
+        # Outline
+        glDisable(GL_LIGHTING)
+        glColor4f(*color); glLineWidth(1.0)
+        glBegin(GL_LINES)
+        glVertex3f(-0.5, 0, 0); glVertex3f(0.5, 1.0, 0); glVertex3f(0.5, 0, 0); glVertex3f(-0.5, 1.0, 0)
+        glEnd()
+        glEnable(GL_LIGHTING)
+        
+        glPopMatrix()
+
+
+def _draw_billboard_tree(color=OBJECT_COLOR, fill_color=(0.15, 0.35, 0.1, 0.8)):
+    """Draws a stylized tree with a 3-plane bushy top."""
+    # Trunk (thicker)
+    glColor4f(0.4, 0.25, 0.15, 1.0); _draw_wireframe_cylinder(0.2, 1.0, color=color, fill_color=(0.4, 0.25, 0.15, 1.0))
+    # Canopy (Larger Triple-X)
+    glPushMatrix(); glTranslatef(0, 2.5, 0); glScalef(2.5, 4.0, 2.5)
+    _draw_billboard_bush(color, fill_color); glPopMatrix()
+
+
+def _draw_proxy_rock(color=OBJECT_COLOR, fill_color=(0.4, 0.4, 0.4, 0.7)):
+    """Draws a simplified rock placeholder."""
+    glPushMatrix(); glScalef(1.2, 0.7, 1.1)
+    _draw_wireframe_sphere(0.6, 6, 4, color, fill_color); glPopMatrix()
+
+
 # ===================================================================
 # Gizmo drawing helpers
 # ===================================================================
@@ -1195,6 +1279,9 @@ if QOpenGLWidget and HAS_OPENGL:
             self._current_fps = 0
             # Debug flag to print camera/light info once at startup
             self._debug_frame_logged = False
+            self._elapsed_time = 0.0 # High-precision relative time for shaders
+            self._mode = "3D"
+            self.is_play_mode = False
 
             self.grid_size = 1.0
             self.grid_extent = 200
@@ -1208,6 +1295,10 @@ if QOpenGLWidget and HAS_OPENGL:
             self._active_gizmo_part = None
             self._drag_obj_initial_rot = None
             self._drag_obj_initial_scale = None
+            
+            # Performance optimization: Throttle vegetation spawning during exploration
+            self._spawn_frame_skip = 0
+            self._last_spawn_cam_pos = [0, 0, 0]
 
         def set_mode(self, mode: str):
             self._mode = mode; self.update()
@@ -1287,12 +1378,15 @@ if QOpenGLWidget and HAS_OPENGL:
                 self._current_fps = self._frame_count
                 self.fps_updated.emit(self._current_fps)
                 self._frame_count = 0; self._fps_accum = 0.0
+
             if self._mode == "3D" and self._rmb:
                 fwd = (1 if Qt.Key.Key_W in self._keys else 0) - (1 if Qt.Key.Key_S in self._keys else 0)
                 rgt = (1 if Qt.Key.Key_D in self._keys else 0) - (1 if Qt.Key.Key_A in self._keys else 0)
                 upd = (1 if Qt.Key.Key_E in self._keys else 0) - (1 if Qt.Key.Key_Q in self._keys else 0)
                 if fwd or rgt or upd:
                     self._cam3d.move(fwd, rgt, upd, dt)
+
+            self._elapsed_time += max(0.0, min(dt, 0.1)) # Update clock, clamp spikes to 100ms
             self.update()
 
         # ---- OpenGL ----
@@ -1300,6 +1394,12 @@ if QOpenGLWidget and HAS_OPENGL:
             glClearColor(*BG_COLOR)
             glEnable(GL_DEPTH_TEST); glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            
+            # Initialize specialized systems
+            try:
+                init_ocean_gpu()
+            except Exception as e:
+                print(f"[GL INIT ERROR] Failed to initialize GPU Ocean: {e}")
             glEnable(GL_LINE_SMOOTH); glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)
             glEnable(GL_MULTISAMPLE)
             
@@ -1310,6 +1410,9 @@ if QOpenGLWidget and HAS_OPENGL:
             glEnable(GL_NORMALIZE)
             glShadeModel(GL_SMOOTH)
             self._setup_scene_lighting()
+            
+            # Auto-start the high-precision animation loop once the context is live
+            self.start_render_loop()
 
         def resizeGL(self, w, h):
             glViewport(0, 0, w, h)
@@ -1644,10 +1747,20 @@ if QOpenGLWidget and HAS_OPENGL:
                 else:
                     _draw_wireframe_cone(0.5, 1.0, color=color, fill_color=fill)
             elif t == 'mesh':
-                if material_override:
-                    _call_draw(_draw_wireframe_cube, 1,1,1, color, fill)
+                # Smart Visualizer: Use representative billboards for vegetation and generic assets
+                l_name = (obj.name + "_" + (obj.file_path or "")).lower()
+                if "bush" in l_name:
+                    if material_override: _call_draw(_draw_billboard_bush, color, fill)
+                    else: _draw_billboard_bush(color, fill)
+                elif "tree" in l_name:
+                    if material_override: _call_draw(_draw_billboard_tree, color, fill)
+                    else: _draw_billboard_tree(color, fill)
+                elif "rock" in l_name or "stone" in l_name:
+                    if material_override: _call_draw(_draw_proxy_rock, color, fill)
+                    else: _draw_proxy_rock(color, fill)
                 else:
-                    _draw_wireframe_cube(1,1,1, color, fill)
+                    if material_override: _call_draw(_draw_wireframe_cube, 1, 1, 1, color, fill)
+                    else: _draw_wireframe_cube(1, 1, 1, color, fill)
             elif t == 'logic':
                  # Draw a diamond for logic component
                  glDisable(GL_LIGHTING)
@@ -1690,9 +1803,28 @@ if QOpenGLWidget and HAS_OPENGL:
                      from .procedural_system import draw_landscape_3d, ensure_spawned
                      draw_landscape_3d(obj, self)
                      if getattr(obj, 'landscape_spawn_enabled', False):
-                         ensure_spawned(self, obj, cam_pos=getattr(self, '_cam3d', None).pos if hasattr(self, '_cam3d') else None)
+                         # LIQUID SMOOTH: Only check spawning logic every 15 frames or if the camera moved significantly.
+                         # This eliminates the 'micro-stutter' when moving across chunks.
+                         self._spawn_frame_skip += 1
+                         curr_pos = getattr(self, '_cam3d', None).pos if hasattr(self, '_cam3d') else [0,0,0]
+                         dist_sq = sum((a-b)**2 for a,b in zip(curr_pos, self._last_spawn_cam_pos))
+                         
+                         if self._spawn_frame_skip >= 15 or dist_sq > 4.0:
+                             ensure_spawned(self, obj, cam_pos=curr_pos)
+                             self._spawn_frame_skip = 0
+                             self._last_spawn_cam_pos = list(curr_pos)
                  except Exception as e:
+                     import traceback
+                     traceback.print_exc()
                      print(f"[LANDSCAPE ERROR] {e}")
+
+            elif t == 'ocean':
+                 try:
+                     # render_ocean_gpu imported at top of file
+                     cam_pos = getattr(self, '_cam3d', None).pos if hasattr(self, '_cam3d') else [0,0,0]
+                     render_ocean_gpu(cam_pos, obj, self._elapsed_time)
+                 except Exception as e:
+                     print(f"[OCEAN ERROR] {e}")
 
             elif t == 'camera':
                  glDisable(GL_LIGHTING)
@@ -2783,7 +2915,9 @@ if QOpenGLWidget and HAS_OPENGL:
                         self.state_changed.emit()
                         self.update()
                     except Exception as e:
-                        print(f"Failed to load material: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        print(f"[LANDSCAPE ERROR] {e}")
                 event.acceptProposedAction()
                 return
             # Calculate world coords first
@@ -3043,10 +3177,89 @@ class MaterialSlotWidget(QWidget):
 # Object Properties Panel
 # ===================================================================
 
-class ObjectPropertiesPanel(QWidget):
-    """Shows position/rotation/scale spinboxes for the selected object."""
+# ===================================================================
+# Property Editor Helpers
+# ===================================================================
 
+class PropertySlider(QWidget):
+    """A synchronized Slider + SpinBox for precise control."""
+    valueChanged = pyqtSignal(float)
+
+    def __init__(self, value=0.0, vmin=0.0, vmax=1.0, step=0.01, decimals=2, parent=None):
+        super().__init__(parent)
+        self._updating = False
+        self.vmin, self.vmax = vmin, vmax
+        self.decimals = decimals
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(6)
+        
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(0, 1000)
+        self.slider.setStyleSheet("""
+            QSlider::groove:horizontal { background: #333; height: 6px; border-radius: 3px; }
+            QSlider::handle:horizontal { background: #4fc3f7; width: 14px; margin: -4px 0; border-radius: 7px; }
+        """)
+        
+        self.spin = QDoubleSpinBox()
+        self.spin.setRange(vmin, vmax); self.spin.setDecimals(decimals); self.spin.setSingleStep(step)
+        self.spin.setFixedWidth(65); self.spin.setStyleSheet(SPIN_SS)
+        
+        layout.addWidget(self.slider, 1)
+        layout.addWidget(self.spin)
+        
+        self.slider.valueChanged.connect(self._on_slider_changed)
+        self.spin.valueChanged.connect(self._on_spin_changed)
+        self.setValue(value)
+
+    def setValue(self, val):
+        if self._updating: return
+        self._updating = True
+        self.spin.setValue(val)
+        s_val = int((val - self.vmin) / (self.vmax - self.vmin) * 1000) if self.vmax > self.vmin else 0
+        self.slider.setValue(s_val)
+        self._updating = False
+
+    def value(self):
+        return self.spin.value()
+
+    def _on_slider_changed(self, ival):
+        if self._updating: return
+        self._updating = True
+        val = self.vmin + (ival / 1000.0) * (self.vmax - self.vmin)
+        self.spin.setValue(val)
+        self.valueChanged.emit(val)
+        self._updating = False
+
+    def _on_spin_changed(self, fval):
+        if self._updating: return
+        self._updating = True
+        s_val = int((fval - self.vmin) / (self.vmax - self.vmin) * 1000) if self.vmax > self.vmin else 0
+        self.slider.setValue(s_val)
+        self.valueChanged.emit(fval)
+        self._updating = False
+
+class ObjectPropertiesPanel(QWidget):
+    """The Right-side properties inspector with a unified layout."""
+    
     property_changed = pyqtSignal()   # emitted when user edits a value
+
+    def _add_property_row(self, layout, label_text, widget, tooltip=None):
+        """Helper to add a standard property row with consistent spacing."""
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        lbl = QLabel(label_text)
+        lbl.setFixedWidth(90) # Fixed label width to prevent overlapping
+        lbl.setStyleSheet("color: #aaa; font-size: 11px;")
+        if tooltip: lbl.setToolTip(tooltip)
+        row.addWidget(lbl)
+        
+        if isinstance(widget, QLayout):
+            row.addLayout(widget, 1)
+        else:
+            row.addWidget(widget, 1)
+            
+        layout.addLayout(row)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -3124,90 +3337,48 @@ class ObjectPropertiesPanel(QWidget):
         mat_group = QGroupBox("Material")
         mat_group.setStyleSheet(PROPS_SS)
         mg = QVBoxLayout(mat_group)
-        mg.setContentsMargins(8,6,8,6); mg.setSpacing(6)
+        mg.setContentsMargins(10, 14, 10, 10); mg.setSpacing(6)
 
         # Preset dropdown
-        preset_row = QHBoxLayout()
-        preset_lbl = QLabel("Preset")
-        preset_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
-        preset_row.addWidget(preset_lbl)
         self._mat_preset = QComboBox()
         self._mat_preset.addItems(['Plastic', 'Glass', 'Metal', 'Green Glow', 'Custom'])
         self._mat_preset.setStyleSheet(COMBO_SS)
         self._mat_preset.currentTextChanged.connect(self._on_mat_preset_changed)
-        preset_row.addWidget(self._mat_preset, 1)
-        mg.addLayout(preset_row)
+        self._add_property_row(mg, "Preset", self._mat_preset)
 
-        # Material Slot (Drag & Drop)
-        slot_row = QHBoxLayout()
-        slot_lbl = QLabel("Material")
-        slot_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
-        slot_row.addWidget(slot_lbl)
+        # Material Slot
         self._mat_slot = MaterialSlotWidget()
         self._mat_slot.material_dropped.connect(self._on_material_slot_dropped)
         self._mat_slot.btn.clicked.connect(self._on_mat_slot_btn_clicked)
-        slot_row.addWidget(self._mat_slot, 1)
-        mg.addLayout(slot_row)
+        self._add_property_row(mg, "Asset", self._mat_slot)
 
-        # Base Color button
-        bc_row = QHBoxLayout()
-        bc_lbl = QLabel("Base Color")
-        bc_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
-        bc_row.addWidget(bc_lbl)
+        # Base Color
+        cl_row = QHBoxLayout()
         self._base_color_btn = QPushButton()
         self._base_color_btn.setFixedSize(60, 20)
         self._base_color_btn.setStyleSheet("background: #ccc; border: 1px solid #555; border-radius: 3px;")
         self._base_color_btn.clicked.connect(self._pick_base_color)
-        bc_row.addWidget(self._base_color_btn)
-        mg.addLayout(bc_row)
+        cl_row.addWidget(self._base_color_btn); cl_row.addStretch()
+        self._add_property_row(mg, "Base Color", cl_row)
 
-        # Roughness slider
-        rough_row = QHBoxLayout()
-        rough_lbl = QLabel("Roughness")
-        rough_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
-        rough_row.addWidget(rough_lbl)
-        self._roughness_slider = QSlider(Qt.Orientation.Horizontal)
-        self._roughness_slider.setRange(0, 100)
-        self._roughness_slider.setValue(70)
-        self._roughness_slider.setStyleSheet("QSlider::groove:horizontal{background:#333;height:6px;border-radius:3px;}QSlider::handle:horizontal{background:#4fc3f7;width:14px;margin:-4px 0;border-radius:7px;}")
+        # Roughness & Metallic
+        self._roughness_slider = PropertySlider(0.7, 0.0, 1.0)
         self._roughness_slider.valueChanged.connect(self._on_roughness_changed)
-        rough_row.addWidget(self._roughness_slider, 1)
-        self._roughness_val = QLabel("0.70")
-        self._roughness_val.setFixedWidth(32)
-        self._roughness_val.setStyleSheet("color: #ccc; font-size: 10px;")
-        rough_row.addWidget(self._roughness_val)
-        mg.addLayout(rough_row)
+        self._add_property_row(mg, "Roughness", self._roughness_slider)
 
-        # Metallic slider
-        met_row = QHBoxLayout()
-        met_lbl = QLabel("Metallic")
-        met_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
-        met_row.addWidget(met_lbl)
-        self._metallic_slider = QSlider(Qt.Orientation.Horizontal)
-        self._metallic_slider.setRange(0, 100)
-        self._metallic_slider.setValue(0)
-        self._metallic_slider.setStyleSheet(self._roughness_slider.styleSheet())
+        self._metallic_slider = PropertySlider(0.0, 0.0, 1.0)
         self._metallic_slider.valueChanged.connect(self._on_metallic_changed)
-        met_row.addWidget(self._metallic_slider, 1)
-        self._metallic_val = QLabel("0.00")
-        self._metallic_val.setFixedWidth(32)
-        self._metallic_val.setStyleSheet("color: #ccc; font-size: 10px;")
-        met_row.addWidget(self._metallic_val)
-        mg.addLayout(met_row)
+        self._add_property_row(mg, "Metallic", self._metallic_slider)
 
-        # Emissive Color button
-        ec_row = QHBoxLayout()
-        ec_lbl = QLabel("Emissive")
-        ec_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
-        ec_row.addWidget(ec_lbl)
+        # Emissive
+        em_row = QHBoxLayout()
         self._emissive_btn = QPushButton()
         self._emissive_btn.setFixedSize(60, 20)
         self._emissive_btn.setStyleSheet("background: #000; border: 1px solid #555; border-radius: 3px;")
         self._emissive_btn.clicked.connect(self._pick_emissive_color)
-        ec_row.addWidget(self._emissive_btn)
-        mg.addLayout(ec_row)
+        em_row.addWidget(self._emissive_btn); em_row.addStretch()
+        self._add_property_row(mg, "Emissive", em_row)
 
-        # Material file label
         self._mat_file_label = QLabel("")
         self._mat_file_label.setStyleSheet("color: #666; font-size: 10px; font-style: italic;")
         mg.addWidget(self._mat_file_label)
@@ -3259,12 +3430,10 @@ class ObjectPropertiesPanel(QWidget):
         self._visualize_climate_cb.toggled.connect(self._on_visualize_climate_toggled)
         climate_row.addWidget(self._visualize_climate_cb)
         lg.addLayout(climate_row)
-
-        # Streaming & Chunking Settings
         self.chunk_widget = QWidget()
         chunk_h = QHBoxLayout(self.chunk_widget); chunk_h.setContentsMargins(0,0,0,0)
         self._land_chunk_size = QComboBox()
-        self._land_chunk_size.addItems(["64", "128", "256"])
+        self._land_chunk_size.addItems(["32", "64", "128", "256"])
         self._land_chunk_size.setStyleSheet(COMBO_SS)
         self._land_chunk_size.currentTextChanged.connect(lambda v: self.update_obj_prop('landscape_chunk_size', int(v)))
         
@@ -3272,119 +3441,161 @@ class ObjectPropertiesPanel(QWidget):
         self._land_grid_radius.setRange(1, 15); self._land_grid_radius.setStyleSheet(SPIN_SS)
         self._land_grid_radius.valueChanged.connect(lambda v: self.update_obj_prop('landscape_grid_radius', v))
         
-        chunk_h.addWidget(QLabel("Chunk size")); chunk_h.addWidget(self._land_chunk_size)
-        chunk_h.addWidget(QLabel("Radius")); chunk_h.addWidget(self._land_grid_radius)
-        lg.addWidget(self.chunk_widget)
-        # Resolution (Detail Level)
-        res_row = QHBoxLayout()
-        res_row.addWidget(QLabel("Detail Level"))
+        chunk_h.addWidget(self._land_chunk_size); chunk_h.addWidget(QLabel("Radius")); chunk_h.addWidget(self._land_grid_radius)
+        self._add_property_row(lg, "Streaming", self.chunk_widget)
+
+        # Detail Level
         self._land_res = QComboBox()
         self._land_res.addItems(["Low (16)", "Medium (32)", "High (64)", "Very High (128)"])
-        self._land_res.setCurrentText("Medium (32)")
         self._land_res.setStyleSheet(COMBO_SS)
         self._land_res.currentTextChanged.connect(self._on_res_changed)
-        res_row.addWidget(self._land_res)
-        lg.addLayout(res_row)
+        self._add_property_row(lg, "LOD Detail", self._land_res)
         
-        # Ocean Settings
-        ocean_row = QHBoxLayout()
-        ocean_row.addWidget(QLabel("Ocean Level"))
-        self._land_ocean_level = QDoubleSpinBox()
-        self._land_ocean_level.setRange(-1.0, 1.0); self._land_ocean_level.setSingleStep(0.01)
-        self._land_ocean_level.setStyleSheet(SPIN_SS)
+        # Ocean & Peaks
+        self._land_ocean_level = PropertySlider(0.08, -1.0, 1.0)
         self._land_ocean_level.valueChanged.connect(lambda v: self.update_obj_prop('landscape_ocean_level', v))
-        ocean_row.addWidget(self._land_ocean_level)
+        self._add_property_row(lg, "Ocean lvl", self._land_ocean_level)
         
-        ocean_row.addWidget(QLabel("Flatten"))
-        self._land_ocean_flat = QDoubleSpinBox()
-        self._land_ocean_flat.setRange(0.0, 1.0); self._land_ocean_flat.setSingleStep(0.05)
-        self._land_ocean_flat.setStyleSheet(SPIN_SS)
+        self._land_ocean_flat = PropertySlider(0.3, 0.0, 1.0)
         self._land_ocean_flat.valueChanged.connect(lambda v: self.update_obj_prop('landscape_ocean_flattening', v))
-        ocean_row.addWidget(self._land_ocean_flat)
-        lg.addLayout(ocean_row)
+        self._add_property_row(lg, "Coast Flat", self._land_ocean_flat)
+
+        self._land_tip_smoothing = PropertySlider(0.1, 0.0, 1.0)
+        self._land_tip_smoothing.valueChanged.connect(lambda v: self.update_obj_prop('landscape_tip_smoothing', v))
+        self._add_property_row(lg, "Peak Smooth", self._land_tip_smoothing)
 
         # Noise Layers
-        lg.addWidget(QLabel("Noise Layers"))
         self._noise_layers_list = QListWidget()
-        self._noise_layers_list.setFixedHeight(60)
-        self._noise_layers_list.setStyleSheet(LIST_SS)
+        self._noise_layers_list.setFixedHeight(70); self._noise_layers_list.setStyleSheet(LIST_SS)
         lg.addWidget(self._noise_layers_list)
         nl_btns = QHBoxLayout()
-        add_nl = QPushButton("Add Layer"); add_nl.setStyleSheet(BTN_SS); add_nl.clicked.connect(self._on_noise_layer_add)
-        rem_nl = QPushButton("Remove"); rem_nl.setStyleSheet(BTN_SS); rem_nl.clicked.connect(self._on_noise_layer_remove)
-        edit_nl = QPushButton("Edit Data"); edit_nl.setStyleSheet(BTN_SS); edit_nl.clicked.connect(self._on_noise_layer_edit)
+        add_nl = QPushButton("Add"); add_nl.setStyleSheet(BTN_SS); add_nl.clicked.connect(self._on_noise_layer_add)
+        rem_nl = QPushButton("Rem"); rem_nl.setStyleSheet(BTN_SS); rem_nl.clicked.connect(self._on_noise_layer_remove)
+        edit_nl = QPushButton("Edit"); edit_nl.setStyleSheet(BTN_SS); edit_nl.clicked.connect(self._on_noise_layer_edit)
         nl_btns.addWidget(add_nl); nl_btns.addWidget(rem_nl); nl_btns.addWidget(edit_nl)
         lg.addLayout(nl_btns)
 
         # Biomes
-        lg.addWidget(QLabel("Biomes & Biome Spawns"))
+        lg.addWidget(QLabel("Biomes & Surface"))
         self._biomes_list = QListWidget()
-        self._biomes_list.setFixedHeight(60)
-        self._biomes_list.setStyleSheet(LIST_SS)
+        self._biomes_list.setFixedHeight(70); self._biomes_list.setStyleSheet(LIST_SS)
         lg.addWidget(self._biomes_list)
         bm_btns = QHBoxLayout()
-        add_bm = QPushButton("Add Biome"); add_bm.setStyleSheet(BTN_SS); add_bm.clicked.connect(self._on_biome_add)
-        rem_bm = QPushButton("Remove"); rem_bm.setStyleSheet(BTN_SS); rem_bm.clicked.connect(self._on_biome_remove)
-        edit_bm = QPushButton("Edit Structure"); edit_bm.setStyleSheet(BTN_SS); edit_bm.clicked.connect(self._on_biome_edit)
+        add_bm = QPushButton("Add"); add_bm.setStyleSheet(BTN_SS); add_bm.clicked.connect(self._on_biome_add)
+        rem_bm = QPushButton("Rem"); rem_bm.setStyleSheet(BTN_SS); rem_bm.clicked.connect(self._on_biome_remove)
+        edit_bm = QPushButton("Edit"); edit_bm.setStyleSheet(BTN_SS); edit_bm.clicked.connect(self._on_biome_edit)
         bm_btns.addWidget(add_bm); bm_btns.addWidget(rem_bm); bm_btns.addWidget(edit_bm)
         lg.addLayout(bm_btns)
 
         # Spawning Control
-        self._spawn_enabled = QCheckBox("Enable Spawning")
-        self._spawn_enabled.setStyleSheet("color: #ccc; font-size: 11px;")
+        self._spawn_enabled = QCheckBox("Enable Spawning System")
+        self._spawn_enabled.setStyleSheet("color: #4fc3f7; font-size: 11px; font-weight: bold;")
         self._spawn_enabled.toggled.connect(self._on_spawn_enabled_changed)
         lg.addWidget(self._spawn_enabled)
 
         self.spawn_grid_widget = QWidget()
         sg = QHBoxLayout(self.spawn_grid_widget); sg.setContentsMargins(0,0,0,0)
-        self._spawn_rows = QSpinBox(); self._spawn_rows.setRange(1,500); self._spawn_rows.valueChanged.connect(self._on_spawn_counts_changed)
-        self._spawn_cols = QSpinBox(); self._spawn_cols.setRange(1,500); self._spawn_cols.valueChanged.connect(self._on_spawn_counts_changed)
-        self._spawn_spacing_x = QDoubleSpinBox(); self._spawn_spacing_x.setRange(0.01, 1000); self._spawn_spacing_x.valueChanged.connect(self._on_spawn_spacing_changed)
-        self._spawn_spacing_z = QDoubleSpinBox(); self._spawn_spacing_z.setRange(0.01, 1000); self._spawn_spacing_z.valueChanged.connect(self._on_spawn_spacing_changed)
+        self._spawn_rows = QSpinBox(); self._spawn_rows.setRange(1,500); self._spawn_rows.setStyleSheet(SPIN_SS)
+        self._spawn_cols = QSpinBox(); self._spawn_cols.setRange(1,500); self._spawn_cols.setStyleSheet(SPIN_SS)
+        self._spawn_spacing_x = QDoubleSpinBox(); self._spawn_spacing_x.setRange(0.1, 1000); self._spawn_spacing_x.setStyleSheet(SPIN_SS)
+        self._spawn_spacing_z = QDoubleSpinBox(); self._spawn_spacing_z.setRange(0.1, 1000); self._spawn_spacing_z.setStyleSheet(SPIN_SS)
+        self._spawn_rows.valueChanged.connect(self._on_spawn_counts_changed)
+        self._spawn_cols.valueChanged.connect(self._on_spawn_counts_changed)
+        self._spawn_spacing_x.valueChanged.connect(self._on_spawn_spacing_changed)
+        self._spawn_spacing_z.valueChanged.connect(self._on_spawn_spacing_changed)
+        
         sg.addWidget(QLabel("R")); sg.addWidget(self._spawn_rows)
         sg.addWidget(QLabel("C")); sg.addWidget(self._spawn_cols)
-        sg.addWidget(self._spawn_spacing_x); sg.addWidget(QLabel("x")); sg.addWidget(self._spawn_spacing_z)
+        sg.addWidget(QLabel("Gap")); sg.addWidget(self._spawn_spacing_x)
         lg.addWidget(self.spawn_grid_widget)
 
         layout.addWidget(self.land_group)
         self._content_widgets.append(self.land_group)
         
-        # Ensure minimum width to prevent jumping
-        self.setMinimumWidth(260)
+        self.setMinimumWidth(280)
 
-        # ---- Component Section (Lights/Camera/Logic) ----
+        # ---- Component Section ----
         self.comp_group = QGroupBox("Component Properties")
         self.comp_group.setStyleSheet(PROPS_SS)
-        cg = QFormLayout(self.comp_group)
-        cg.setContentsMargins(8,6,8,6); cg.setSpacing(6)
+        cg = QVBoxLayout(self.comp_group)
+        cg.setContentsMargins(10, 14, 10, 10); cg.setSpacing(6)
         
-        self.active_check = QCheckBox("Active")
+        self.active_check = QCheckBox("Active / Simulate")
         self.active_check.setStyleSheet("color: #ccc; font-size: 11px;")
         self.active_check.toggled.connect(self._on_active_changed)
-        cg.addRow(self.active_check)
+        cg.addWidget(self.active_check)
         
-        self.visible_check = QCheckBox("Visible")
+        self.visible_check = QCheckBox("Visible in Viewport")
         self.visible_check.setStyleSheet("color: #ccc; font-size: 11px;")
         self.visible_check.toggled.connect(self._on_visible_changed)
-        cg.addRow(self.visible_check)
+        cg.addWidget(self.visible_check)
         
-        self.intensity_spin = QDoubleSpinBox()
-        self.intensity_spin.setRange(0, 1000); self.intensity_spin.setSingleStep(0.5); self.intensity_spin.setStyleSheet(SPIN_SS)
+        self.intensity_spin = PropertySlider(1.0, 0.0, 1000.0, step=1.0)
         self.intensity_spin.valueChanged.connect(self._on_intensity_changed)
-        cg.addRow("Intensity", self.intensity_spin)
+        self._add_property_row(cg, "Intensity", self.intensity_spin)
         
-        self.range_spin = QDoubleSpinBox()
-        self.range_spin.setRange(0.1, 1000); self.range_spin.setSingleStep(1.0); self.range_spin.setStyleSheet(SPIN_SS)
+        self.range_spin = PropertySlider(10.0, 0.1, 2000.0, step=1.0)
         self.range_spin.valueChanged.connect(self._on_range_changed)
-        cg.addRow("Range", self.range_spin)
+        self._add_property_row(cg, "Range/Radius", self.range_spin)
         
-        self.fov_spin = QDoubleSpinBox()
-        self.fov_spin.setRange(1, 179); self.fov_spin.setSingleStep(1.0); self.fov_spin.setStyleSheet(SPIN_SS)
+        self.fov_spin = PropertySlider(60.0, 1.0, 170.0, step=1.0)
         self.fov_spin.valueChanged.connect(self._on_fov_changed)
-        cg.addRow("FOV", self.fov_spin)
+        self._add_property_row(cg, "Field of View", self.fov_spin)
         
         layout.addWidget(self.comp_group)
         self._content_widgets.append(self.comp_group)
+
+        # ---- Ocean Section (GPU Waves) ----
+        self.ocean_group = QGroupBox("Ocean (GPU Waves)")
+        self.ocean_group.setStyleSheet(PROPS_SS)
+        og = QVBoxLayout(self.ocean_group)
+        og.setContentsMargins(10, 14, 10, 10); og.setSpacing(8)
+        
+        self._ocean_use_fft = QCheckBox("Enable FFT Simulation")
+        self._ocean_use_fft.setStyleSheet("color: #eee; font-size: 11px;")
+        self._ocean_use_fft.toggled.connect(lambda v: self.update_obj_prop('ocean_use_fft', v))
+        og.addWidget(self._ocean_use_fft)
+        
+        # Wave Parameters
+        self._ocean_scale = PropertySlider(1.0, 0.1, 10.0)
+        self._ocean_scale.valueChanged.connect(lambda v: self.update_obj_prop('ocean_wave_scale', v))
+        self._add_property_row(og, "Wave Scale", self._ocean_scale, "Overall size of the swells")
+
+        self._ocean_speed = PropertySlider(5.0, 0.0, 20.0)
+        self._ocean_speed.valueChanged.connect(lambda v: self.update_obj_prop('ocean_wave_speed', v))
+        self._add_property_row(og, "Wave Speed", self._ocean_speed, "Speed of the wave animation")
+
+        self._ocean_steepness = PropertySlider(0.15, 0.0, 1.0)
+        self._ocean_steepness.valueChanged.connect(lambda v: self.update_obj_prop('ocean_wave_steepness', v))
+        self._add_property_row(og, "Steepness", self._ocean_steepness, "Peakiness of the waves (Gerstner)")
+
+        self._ocean_foam = PropertySlider(0.1, 0.0, 2.0)
+        self._ocean_foam.valueChanged.connect(lambda v: self.update_obj_prop('ocean_foam_amount', v))
+        self._add_property_row(og, "Foam Amount", self._ocean_foam, "Intensity of crest foam")
+
+        self._ocean_choppiness = PropertySlider(1.5, 0.0, 5.0)
+        self._ocean_choppiness.valueChanged.connect(lambda v: self.update_obj_prop('ocean_wave_choppiness', v))
+        self._add_property_row(og, "Choppiness", self._ocean_choppiness, "Pitch/Sharpness of wave peaks (FFT displacement)")
+
+        self._ocean_wave_intensity = PropertySlider(1.0, 0.1, 10.0, step=0.1)
+        self._ocean_wave_intensity.valueChanged.connect(lambda v: self.update_obj_prop('ocean_wave_intensity', v))
+        self._add_property_row(og, "Wave Intensity", self._ocean_wave_intensity, "Overall height multiplier for FFT waves")
+
+        self._ocean_fft_res = QComboBox()
+        self._ocean_fft_res.addItems(["128", "256", "512", "1024"])
+        self._ocean_fft_res.setCurrentText("128")
+        self._ocean_fft_res.setStyleSheet("background: #333; color: #eee; border: 1px solid #555;")
+        self._ocean_fft_res.currentTextChanged.connect(lambda v: self.update_obj_prop('ocean_fft_resolution', int(v)))
+        self._add_property_row(og, "FFT Detail", self._ocean_fft_res, "Resolution of the FFT simulation grid")
+        
+        # Opacity Slider
+        self._ocean_opacity = PropertySlider(0.8, 0.0, 1.0)
+        self._ocean_opacity.valueChanged.connect(lambda v: self.update_obj_prop('opacity', v))
+        self._add_property_row(og, "Opacity", self._ocean_opacity, "Transparency of the water surface")
+
+        layout.addWidget(self.ocean_group)
+        self._content_widgets.append(self.ocean_group)
+
         layout.addStretch()
         # Start with an empty/hidden properties panel until an object is selected
         try:
@@ -3401,6 +3612,16 @@ class ObjectPropertiesPanel(QWidget):
         elif "Very High" in text: val = 128
         self.update_obj_prop('landscape_resolution', val)
 
+    def _on_land_type_changed(self, text):
+        if self._updating or not self._current_object: return
+        val = text.lower()
+        self.update_obj_prop('landscape_type', val)
+
+    def _on_land_size_mode_changed(self, text):
+        if self._updating or not self._current_object: return
+        val = text.lower()
+        self.update_obj_prop('landscape_size_mode', val)
+
     def _on_land_seed_changed(self, val):
         if self._updating or not self._current_object: return
         self._current_object.landscape_seed = val
@@ -3409,6 +3630,11 @@ class ObjectPropertiesPanel(QWidget):
     def _on_visualize_climate_toggled(self, val):
         if self._updating or not self._current_object: return
         self._current_object.visualize_climate = val
+        self.property_changed.emit()
+
+    def _on_active_changed(self, val):
+        if self._updating or not self._current_object: return
+        self._current_object.active = val
         self.property_changed.emit()
 
     def update_obj_prop(self, prop, val):
@@ -3491,20 +3717,32 @@ class ObjectPropertiesPanel(QWidget):
             is_light = "light" in obj.obj_type
             is_cam = obj.obj_type == "camera"
             is_land = obj.obj_type == 'landscape'
+            is_ocean = obj.obj_type == 'ocean'
             self.comp_group.setVisible(is_light or is_cam or obj.obj_type == "logic")
             self.intensity_spin.setVisible(is_light)
             self.range_spin.setVisible(is_light)
             self.fov_spin.setVisible(is_cam)
-            # Landscape panel visibility
+            # Panel visibility
+            self.land_group.setVisible(is_land)
+            self.ocean_group.setVisible(is_ocean)
+            
             if is_land:
                 self._land_type.setCurrentText(obj.landscape_type.capitalize())
                 self._land_size_mode.setCurrentText(obj.landscape_size_mode.capitalize())
                 self._land_seed.setValue(obj.landscape_seed)
                 self._land_height_scale.setValue(float(getattr(obj, 'landscape_height_scale', 30.0)))
                 self._visualize_climate_cb.setChecked(getattr(obj, 'visualize_climate', False))
-                self.land_group.setVisible(True)
-            else:
-                self.land_group.setVisible(False)
+            elif is_ocean:
+                # Sync ocean specific fields
+                self._ocean_scale.setValue(getattr(obj, 'ocean_wave_scale', 1.0))
+                self._ocean_speed.setValue(getattr(obj, 'ocean_wave_speed', 1.0))
+                self._ocean_steepness.setValue(getattr(obj, 'ocean_wave_steepness', 0.5))
+                self._ocean_foam.setValue(getattr(obj, 'ocean_foam_amount', 0.5))
+                self._ocean_choppiness.setValue(getattr(obj, 'ocean_wave_choppiness', 1.5))
+                self._ocean_wave_intensity.setValue(getattr(obj, 'ocean_wave_intensity', 1.0))
+                self._ocean_fft_res.setCurrentText(str(getattr(obj, 'ocean_fft_resolution', 128)))
+                self._ocean_use_fft.setChecked(getattr(obj, 'ocean_use_fft', True))
+                self._ocean_opacity.setValue(int(getattr(obj, 'ocean_opacity', 0.8) * 100))
             
             self._sync_from_object()
         else:
@@ -3545,10 +3783,8 @@ class ObjectPropertiesPanel(QWidget):
         self._base_color_btn.setStyleSheet(
             f"background: rgb({int(bc[0]*255)},{int(bc[1]*255)},{int(bc[2]*255)}); border: 1px solid #555; border-radius: 3px;"
         )
-        self._roughness_slider.setValue(int(mat.get('roughness', 0.7) * 100))
-        self._roughness_val.setText(f"{mat.get('roughness', 0.7):.2f}")
-        self._metallic_slider.setValue(int(mat.get('metallic', 0.0) * 100))
-        self._metallic_val.setText(f"{mat.get('metallic', 0.0):.2f}")
+        self._roughness_slider.setValue(mat.get('roughness', 0.7))
+        self._metallic_slider.setValue(mat.get('metallic', 0.0))
         ec = mat.get('emissive_color', [0, 0, 0, 1])
         self._emissive_btn.setStyleSheet(
             f"background: rgb({int(ec[0]*255)},{int(ec[1]*255)},{int(ec[2]*255)}); border: 1px solid #555; border-radius: 3px;"
@@ -3564,6 +3800,24 @@ class ObjectPropertiesPanel(QWidget):
         self.range_spin.setValue(obj.range)
         self.fov_spin.setValue(obj.fov)
 
+        # Sync ocean values
+        if obj.obj_type == 'ocean':
+             try:
+                 for w in (self._ocean_scale, self._ocean_speed, self._ocean_steepness, self._ocean_foam, self._ocean_opacity):
+                     try: w.blockSignals(True)
+                     except Exception: pass
+                 
+                 self._ocean_scale.setValue(getattr(obj, 'ocean_wave_scale', 1.0))
+                 self._ocean_speed.setValue(getattr(obj, 'ocean_wave_speed', 5.0))
+                 self._ocean_steepness.setValue(getattr(obj, 'ocean_wave_steepness', 0.15))
+                 self._ocean_foam.setValue(getattr(obj, 'ocean_foam_amount', 0.1))
+                 self._ocean_opacity.setValue(getattr(obj, 'opacity', 0.8))
+                 
+                 for w in (self._ocean_scale, self._ocean_speed, self._ocean_steepness, self._ocean_foam, self._ocean_opacity):
+                     try: w.blockSignals(False)
+                     except Exception: pass
+             except Exception: pass
+
         # Sync landscape values when applicable
         if obj.obj_type == 'landscape':
             try:
@@ -3573,7 +3827,8 @@ class ObjectPropertiesPanel(QWidget):
                 # Prevent signals while updating
                 for w in (self._land_type, self._land_size_mode, self._land_chunk_size, self._land_grid_radius,
                           self._spawn_enabled, self._spawn_rows, self._spawn_cols, self._spawn_spacing_x, self._spawn_spacing_z,
-                          self._land_seed, self._land_res, self._land_ocean_level, self._land_ocean_flat, self._land_height_scale):
+                          self._land_seed, self._land_res, self._land_ocean_level, self._land_ocean_flat, self._land_height_scale,
+                          self._land_tip_smoothing):
                     try: w.blockSignals(True)
                     except Exception: pass
 
@@ -3585,7 +3840,7 @@ class ObjectPropertiesPanel(QWidget):
                 
                 self._land_chunk_size.setCurrentText(str(int(getattr(obj, 'landscape_chunk_size', 128))))
                 self._land_grid_radius.setValue(int(getattr(obj, 'landscape_grid_radius', 1)))
-                self._land_grid_radius.setEnabled(lmode == 'infinite')
+                self._land_grid_radius.setEnabled(True) # Always allow changing radius
                 
                 res_val = int(getattr(obj, 'landscape_resolution', 32))
                 res_map = {16: "Low (16)", 32: "Medium (32)", 64: "High (64)", 128: "Very High (128)"}
@@ -3594,9 +3849,17 @@ class ObjectPropertiesPanel(QWidget):
                 self._land_height_scale.setValue(float(getattr(obj, 'landscape_height_scale', 30.0)))
                 self._land_ocean_level.setValue(float(getattr(obj, 'landscape_ocean_level', 0.08)))
                 self._land_ocean_flat.setValue(float(getattr(obj, 'landscape_ocean_flattening', 0.3)))
+                self._land_tip_smoothing.setValue(float(getattr(obj, 'landscape_tip_smoothing', 0.1)))
                 
                 self._spawn_enabled.setChecked(getattr(obj, 'landscape_spawn_enabled', False))
                 self._land_seed.setValue(int(getattr(obj, 'landscape_seed', 123)))
+                
+                # Check for climate heatmap sync
+                self._visualize_climate_cb.setChecked(getattr(obj, 'visualize_climate', False))
+                
+                # Ensure the chunk widget is visible
+                self.chunk_widget.setEnabled(True)
+                self.chunk_widget.setVisible(True)
 
                 # Sync Noise Layers List
                 self._noise_layers_list.clear()
@@ -3614,13 +3877,51 @@ class ObjectPropertiesPanel(QWidget):
                 sp = getattr(obj, 'landscape_spawn_spacing', [10.0, 10.0])
                 self._spawn_spacing_x.setValue(sp[0]); self._spawn_spacing_z.setValue(sp[1])
             except Exception as e:
-                print(f"Sync error: {e}")
+                print(f"Land sync error: {e}")
             finally:
                 for w in (self._land_type, self._land_size_mode, self._land_chunk_size, self._land_grid_radius,
                           self._spawn_enabled, self._spawn_rows, self._spawn_cols, self._spawn_spacing_x, self._spawn_spacing_z,
                           self._land_seed, self._land_res):
                     try: w.blockSignals(False)
                     except Exception: pass
+
+        if obj.obj_type == 'ocean':
+            try:
+                # Prevent signals while updating
+                for w in (self._ocean_scale, self._ocean_speed, self._ocean_steepness, self._ocean_foam, self._ocean_choppiness, self._ocean_opacity, self._ocean_use_fft):
+                    try: w.blockSignals(True)
+                    except Exception: pass
+                
+                try: self._ocean_fft_res.blockSignals(True)
+                except Exception: pass
+
+                self._ocean_scale.setValue(getattr(obj, 'ocean_wave_scale', 1.0))
+                self._ocean_speed.setValue(getattr(obj, 'ocean_wave_speed', 1.0))
+                self._ocean_steepness.setValue(getattr(obj, 'ocean_wave_steepness', 0.5))
+                self._ocean_foam.setValue(getattr(obj, 'ocean_foam_amount', 0.5))
+                
+                self._ocean_choppiness.blockSignals(True)
+                self._ocean_choppiness.setValue(getattr(obj, 'ocean_wave_choppiness', 1.5))
+                self._ocean_choppiness.blockSignals(False)
+
+                self._ocean_wave_intensity.blockSignals(True)
+                self._ocean_wave_intensity.setValue(getattr(obj, 'ocean_wave_intensity', 1.0))
+                self._ocean_wave_intensity.blockSignals(False)
+                
+                self._ocean_fft_res.blockSignals(True)
+                self._ocean_fft_res.setCurrentText(str(getattr(obj, 'ocean_fft_resolution', 128)))
+                self._ocean_fft_res.blockSignals(False)
+                
+                self._ocean_use_fft.setChecked(getattr(obj, 'ocean_use_fft', True))
+                self._ocean_opacity.setValue(int(getattr(obj, 'ocean_opacity', 0.8) * 100))
+            except Exception as e:
+                print(f"Ocean sync error: {e}")
+            finally:
+                for w in (self._ocean_scale, self._ocean_speed, self._ocean_steepness, self._ocean_foam, self._ocean_choppiness, self._ocean_opacity, self._ocean_use_fft):
+                    try: w.blockSignals(False)
+                    except Exception: pass
+                try: self._ocean_fft_res.blockSignals(False)
+                except Exception: pass
         
         self._updating = False
 
@@ -4239,7 +4540,7 @@ class SceneExplorerPanel(QWidget):
         
         if self._mode == "3D":
              categories = {
-                 "Basic Shapes": [("Cube","cube"),("Sphere","sphere"),("Cylinder","cylinder"),("Plane","plane"),("Landscape","landscape"),("Cone","cone")],
+                 "Basic Shapes": [("Cube","cube"),("Sphere","sphere"),("Cylinder","cylinder"),("Plane","plane"),("Landscape","landscape"),("Ocean","ocean"),("Cone","cone")],
                  "Lighting": [("Point Light","light_point"),("Directional Light","light_directional")],
                  "Camera": [("Camera","camera")]
              }
@@ -4503,6 +4804,15 @@ class SceneExplorerPanel(QWidget):
         item.setData(Qt.ItemDataRole.UserRole, file_path)
         self.graphs_list.addItem(item)
         self.graphs_list.setCurrentItem(item)
+
+    def update_library(self, lib_root):
+        lib_root.takeChildren()
+        for prim in ["Cube", "Sphere", "Cylinder", "Plane", "Cone", "Landscape", "Ocean"]:
+            item = QTreeWidgetItem([prim])
+            item.setData(0, Qt.ItemDataRole.UserRole, prim.lower())
+            item.setIcon(0, QIcon()) # TODO: Add primitive icons
+            lib_root.addChild(item)
+
     def update_graph_outline(self, nodes):
         self.graph_outline_tree.clear()
         for node in nodes:
@@ -5139,7 +5449,7 @@ class SceneEditorWidget(QWidget):
             if self._current_mode == "3D":
                 # Default elevation for 3D
                 y_pos = 1.0 if "light" in type_str or type_str == "camera" else 0.5
-                if type_str == "plane": y_pos = 0.0
+                if type_str in ("plane", "landscape", "ocean"): y_pos = 0.0
                 obj.position = [wx, y_pos, wz]
             else:
                 obj.position = [wx, wz, 0.0]
@@ -5308,18 +5618,51 @@ class SceneEditorWidget(QWidget):
         self.viewport.stop_render_loop()
 
     def get_scene_data(self) -> dict:
-        return {
+        data = {
             'mode': self._current_mode,
             'objects': [o.to_dict() for o in self.viewport.scene_objects if not getattr(o, 'is_procedural', False)]
         }
+        
+        # Save camera state
+        if hasattr(self.viewport, '_cam3d'):
+             data['camera_3d'] = {
+                 'pos': list(self.viewport._cam3d.pos),
+                 'yaw': self.viewport._cam3d.yaw,
+                 'pitch': self.viewport._cam3d.pitch,
+                 'fov': getattr(self.viewport._cam3d, 'fov', 60.0)
+             }
+        if hasattr(self.viewport, '_cam2d'):
+             data['camera_2d'] = {
+                 'x': self.viewport._cam2d.x,
+                 'y': self.viewport._cam2d.y,
+                 'zoom': self.viewport._cam2d.zoom_level
+             }
+             
+        return data
 
     def load_scene_data(self, data: dict):
         self._current_mode = data.get('mode', '3D')
         self.toolbar.mode_combo.setCurrentText(self._current_mode)
         self.viewport.scene_objects = [SceneObject.from_dict(d) for d in data.get('objects', [])]
+        
+        # Load camera state
+        if 'camera_3d' in data and hasattr(self.viewport, '_cam3d'):
+            c = data['camera_3d']
+            self.viewport._cam3d.pos = list(c.get('pos', [0,5,10]))
+            self.viewport._cam3d.yaw = c.get('yaw', -90.0)
+            self.viewport._cam3d.pitch = c.get('pitch', -25.0)
+            if 'fov' in c: self.viewport._cam3d.fov = c['fov']
+            
+        if 'camera_2d' in data and hasattr(self.viewport, '_cam2d'):
+            c = data['camera_2d']
+            self.viewport._cam2d.x = c.get('x', 0)
+            self.viewport._cam2d.y = c.get('y', 0)
+            self.viewport._cam2d.zoom_level = c.get('zoom', 1.0)
+            
         # Force outliner refresh
         self._outliner_dirty = True
         self._refresh_outliner()
+        self.viewport.update()
 
 
 # ===================================================================
@@ -5367,6 +5710,9 @@ class SimulationWindow(QMainWindow):
         
         # Deep copy objects for simulation
         self.viewport.scene_objects = [SceneObject.from_dict(o.to_dict()) for o in scene_objects]
+        print(f"[SIM DEBUG] Cloned {len(self.viewport.scene_objects)} objects for simulation.")
+        for o in self.viewport.scene_objects:
+             print(f"  - Obj: {o.name} Type: {o.obj_type} Visible: {o.visible} Active: {o.active}")
 
         # Prefer an explicit camera object from the scene. If none exists,
         # fall back to the editor camera (if a parent editor was provided).
@@ -5374,10 +5720,10 @@ class SimulationWindow(QMainWindow):
         if cam_obj:
             # Use the scene camera position/rotation
             self.viewport._cam3d.pos = [float(x) for x in cam_obj.position]
-            # Map Euler to Camera3D yaw/pitch — adjust for scene coordinate conventions
             # Rotation stored as [pitch, yaw, roll] in scene objects.
-            # Use +90 to align the scene camera forward vector with the in-scene yaw axis.
-            self.viewport._cam3d.yaw = float(cam_obj.rotation[1]) + 90.0
+            # Use -90 to align the scene camera forward vector with the in-scene yaw axis.
+            # Negate yaw (rotation[1]) as it is inverted relative to the camera controller.
+            self.viewport._cam3d.yaw = -float(cam_obj.rotation[1]) - 90.0
             # Flip pitch sign to match scene rotation convention (down/up)
             self.viewport._cam3d.pitch = float(cam_obj.rotation[0])
             self.viewport._cam3d.fov = float(getattr(cam_obj, 'fov', 60.0))
@@ -5412,7 +5758,6 @@ class SimulationWindow(QMainWindow):
         self.setCentralWidget(container)
         # Ensure focus and immediate update
         self.viewport.setFocus()
-        self.viewport.start_render_loop()
         
         # Immediate kickstart for the GL context
         from PyQt6.QtCore import QTimer
@@ -5566,7 +5911,10 @@ class BiomeDialog(QDialog):
         # Spawns
         form.addRow(QLabel("<b>Vegetation / Assets</b>"))
         self.spawn_list = QListWidget()
-        for s in self.data.get('spawns', []): self.spawn_list.addItem(Path(s).name)
+        for layer in self.data.get('spawns', []):
+            d = layer.get('density', 0.1)
+            count = len(layer.get('assets', []))
+            self.spawn_list.addItem(f"Layer ({count} meshes, {int(d*100)}% density)")
         form.addRow(self.spawn_list)
         
         s_btns = QHBoxLayout()
@@ -5597,8 +5945,7 @@ class BiomeDialog(QDialog):
             # We add a new "spawn layer" for these assets with default density
             layer = {'assets': files, 'density': 0.1}
             self.data.setdefault('spawns', []).append(layer)
-            for f in files:
-                self.spawn_list.addItem(f"[{layer['density']}] {Path(f).name}")
+            self.spawn_list.addItem(f"Layer ({len(files)} meshes, 10% density)")
 
     def _rem_spawn(self):
         idx = self.spawn_list.currentRow()

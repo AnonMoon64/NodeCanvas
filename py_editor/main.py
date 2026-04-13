@@ -272,6 +272,7 @@ class FileExplorerWidget(QWidget):
             ".logic": "🔷",   # Logic graph
             ".anim": "🎬",    # Animation graph
             ".ui": "🖼️",      # UI layout
+            ".scene": "🎬",   # Scene file
             # Legacy and common types
             ".json": "📄",
             ".py": "🐍",
@@ -331,6 +332,8 @@ class FileExplorerWidget(QWidget):
                     self._open_graph_file(p, ext)
                 elif ext == '.ui':
                     self._open_ui_file(p)
+                elif ext == '.scene':
+                    self._open_scene_file(p)
     
     def _open_graph_file(self, path: Path, ext: str):
         """Open a graph file (.logic, .anim, .json) in the Logic tab"""
@@ -403,6 +406,34 @@ class FileExplorerWidget(QWidget):
             
         except Exception as e:
             print(f"Could not load UI file: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _open_scene_file(self, path: Path):
+        """Open a .scene file in the Viewport tab"""
+        if not self.main_window:
+            return
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Load into scene editor
+            if hasattr(self.main_window, 'scene_editor'):
+                self.main_window.scene_editor.load_scene_data(data)
+            
+            # Switch to Viewport tab (index 1)
+            self.main_window.tabs.setCurrentIndex(1)
+            
+            self.main_window.current_file = str(path)
+            self.main_window.setWindowTitle(f"NodeCanvas - {path.name}")
+            
+            # Add to open graphs list
+            self.add_open_graph(str(path))
+            
+            print(f"Opened Scene: {path}")
+            
+        except Exception as e:
+            print(f"Could not load Scene file: {e}")
             import traceback
             traceback.print_exc()
     
@@ -3054,18 +3085,20 @@ class MainWindow(QMainWindow):
         
         # --- Handle .scene Save ---
         if file_path.endswith('.scene'):
-            scene_data = {
-                'objects': [obj.to_dict() for obj in self.scene_editor.viewport.scene_objects],
-                'camera': {
-                    'pos': self.scene_editor.viewport._cam3d.pos,
-                    'pitch': self.scene_editor.viewport._cam3d.pitch,
-                    'yaw': self.scene_editor.viewport._cam3d.yaw
-                }
-            }
             try:
-                with open(file_path, 'w') as f:
+                # Use centralized data gathering from scene editor
+                scene_data = self.scene_editor.get_scene_data()
+                
+                # Also save main window level camera override if we want (already handled in get_scene_data usually)
+                # but scene_editor.get_scene_data() mostly focuses on objects and mode.
+                # Let's check if get_scene_data includes camera.
+                
+                with open(file_path, 'w', encoding='utf-8') as f:
                     json.dump(scene_data, f, indent=4)
-                QMessageBox.information(self, "Success", f"Scene saved to {file_path}")
+                
+                self.current_file = file_path
+                self.setWindowTitle(f"NodeCanvas - {Path(file_path).name}")
+                QMessageBox.information(self, "Success", f"Scene saved to:\n{file_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save scene: {e}")
             return
@@ -3906,6 +3939,11 @@ if __name__ == '__main__':
                 pass
         except Exception:
             pass
+
+    # Ensure that all OpenGL contexts (Editor + Simulation) share resources
+    from PyQt6.QtCore import QCoreApplication
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+    print(f"[RE-DEBUG] GL Context Sharing Enabled: {QCoreApplication.testAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)}")
 
     app = QApplication(sys.argv)
     w = MainWindow()
