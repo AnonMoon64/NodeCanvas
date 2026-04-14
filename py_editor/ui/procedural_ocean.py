@@ -15,7 +15,7 @@ _fft_generators = {}
 
 class FFTOceanWaveGenerator:
     """Optimized CPU-side FFT wave simulation."""
-    def __init__(self, resolution=128, size=1000.0, wind_speed=30.0, wind_dir=(1.0, 0.0)):
+    def __init__(self, resolution=256, size=1000.0, wind_speed=30.0, wind_dir=(1.0, 0.0)):
         self.N = resolution
         self.L = size
         self.wind_speed = wind_speed
@@ -259,6 +259,13 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
         shader.set_uniform_v3("grid_origin", follow_x, level, follow_z)
         shader.set_uniform_v3("cam_pos", *camera_pos)
         shader.set_uniform_f("grid_chunk_size", chunk_size)
+        shader.set_uniform_f("time_of_day", getattr(obj, 'time_of_day', 0.25))
+        
+        # Advanced Visuals
+        shader.set_uniform_f("u_fresnel_strength", getattr(obj, 'ocean_fresnel_strength', 0.3))
+        shader.set_uniform_f("u_specular_intensity", getattr(obj, 'ocean_specular_intensity', 1.0))
+        tint = getattr(obj, 'ocean_reflection_tint', [0.5, 0.7, 1.0, 1.0])
+        shader.set_uniform_v3("u_reflection_tint", tint[0], tint[1], tint[2])
         
     except Exception as e:
         print(f"[OCEAN SHADER ERROR] {e}")

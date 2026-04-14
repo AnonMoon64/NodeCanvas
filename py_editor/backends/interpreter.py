@@ -41,12 +41,15 @@ class ExecutionContext:
         self.errors: Dict[int, str] = {}  # NodeId.id -> error message
         self.ir_module: Optional[IRModule] = None
         self.variables: Dict[str, Any] = {}  # Variable name -> value storage
+        self.prints: List[str] = [] # Captured print outputs
+        self.logger_callback = None # Function to call for live logging
         
         # Step execution support
         self.step_mode: bool = False  # Whether to execute step-by-step
         self.breakpoints: set = set()  # Set of IR node IDs with breakpoints
         self.paused_at: Optional[int] = None  # IR node ID where execution is paused
         self.execution_order: List = []  # Track execution order for replay
+        self.triggered_nodes: set = set()  # Node IDs (integers) that have fired this session
     
     def set_value(self, node_id: NodeId, value: Any):
         """Store computed value for a node"""
@@ -450,18 +453,18 @@ class IRBackend:
                                     self.module.source_pin_map[(ir_node_id.id, pin_index)] = (from_ir_id.id, from_pin)
         
         # Debug: Show what nodes look like after connections
-        print("\nNodes after applying connections:")
-        for node in self.module.nodes:
-            kind = node.kind
-            if isinstance(kind, Add):
-                print(f"  Add node {node.id.id}: a={kind.a}, b={kind.b}")
-            elif isinstance(kind, ConstValue):
-                print(f"  Const node {node.id.id}: value={kind.value.data}")
-            elif isinstance(kind, Print):
-                print(f"  Print node {node.id.id}: value={kind.value}, label={kind.label}")
-            elif isinstance(kind, Return):
-                print(f"  Return node {node.id.id}: value={kind.value}")
-    
+        # print("\nNodes after applying connections:")
+        # for node in self.module.nodes:
+        #     kind = node.kind
+        #     if isinstance(kind, Add):
+        #         print(f"  Add node {node.id.id}: a={kind.a}, b={kind.b}")
+        #     elif isinstance(kind, ConstValue):
+        #         print(f"  Const node {node.id.id}: value={kind.value.data}")
+        #     elif isinstance(kind, Print):
+        #         print(f"  Print node {node.id.id}: value={kind.value}, label={kind.label}")
+        #     elif isinstance(kind, Return):
+        #         print(f"  Return node {node.id.id}: value={kind.value}")
+  
     def execute_ir(self, ir_module: IRModule, ctx: Optional[ExecutionContext] = None, breakpoints: set = None) -> Dict[str, Any]:
         """
         Execute an IR module.
@@ -489,8 +492,8 @@ class IRBackend:
             comp_keys = list(getattr(ir_module, 'composite_templates', {}).keys())
         except Exception:
             comp_keys = None
-        print(f"EXECUTE_IR: nodes={[n.id.id for n in ir_module.nodes]} kinds={[n.kind.__class__.__name__ for n in ir_module.nodes]} composite_templates_keys={comp_keys}")
-        print(f"EXECUTE_IR: widget_values keys={list(ir_module.widget_values.keys())} ctx.variables={ctx.variables}")
+        # print(f"EXECUTE_IR: nodes={[n.id.id for n in ir_module.nodes]} kinds={[n.kind.__class__.__name__ for n in ir_module.nodes]} composite_templates_keys={comp_keys}")
+        # print(f"EXECUTE_IR: widget_values keys={list(ir_module.widget_values.keys())} ctx.variables={ctx.variables}")
         
         # Track current graph path in context for relative path resolution
         if hasattr(ir_module, 'source_path') and ir_module.source_path:
@@ -520,7 +523,7 @@ class IRBackend:
                 elif node.kind.name == 'Branch':
                     branches = self._find_sequence_branches(node, ir_module)
                     branch_nodes_map[node.id.id] = branches
-                    print(f"Branch node {node.id.id} has downstream paths: {branches}")
+                    # print(f"Branch node {node.id.id} has downstream paths: {branches}")
         
         # Execute nodes, handling loops specially
         executed_nodes = set()
@@ -583,7 +586,7 @@ class IRBackend:
                 executed_nodes.add(node.id.id)
                 
                 # Debug: Show what each node computed
-                print(f"Node {node.id.id} ({node.kind.__class__.__name__}): {result}")
+                # print(f"Node {node.id.id} ({node.kind.__class__.__name__}): {result}")
                 
                 # Collect results from the executed node
                 self._collect_node_results(node, result, results, ir_module)
@@ -600,6 +603,9 @@ class IRBackend:
         # Add all computed values for hover inspection
         if ctx.values:
             results['_computed_values'] = dict(ctx.values)
+        
+        # Capture prints for the return dictionary
+        results['prints'] = list(ctx.prints)
         
         return results
     
@@ -846,7 +852,7 @@ class IRBackend:
                 traceback.print_exc()
         return None
     
-    def _execute_logic_reference(self, node, kind, widget_vals, ctx):
+    def _execute_message_node(self, node, kind, widget_vals, ctx):
         """
         Execute an external graph as a function call.
         
@@ -854,117 +860,130 @@ class IRBackend:
         graph as if it were a function, with explicit entry and exit.
         
         Args:
-            node: The LogicReference node
+            node: The Message node
             kind: Node kind (Custom)
-            widget_vals: Widget values including graphPath
+            widget_vals: Widget values including graphPath, event
             ctx: Execution context
             
         Returns:
-            The result from the subgraph's InterfaceOutput nodes
+            The result from the subgraph's InterfaceOutput nodes or Return node
         """
         import json
+        import traceback
         from pathlib import Path as PathLib
         
-        # Get graph path from widget or connected input
-        graph_path = widget_vals.get('graphPath', '')
-        if not graph_path and kind.inputs:
-            # Check for connected graphPath input
-            for i, inp in enumerate(kind.inputs):
-                if inp:
-                    potential_path = ctx.get_value(inp)
-                    if isinstance(potential_path, str) and potential_path:
-                        graph_path = potential_path
-                        break
+        # 1. Resolve Target and Event
+        # Input order: exec(0), target(1), payload(2)
+        input_values = []
+        for idx in range(3):
+            if idx < len(kind.inputs) and kind.inputs[idx]:
+                val = ctx.get_value(kind.inputs[idx])
+                input_values.append(val)
+            else:
+                input_values.append(None)
+        
+        target = input_values[1]
+        event_name = widget_vals.get('event', 'MyEvent')
+        payload = input_values[2]
+        
+        # 2. Determine Graph Path
+        graph_path = None
+        is_self = False
+        
+        if target is None or target == '' or (isinstance(target, str) and target.lower() == 'self'):
+            # Self invocation - use current graph
+            graph_path = ctx.variables.get('__current_graph_path__')
+            is_self = True
+        elif isinstance(target, dict) and 'graphPath' in target:
+            # External reference handle
+            graph_path = target['graphPath']
+        elif isinstance(target, str):
+            # Direct path string
+            graph_path = target
         
         if not graph_path:
-            print(f"LogicReference: No graph path specified")
+            if is_self:
+                print(f"Message: Self invocation but no __current_graph_path__ set")
+            else:
+                print(f"Message: No graph path or target specified (target={target})")
             return None
         
-        # Resolve path robustly
+        # 3. Resolve Path Robustly
         current_graph_path = getattr(self.module, 'source_path', ctx.variables.get('__current_graph_path__', ''))
         resolved_path = self._resolve_graph_path(graph_path, current_graph_path)
         
         if not resolved_path or not PathLib(resolved_path).exists():
-            print(f"LogicReference: Graph file not found: {resolved_path} (original: {graph_path})")
+            print(f"Message: Graph file not found: {resolved_path} (original: {graph_path})")
             return None
         
         path = PathLib(resolved_path)
-        print(f"LogicReference: Loading and executing '{path}'")
+        # print(f"Message: Loading and executing '{path.name}' -> Event '{event_name}'")
         
         try:
-            # Load the external graph
+            # 4. Load the External Graph
             with open(path, 'r', encoding='utf-8') as f:
                 subgraph_data = json.load(f)
             
-            # Get interface from the loaded graph
-            try:
-                from py_editor.core.graph_interface import GraphInterface
-                interface = GraphInterface.extract_from_graph(subgraph_data, str(path))
-            except ImportError:
-                interface = None
+            # 5. Build Subgraph Context and Variables
+            sub_ctx = ExecutionContext()
             
-            # Collect input values from dynamic pins
-            # The LogicReference node has dynamic pins matching the subgraph interface
-            input_values = {}
-            if interface:
-                for input_name, pin_def in interface.inputs.items():
-                    if input_name == 'exec':
-                        continue  # Skip exec pin
-                    # Look for value in widget_vals or connected inputs
-                    if input_name in widget_vals:
-                        input_values[input_name] = widget_vals[input_name]
+            # Inherit parent variables
+            sub_ctx.variables = dict(ctx.variables)
             
-            # Also check connected inputs (dynamic pins are added after standard ones)
-            if kind.inputs:
-                input_idx = 1  # Skip exec input at index 0
-                if interface:
-                    for input_name, pin_def in interface.inputs.items():
-                        if input_name == 'exec':
-                            continue
-                        if input_idx < len(kind.inputs) and kind.inputs[input_idx]:
-                            input_values[input_name] = ctx.get_value(kind.inputs[input_idx])
-                        input_idx += 1
+            # Merge target graph's own variables (high priority)
+            target_vars = subgraph_data.get('variables', {})
+            for var_name, var_info in target_vars.items():
+                if isinstance(var_info, dict):
+                    sub_ctx.variables[var_name] = var_info.get('value')
+                else:
+                    sub_ctx.variables[var_name] = var_info
             
-            # Load node templates for subgraph
+            # Set runtime context
+            sub_ctx.variables['__current_graph_path__'] = str(path)
+            sub_ctx.variables['__event__'] = event_name
+            sub_ctx.variables['__payload__'] = payload
+            sub_ctx.prints = ctx.prints # Share print log
+            sub_ctx.logger_callback = ctx.logger_callback # Share logger
+            
+            # 6. Initialize Subgraph Interface
+            from py_editor.core.graph_interface import GraphInterface
+            interface = GraphInterface.extract_from_graph(subgraph_data, str(path))
+            
+            # 7. Convert and Execute Sub-IR
+            sub_backend = IRBackend()
             try:
                 from py_editor.core import node_templates
                 templates = node_templates.get_all_templates()
             except:
                 templates = {}
-            
-            # Create new backend for subgraph execution
-            sub_backend = IRBackend()
+                
             sub_ir = sub_backend.canvas_to_ir(subgraph_data, templates)
-            
-            # Inject input values into the subgraph module
-            sub_ir.interface_inputs = input_values
-            sub_ir.interface_outputs = {}
             sub_ir.source_path = str(path)
             
-            # Copy event context to subgraph
-            sub_ir.event_context = getattr(self.module, 'event_context', {})
+            # Inject EVENT context into the IR module for node-level checks
+            sub_ir.event_context = {
+                'triggered_event': event_name,
+                'payload': payload
+            }
             
-            # Execute the subgraph
-            sub_ctx = ExecutionContext()
-            sub_ctx.variables = dict(ctx.variables)  # Copy parent variables
-            
+            # Execute
             results = sub_backend.execute_ir(sub_ir, ctx=sub_ctx)
             
-            # Get outputs from the subgraph
+            # 8. Extract Result
+            # Priority: Return node value > InterfaceOutput nodes
+            if 'return' in results and results['return'] != '__RETURN_DISABLED__':
+                return results['return']
+            
             outputs = getattr(sub_ir, 'interface_outputs', {})
-            
-            print(f"LogicReference: Subgraph completed with outputs: {outputs}")
-            
-            # Return tuple of outputs or single value
-            if len(outputs) == 0:
-                return None
-            elif len(outputs) == 1:
+            if len(outputs) == 1:
                 return list(outputs.values())[0]
-            else:
+            elif outputs:
                 return outputs
             
+            return None
+            
         except Exception as e:
-            print(f"LogicReference: Error executing subgraph: {e}")
+            print(f"Message Error executing subgraph {path.name}: {e}")
             traceback.print_exc()
             return None
     
@@ -1172,10 +1191,21 @@ class IRBackend:
         
         # Count dependencies
         for node in ir_module.nodes:
+            # Get dependencies from specialized attributes
             deps = self._get_dependencies(node)
-            for dep in deps:
-                if dep and dep.id in adjacency:
-                    adjacency[dep.id].append(node.id.id)
+            
+            # Also check connections from output_connections map for this node as a target
+            # This handles cases where _get_dependencies might miss a manual flow connection
+            for (src_id, src_pin), targets in ir_module.output_connections.items():
+                if node.id.id in targets:
+                    deps.append(NodeId(src_id))
+            
+            # Unique dependencies only
+            unique_deps = {d.id if hasattr(d, 'id') else d for d in deps if d is not None}
+            
+            for dep_id in unique_deps:
+                if dep_id in adjacency:
+                    adjacency[dep_id].append(node.id.id)
                     in_degree[node.id.id] += 1
 
         # Debug: show dependencies and adjacency/in_degree maps
@@ -1208,7 +1238,7 @@ class IRBackend:
         if len(sorted_nodes) != len(ir_module.nodes):
             print("Warning: Cycle detected in graph, some nodes may not execute")
         
-        print(f"TOPO_SORT: final sorted_nodes order={[n.id.id for n in sorted_nodes]}")
+        # print(f"TOPO_SORT: final sorted_nodes order={[n.id.id for n in sorted_nodes]}")
         return sorted_nodes
     
     def _get_dependencies(self, node) -> List[Optional[NodeId]]:
@@ -1219,19 +1249,28 @@ class IRBackend:
         if isinstance(kind, (Add, Subtract, Multiply, Divide)):
             deps.extend([kind.a, kind.b])
         elif isinstance(kind, Return):
-            deps.append(kind.value)
+            deps.extend([kind.enabled, kind.value])
         elif isinstance(kind, Print):
             deps.extend([kind.value, kind.label])
+            # Also check exec_in if connected
+            target_conns = getattr(self.module, 'connections_by_target', {}).get(str(node.id.id), [])
+            for conn in target_conns:
+                if conn.get('to_pin') == 'exec_in':
+                    from_id = conn.get('_from_int')
+                    from_ir_id = self.canvas_to_ir_map.get(from_id)
+                    if from_ir_id:
+                        deps.append(NodeId(from_ir_id))
         elif isinstance(kind, SetVar):
             deps.extend([kind.var_name, kind.value])
         elif isinstance(kind, GetVar):
             deps.append(kind.var_name)
         elif isinstance(kind, Custom):
-            # Custom nodes depend on all their inputs
+            # Custom nodes depend on all their inputs (data and exec)
             if hasattr(kind, 'inputs') and kind.inputs:
                 deps.extend(kind.inputs)
         
-        return [d for d in deps if d is not None]
+        # Ensure all IDs are NodeId instances or None
+        return [NodeId(d.id) if isinstance(d, NodeId) else NodeId(d) if d is not None else None for d in deps if d is not None]
     
     def _get_value_with_pin_extraction(self, source_id: NodeId, dest_node_id: int, input_idx: int, ctx: ExecutionContext) -> Any:
         """Get a value from a source node, extracting the right output if it's a multi-output node."""
@@ -1258,7 +1297,7 @@ class IRBackend:
                         output_idx = output_pins.index(from_pin_name)
                         if output_idx < len(value):
                             extracted = value[output_idx]
-                            print(f"Extracted output '{from_pin_name}' (idx {output_idx}) from multi-output node: {extracted}")
+                            # print(f"Extracted output '{from_pin_name}' (idx {output_idx}) from multi-output node: {extracted}")
                             return extracted
         return value
     
@@ -1267,8 +1306,8 @@ class IRBackend:
         kind = node.kind
         
         # Debug: trace kind type before isinstance checks
-        print(f"_execute_node ENTER: node.id={node.id.id} kind_class={kind.__class__.__name__} kind_module={kind.__class__.__module__}")
-        print(f"  isinstance(kind, Custom)={isinstance(kind, Custom)} Custom_module={Custom.__module__}")
+        # print(f"_execute_node ENTER: node.id={node.id.id} kind_class={kind.__class__.__name__} kind_module={kind.__class__.__module__}")
+        # print(f"  isinstance(kind, Custom)={isinstance(kind, Custom)} Custom_module={Custom.__module__}")
         
         # Get widget values for this node (if any)
         widget_vals = self.module.widget_values.get(node.id.id, {})
@@ -1284,11 +1323,11 @@ class IRBackend:
                 composite_keys = list(getattr(self.module, 'composite_templates', {}).keys())
             except Exception:
                 composite_keys = None
-            print(f"Custom node execute ENTRY: name={kind.name} node.id={node.id.id} composite_templates_keys={composite_keys}")
+            # print(f"Custom node execute ENTRY: name={kind.name} node.id={node.id.id} composite_templates_keys={composite_keys}")
             
             # Handle LogicReference - execute external graph as function call
-            if kind.name == 'LogicReference':
-                return self._execute_logic_reference(node, kind, widget_vals, ctx)
+            if kind.name == 'Message':
+                return self._execute_message_node(node, kind, widget_vals, ctx)
             
             elif kind.name == 'Scene Reference':
                 # return just the handle (ID) as the single output
@@ -1317,6 +1356,22 @@ class IRBackend:
             
             # Handle UI Event nodes specially
             event_context = getattr(self.module, 'event_context', {})
+            
+            if kind.name == 'OnStart':
+                # Entry point: only fire once per session context
+                if node.id.id in ctx.triggered_nodes:
+                    return None
+                ctx.triggered_nodes.add(node.id.id)
+                return ('exec_out',)
+            
+            if kind.name == 'Custom Event':
+                triggered_event = event_context.get('triggered_event')
+                node_event_name = widget_vals.get('name', 'MyEvent')
+                if triggered_event == node_event_name:
+                    payload = event_context.get('payload')
+                    print(f"[INTERPRETER] Triggered Custom Event '{node_event_name}' with payload: {payload}")
+                    return ('exec_out', payload)
+                return None
             
             if kind.name == 'OnUIButtonPressed':
                 # Check if this event node matches the triggered button
@@ -1590,7 +1645,7 @@ class IRBackend:
                         else:
                             result = None
                         
-                        print(f"Composite '{kind.name}' returning: {result}")
+                        # print(f"Composite '{kind.name}' returning: {result}")
                         return result
                     except Exception as e:
                         print(f"Error executing composite {kind.name}: {e}")
@@ -1626,7 +1681,7 @@ class IRBackend:
                         value = None
                     input_values.append(value)
 
-                print(f"Custom node '{kind.name}' inputs_def={input_names} input_values={input_values} widget_vals={widget_vals}")
+                # print(f"Custom node '{kind.name}' inputs_def={input_names} input_values={input_values} widget_vals={widget_vals}")
 
                 # Try plugin module first — plugin modules should be honored even when
                 # nodes do not provide inline `code` in their JSON templates.
@@ -1636,7 +1691,7 @@ class IRBackend:
                     if hasattr(plugin_module, func_name):
                         func = getattr(plugin_module, func_name)
                         result = func(*input_values)
-                        print(f"Custom node {kind.name} executed via plugin module: {input_values} -> {result}")
+                        # print(f"Custom node {kind.name} executed via plugin module: {input_values} -> {result}")
                         return result
                     elif hasattr(plugin_module, 'process'):
                         result = plugin_module.process(kind.name, *input_values)
@@ -1684,89 +1739,9 @@ class IRBackend:
                         print(f"CallLogic has no graphPath set")
                         return None
 
-                # ===== SPECIAL: Message - invoke custom event (self or external) =====
-                if kind.name == 'Message':
-                    # Input order: exec(0), target(1), payload(2)
-                    # Skip exec at index 0, target is at index 1
-                    target = input_values[1] if len(input_values) > 1 else None
-                    event_name = widget_vals.get('event', 'MyEvent')
-                    payload = input_values[2] if len(input_values) > 2 else None
-                    
-                    # Filter out exec signals that may have leaked through
-                    if isinstance(target, str) and target in ('exec_out', 'exec'):
-                        target = None
-                    
-                    print(f"Message: target={target}, event={event_name}, payload={payload}")
-                    
-                    # Determine graph path
-                    graph_path = None
-                    is_self = False
-                    
-                    if target is None or target == '' or (isinstance(target, str) and target.lower() == 'self'):
-                        # Self invocation - use current graph
-                        graph_path = ctx.variables.get('__current_graph_path__')
-                        is_self = True
-                        print(f"Message: invoking on SELF ({graph_path})")
-                    elif isinstance(target, dict) and 'graphPath' in target:
-                        # External reference handle
-                        graph_path = target['graphPath']
-                    elif isinstance(target, str):
-                        # Direct path string
-                        graph_path = target
-                    
-                    if graph_path:
-                        # Resolve path robustly
-                        current_path = ctx.variables.get('__current_graph_path__')
-                        resolved_path = self._resolve_graph_path(graph_path, current_path)
-                        
-                        try:
-                            import json
-                            from pathlib import Path
-                            
-                            # Load target graph
-                            with open(resolved_path, 'r', encoding='utf-8') as f:
-                                target_graph = json.load(f)
-                            
-                            # Update source path for the new IR
-                            graph_path = resolved_path
-                            
-                            # Create a new backend for the subgraph
-                            sub_backend = IRBackend()
-                            sub_ir = sub_backend.canvas_to_ir(target_graph, node_templates.get_all_templates())
-                            
-                            # Execute the subgraph with event context
-                            sub_ctx = ExecutionContext()
-                            
-                            # Load the TARGET graph's defined variables first
-                            target_vars = target_graph.get('variables', {})
-                            for var_name, var_info in target_vars.items():
-                                if isinstance(var_info, dict):
-                                    sub_ctx.variables[var_name] = var_info.get('value')
-                                else:
-                                    sub_ctx.variables[var_name] = var_info
-                            
-                            # Add message context
-                            sub_ctx.variables['__event__'] = event_name
-                            sub_ctx.variables['__payload__'] = payload
-                            sub_ctx.variables['__current_graph_path__'] = graph_path
-                            
-                            print(f"Message: loaded target variables: {list(sub_ctx.variables.keys())}")
-                            
-                            result = sub_backend.execute_ir(sub_ir, sub_ctx)
-                            
-                            print(f"Message '{event_name}' returned: {result}")
-                            return result.get('return') if isinstance(result, dict) else result
-                            
-                        except Exception as e:
-                            print(f"Error invoking event '{event_name}': {e}")
-                            traceback.print_exc()
-                            return None
-                    else:
-                        if is_self:
-                            print(f"Message: self invocation but no __current_graph_path__ set")
-                        else:
-                            print(f"Message: invalid target {target}")
-                    return None
+                # The 'Message' handler is now centralized in _execute_message_node.
+                # It is invoked directly after line 1297 to ensure clean execution.
+                pass
 
                 # ===== SPECIAL: Reference - return opaque handle =====
                 if kind.name == 'Reference':
@@ -1912,7 +1887,10 @@ class IRBackend:
             label = str(label_value) if label_value else ""
             prefix = f"[{label}] " if label else ""
             output_text = f"{prefix}{value}"
-            print(output_text)  # Print immediately to console like UE5
+            # print(output_text)  # Keep internal console print too
+            ctx.prints.append(output_text)
+            if ctx.logger_callback:
+                ctx.logger_callback(output_text)
             return value  # Pass the value through so it can be used by other nodes
         
         # Return - only returns if enabled
@@ -1937,23 +1915,19 @@ class IRBackend:
         elif isinstance(kind, SetVar):
             var_name = ctx.get_value(kind.var_name) if kind.var_name else widget_vals.get('name', '')
             value = ctx.get_value(kind.value) if kind.value else widget_vals.get('value')
-            print(f"SetVariable debug: kind.var_name={kind.var_name}, widget_vals={widget_vals}, var_name={var_name}, value={value}")
             if var_name:
                 ctx.variables[str(var_name)] = value
-                print(f"SetVariable: {var_name} = {value}")
-                print(f"  Variables dict now: {ctx.variables}")
+                # print(f"SetVariable: {var_name} = {value}")
             return value  # Pass value through
         
         # GetVar - retrieve value from variables dict
         elif isinstance(kind, GetVar):
             var_name = ctx.get_value(kind.var_name) if kind.var_name else widget_vals.get('name', '')
-            print(f"GetVariable debug: kind.var_name={kind.var_name}, widget_vals={widget_vals}, var_name={var_name}")
-            print(f"  Available variables: {ctx.variables}")
             value = ctx.variables.get(str(var_name))
             # Handle variable storage format - extract 'value' if stored as {type, value}
             if isinstance(value, dict) and 'type' in value and 'value' in value:
                 value = value['value']
-            print(f"GetVariable: {var_name} -> {value}")
+            # print(f"GetVariable: {var_name} -> {value}")
             return value
         
         return None

@@ -76,6 +76,8 @@ class LogicEditor(QGraphicsView):
     """Main node graph editor view (formerly CanvasView)"""
     # Signal emitted when any value widget changes
     value_changed = pyqtSignal()
+    # Signal emitted when graph structure changes (nodes added/removed)
+    graph_changed = pyqtSignal()
     
     def __init__(self, parent=None, is_subcanvas=False, host_template=None):
         super().__init__(parent)
@@ -84,9 +86,11 @@ class LogicEditor(QGraphicsView):
         self.setRenderHints(self.renderHints() | QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)  # Enable rubber band selection
         self.setViewportUpdateMode(
-            QGraphicsView.ViewportUpdateMode.SmartViewportUpdate
+            QGraphicsView.ViewportUpdateMode.FullViewportUpdate
         )
-        self.setCacheMode(QGraphicsView.CacheModeFlag.CacheBackground)
+        # Disable background caching to prevent visual artifacts/ghosting during movement
+        self.setCacheMode(QGraphicsView.CacheModeFlag.CacheNone)
+        
         # Set a very large scene rect for effectively infinite canvas
         self.setSceneRect(-100000, -100000, 200000, 200000)
         self.centerOn(0, 0)
@@ -111,7 +115,12 @@ class LogicEditor(QGraphicsView):
         self.setAcceptDrops(True)
         # composite editing mode flags
         self.is_subcanvas = bool(is_subcanvas)
-        self.host_template = host_template
+        # Simulation State
+        from py_editor.core.simulation_controller import SimulationController
+        from py_editor.core.node_templates import get_all_templates
+        self.sim = SimulationController(self)
+        self._templates_cache = get_all_templates()
+        
         # clipboard for copy/paste
         self.clipboard_data = None
         
@@ -145,6 +154,34 @@ class LogicEditor(QGraphicsView):
         
         # Enable mouse tracking for coordinate updates
         self.setMouseTracking(True)
+
+    def run_graph(self):
+        """Execute the logic graph exactly once and show result popup."""
+        from PyQt6.QtWidgets import QMessageBox
+        data = self.export_graph()
+        results = self.sim.run_once(data, self._templates_cache, self.graph_variables)
+        
+        if results:
+            ret_val = results.get('return', 'None')
+            prints = results.get('prints', [])
+            msg = f"<b>Return Value:</b> {ret_val}<br><br>"
+            if prints:
+                msg += "<b>Prints:</b><br>" + "<br>".join([f"• {p}" for p in prints])
+            else:
+                msg += "<i>No prints captured.</i>"
+            
+            QMessageBox.information(self, "Logic Execution Results", msg)
+        print("[CANVAS] One-shot logic execution complete.")
+
+    def step_graph(self):
+        """Single-step the logic execution"""
+        if not self.sim.is_running:
+            data = self.export_graph()
+            self.sim.start(data, self._templates_cache, self.graph_variables)
+            self.sim.pause(True)
+        
+        self.sim.step()
+        print("Stepped logic.")
 
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts"""

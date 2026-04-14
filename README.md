@@ -1,5 +1,14 @@
 # NodeCanvas: Visual Logic & Procedural World-Building
 
+## 🚀 Latest Updates
+- **Modular Refactor (Stable)**: Codebase fully transitioned to a modular orchestrator model.
+- **Stable Logic Engine**: Established a deterministic, one-shot execution model for visual scripting with support for cross-graph `Message` nodes and `Custom Events`.
+- **Logic Validation Pipeline**: Added a headless testing suite (`tests/test_logic_run.py`) for validating complex logic flows without UI overhead.
+- **Ultra Dynamic Atmosphere**: Implemented a high-fidelity scattering model with **Zenith-based Sky Grading**, **Mie halos**, and seamless **Land-to-Space** transitions (sky blue → black starfield).
+- **Professional UX**: Implemented a **UE5-style Dockable Workspace** and **On-Screen Viewport Logging** for real-time debugging feedback.
+- **Enhanced Navigation**: Restored full **WASD + Mouse-look (RMB)** flight controls in the 3D viewport, including a real-time **Camera Speed Overlay**.
+- **Persistence 1.0**: Full `.scene` serialization implemented. Save and Load your procedural environments instantly.
+
 > [!CAUTION]
 > **Experimental Alpha Build**: This project is in active development. Features listed below are in various stages of completion. NodeCanvas is currently an experimental platform for procedural content generation research and real-time world orchestration.
 
@@ -73,7 +82,7 @@ As and Alpha-stage development environment, the following areas are currently id
 ### Phase 3: Infrastructure & Physics
 - [/] **GPU-Accelerated Rendering**: Migrating the CPU-bound mesh generation to vertex/compute shaders.
 - [ ] **Physics Integration**: Rigid body support for spawned actors on slopes.
-- [ ] **Atmospheric Scattering**: Volumetric clouds and Rayleigh/Mie scattering for the skybox.
+- [x] **Atmospheric Scattering**: Volumetric clouds and Rayleigh/Mie scattering with Zenith-based grading and land-to-space transitions.
 
 ---
 
@@ -103,6 +112,7 @@ The current focus is on creating a photorealistic, physically-based world enviro
 
 1. **Environment Setup**: Install dependencies via `pip install PyQt6 numpy pyopengl`.
 2. **Launch**: Run `python py_editor/main.py`.
-3. **Tutorial**: Add a `Landscape` object from the Outliner, set its type to `Procedural`, and adjust the **Detail Level** in the Properties Panel.
+3. **Logic Testing**: Run `python tests/test_logic_run.py` to verify the stability of the logic interpreter.
+4. **Tutorial**: Add a `Landscape` object from the Outliner, set its type to `Procedural`, and adjust the **Detail Level** in the Properties Panel.
 
 *NodeCanvas is currently an experimental platform for procedural content generation research.*

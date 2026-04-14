@@ -1,16 +1,18 @@
 {
-    "name": "Scene Reference",
+    "name": "Reference",
     "category": "Core",
-    "type": "core",
+    "description": "Represents a reference to an external logic graph file.",
+    "color": "#AB47BC",
     "inputs": {},
     "outputs": {
-        "Ref": "instance"
+        "handle": "instance"
     },
     "widgets": {
-        "object_id": {
+        "graphPath": {
             "type": "string",
             "default": ""
         }
     },
-    "description": "Represents a reference to a specific object in the current scene."
+    "isReferenceNode": true,
+    "code": "def process():\n    # Execution handled by interpreter\n    return None"
 }

@@ -143,7 +143,7 @@ def draw_landscape_3d(obj, viewport):
         if pos_key in _draft_display_list_cache: glCallList(_draft_display_list_cache[pos_key])
 
     # --- BULK DISCOVERY VECTORIZATION ---
-    cp = getattr(viewport._cam3d, 'pos', [0,0,0]); rad = int(getattr(obj, 'landscape_grid_radius', 1)); cx, cz = round(cp[0]/chunk_size)*chunk_size, round(cp[2]/chunk_size)*chunk_size; chunks = []
+    cp = getattr(viewport._cam3d, 'pos', [0,0,0]); rad = int(getattr(obj, 'landscape_grid_radius', 3)); cx, cz = round(cp[0]/chunk_size)*chunk_size, round(cp[2]/chunk_size)*chunk_size; chunks = []
     for ix in range(-rad, rad + 1):
         for iz in range(-rad, rad + 1): chunks.append((cx+ix*chunk_size, cz+iz*chunk_size))
     

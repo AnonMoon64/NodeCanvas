@@ -102,6 +102,12 @@ def create_ocean_shader_fft():
     uniform sampler2D u_displacement_map;
     uniform sampler2D u_jacobian_map;
     uniform float u_wave_scale;
+    uniform float time_of_day;
+    
+    // Advanced Visuals
+    uniform float u_fresnel_strength;
+    uniform float u_specular_intensity;
+    uniform vec3 u_reflection_tint;
     
     in vec3 v_pos;
     in float v_height;
@@ -121,36 +127,40 @@ def create_ocean_shader_fft():
     }
 
     void main() {
-        // High-precision per-pixel normals
-        float d = 1.5 / 1000.0;
+        // High-precision per-pixel normals using resolution-aware sampling
+        float d = 1.0 / 128.0; // Matches FFT_SIZE
         float hL = texture(u_displacement_map, v_uv - vec2(d, 0)).y;
         float hR = texture(u_displacement_map, v_uv + vec2(d, 0)).y;
         float hD = texture(u_displacement_map, v_uv - vec2(0, d)).y;
         float hU = texture(u_displacement_map, v_uv + vec2(0, d)).y;
         
-        vec3 normal = normalize(vec3(hL - hR, 0.08, hD - hU)); // Sharpened for defined ridges
+        vec3 normal = normalize(vec3(hL - hR, 0.12, hD - hU)); // Tighter ridge definition
         vec3 view_dir = normalize(v_view_dir);
-        vec3 light_dir = normalize(vec3(0.5, 0.8, 0.3));
+        
+        // --- Day/Night Lighting ---
+        vec3 sun_dir = normalize(vec3(sin(time_of_day * 6.28), cos(time_of_day * 6.28), 0.2));
+        vec3 light_dir = sun_dir;
+        float day_ratio = max(sin(time_of_day * 3.14159), 0.0);
         
         // Deep Drama water color (High Contrast)
-        float h_norm = clamp(v_height * 0.15 + 0.5, 0.0, 1.0);
-        vec3 color_deep = ocean_color.rgb * 0.01; // Punchy deeps
-        vec3 color_shallow = ocean_color.rgb * 1.5;
+        float h_norm = clamp(v_height * 0.12 + 0.45, 0.0, 1.0);
+        vec3 color_deep = ocean_color.rgb * 0.02;
+        vec3 color_shallow = ocean_color.rgb * 1.4;
         vec3 water_rgb = mix(color_deep, color_shallow, h_norm);
         
         // Advanced Foam System
         float jacobian = texture(u_jacobian_map, v_uv).r;
         float jac_mask = clamp(1.0 - jacobian, 0.0, 1.0);
         
-        // Layered Bubble Noise for foam detail
-        float bubbles = bubble_noise(v_pos.xz * 2.0 + time * 0.2);
-        bubbles += bubble_noise(v_pos.xz * 10.0 - time * 0.5) * 0.5;
-        bubbles = smoothstep(0.4, 0.8, bubbles * jac_mask);
+        // Smoother procedural bubbles for foam detail
+        float bubbles = sin(v_pos.x * 4.0 + time) * cos(v_pos.z * 4.0 - time * 0.5) * 0.5 + 0.5;
+        bubbles *= sin(v_pos.x * 20.0 - time * 2.0) * 0.3 + 0.7;
+        bubbles = smoothstep(0.5, 0.9, bubbles * jac_mask);
         
-        float foam_mask = pow(jac_mask, 4.0) * foam_amount * 5.0;
-        foam_mask = clamp(foam_mask + bubbles * foam_amount * 2.5, 0.0, 1.0);
+        float foam_mask = pow(jac_mask, 3.5) * foam_amount * 4.0;
+        foam_mask = clamp(foam_mask + bubbles * foam_amount * 2.0, 0.0, 1.0);
         
-        vec3 foam_rgb = vec3(0.95, 0.98, 1.0);
+        vec3 foam_rgb = vec3(0.9, 0.95, 1.0);
         water_rgb = mix(water_rgb, foam_rgb, foam_mask);
         
         // Sub-Surface Scattering (SSS) - The teal ridge glow from the old version
@@ -158,14 +168,20 @@ def create_ocean_shader_fft():
         water_rgb += vec3(0.1, 0.7, 0.6) * sss;
         
         // Dual-Layer Specular
-        vec3 half_v = normalize(light_dir + view_dir);
-        float spec_broad = pow(max(dot(normal, half_v), 0.0), 128.0) * 0.5;
-        float spec_sparkle = pow(max(dot(normal, half_v), 0.0), 4096.0) * 10.0; // Facet sparkle
+        vec3 half_v = normalize(light_dir + view_dir + vec3(1e-5));
+        float spec_broad = pow(max(dot(normal, half_v), 0.0), 128.0) * 0.5 * u_specular_intensity;
+        float spec_sparkle = pow(max(dot(normal, half_v), 0.0), 4096.0) * 10.0 * u_specular_intensity; // Facet sparkle
         
-        // Fresnel Reflection (Reduced to avoid washout)
-        float fresnel = pow(1.0 - max(dot(normal, view_dir), 0.0), 5.0);
-        vec3 sky_ref = vec3(0.5, 0.7, 1.0) * 0.5;
-        water_rgb = mix(water_rgb, sky_ref, fresnel * 0.3); // Less "milky" washout
+        // Fresnel Reflection (Configurable)
+        float fresnel = pow(1.0 - max(dot(normal, view_dir), 0.0), 5.0) * u_fresnel_strength;
+        
+        // Dynamic Reflection Tint
+        vec3 day_tint = u_reflection_tint;
+        vec3 sunset_tint = vec3(1.0, 0.5, 0.3);
+        vec3 sky_ref = mix(day_tint, sunset_tint, clamp(1.0 - abs(sin(time_of_day * 3.14159)), 0.0, 1.0));
+        sky_ref *= day_ratio; // Darken at night
+        
+        water_rgb = mix(water_rgb, sky_ref, fresnel); 
         
         vec3 final_rgb = water_rgb + spec_broad + spec_sparkle;
         
@@ -190,6 +206,7 @@ def create_ocean_shader_gerstner():
     uniform float wave_steepness;
     uniform vec3 grid_origin;
     uniform float grid_chunk_size;
+    uniform float time_of_day;
     
     varying vec3 v_normal;
     varying vec3 v_pos;
@@ -242,6 +259,7 @@ def create_ocean_shader_gerstner():
     uniform vec4 ocean_color;
     uniform float ocean_opacity;
     uniform float foam_amount;
+    uniform float time_of_day;
     uniform vec3 cam_pos;
     varying vec3 v_normal;
     varying vec3 v_pos;
@@ -251,15 +269,23 @@ def create_ocean_shader_gerstner():
     void main() {
         vec3 normal = normalize(v_normal);
         float ndotv = max(dot(normal, v_view_dir), 0.0);
-        vec3 rgb = mix(ocean_color.rgb*0.2, ocean_color.rgb, v_pos.y*0.05+0.5);
+        
+        // --- Day/Night Lighting ---
+        float day_ratio = max(sin(time_of_day * 3.14159), 0.0);
+        vec3 base_water = mix(ocean_color.rgb*0.1, ocean_color.rgb, v_pos.y*0.05+0.5);
+        base_water *= day_ratio; // Darken at night
         
         float fresnel = pow(1.0 - ndotv, 4.0);
-        rgb = mix(rgb, vec3(0.7, 0.8, 1.0), fresnel*0.5);
-        rgb = mix(rgb, vec3(1.0), v_foam * foam_amount);
+        vec3 sky_ref = mix(vec3(0.7, 0.8, 1.0), vec3(1.0, 0.5, 0.2), clamp(1.0 - day_ratio, 0.0, 1.0));
+        sky_ref *= day_ratio;
+        
+        vec3 rgb = mix(base_water, sky_ref, fresnel*0.5);
+        rgb = mix(rgb, vec3(1.0), v_foam * foam_amount * day_ratio);
         
         float dist = length(v_pos - cam_pos);
         float fog = clamp((dist-1000.0)/800.0, 0.0, 1.0);
-        gl_FragColor = vec4(mix(rgb, vec3(0.05), fog), ocean_opacity);
+        vec3 fog_color = mix(vec3(0.01), vec3(0.05, 0.08, 0.1), day_ratio);
+        gl_FragColor = vec4(mix(rgb, fog_color, fog), ocean_opacity);
     }
     """
     return ShaderProgram(v_src, f_src)

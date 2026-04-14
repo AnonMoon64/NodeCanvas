@@ -33,53 +33,55 @@ def create_atmosphere_shader():
     
     uniform vec3 cam_pos;
     uniform float sky_density;
-    uniform float cloud_density;
+    uniform float sun_size;
+    uniform float sun_intensity;
     uniform float time_of_day; // 0.0 to 1.0 (0.5 is noon)
     
     in vec3 v_pos;
     in vec3 v_view_dir;
     
-    // Simple hash for clouds
-    float hash(vec2 p) {
-        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-    }
-    
-    float noise(vec2 p) {
-        vec2 i = floor(p);
-        vec2 f = fract(p);
-        vec2 u = f*f*(3.0-2.0*f);
-        return mix(mix(hash(i + vec2(0,0)), hash(i + vec2(1,0)), u.x),
-                   mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), u.x), u.y);
-    }
-    
     void main() {
         vec3 dir = normalize(v_pos);
         float h = cam_pos.y;
         
-        // Rayleigh Scattering approximation
-        vec3 sun_dir = normalize(vec3(sin(time_of_day * 6.28), cos(time_of_day * 6.28), 0.2));
-        float sun_limit = max(dot(dir, sun_dir), 0.0);
+        // --- Day/Night Dynamics (0.5 is Noon, 0.0/1.0 is Midnight) ---
+        float sol_angle = (time_of_day - 0.5) * 6.28318;
+        float day_ratio = clamp(cos(sol_angle) * 2.0 + 0.5, 0.0, 1.0);
+        float night_factor = clamp(-cos(sol_angle) * 2.0 + 0.5, 0.0, 1.0);
         
-        // Altitude transition (Blue -> Black)
-        float alt_factor = clamp((h - 500.0) / 2000.0, 0.0, 1.0);
-        vec3 sky_color = mix(vec3(0.3, 0.6, 1.0), vec3(0.01, 0.02, 0.05), alt_factor);
+        // Sun direction
+        vec3 sun_dir = normalize(vec3(sin(sol_angle), cos(sol_angle), 0.2));
         
-        // Sun Glow
-        vec3 sun_glow = vec3(1.0, 0.9, 0.7) * pow(sun_limit, 100.0) * 2.0;
-        sky_color += sun_glow * (1.0 - alt_factor);
+        // --- 1. Zenith-based Sky Grading ---
+        float zenith = max(dir.y, 0.0);
+        vec3 day_zenith = vec3(0.1, 0.4, 0.9) * sky_density;
+        vec3 day_horizon = vec3(0.6, 0.8, 1.0) * sky_density;
+        vec3 sunset_horizon = vec3(1.0, 0.4, 0.2) * sky_density;
         
-        // Atmospheric haze near horizon
-        float horizon = 1.0 - max(dir.y, 0.0);
-        sky_color = mix(sky_color, vec3(0.7, 0.8, 0.9), pow(horizon, 8.0) * 0.5 * (1.0 - alt_factor));
+        float sunset_val = clamp(1.0 - abs(cos(sol_angle)), 0.0, 1.0);
+        vec3 horizon_color = mix(day_horizon, sunset_horizon, sunset_val);
+        vec3 sky_rgb = mix(horizon_color, day_zenith, zenith);
         
-        // Procedural Clouds
-        float cloud_val = noise(dir.xz * 10.0 / (dir.y + 0.1) + time_of_day * 0.1);
-        cloud_val += noise(dir.xz * 25.0 / (dir.y + 0.1)) * 0.5;
-        float clouds = smoothstep(0.5, 0.8, cloud_val * cloud_density * max(dir.y, 0.0));
+        // --- 2. Sun & Mie Scattering (Halo) ---
+        float sun_dot = max(dot(dir, sun_dir), 0.0);
+        float sun_visible = smoothstep(-0.1, 0.1, sun_dir.y);
         
-        sky_color = mix(sky_color, vec3(1.0), clouds * (1.0 - alt_factor));
+        // Clean sun disk - scaling by sun_size
+        float disk_pow = 2000.0 / (sun_size + 0.001);
+        vec3 sun_disk = vec3(1.0, 1.0, 0.8) * pow(sun_dot, disk_pow) * sun_intensity * sun_visible;
         
-        gl_FragColor = vec4(sky_color, 1.0);
+        // Atmospheric halo
+        vec3 sun_halo = horizon_color * pow(sun_dot, 16.0 / sun_size) * 2.5 * day_ratio;
+        sky_rgb += (sun_disk + sun_halo);
+
+        // --- 3. Planetary Transition ---
+        float atmosphere_fade = clamp(1.0 - (h / 6500.0), 0.0, 1.0);
+        sky_rgb *= atmosphere_fade;
+        
+        float alpha = mix(1.0, 0.0, night_factor * 0.98); 
+        alpha *= atmosphere_fade; 
+
+        gl_FragColor = vec4(sky_rgb, alpha);
     }
     """
     return ShaderProgram(v_src, f_src)
@@ -92,12 +94,16 @@ def render_atmosphere(camera_pos, obj, time=0.0):
         
     glDisable(GL_LIGHTING)
     glDisable(GL_DEPTH_TEST)
-    glCullFace(GL_FRONT) # Show inside of sphere
+    glCullFace(GL_FRONT) 
+    
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
     
     _atmosphere_shader.use()
     _atmosphere_shader.set_uniform_v3("cam_pos", camera_pos[0], camera_pos[1], camera_pos[2])
     _atmosphere_shader.set_uniform_f("sky_density", getattr(obj, 'sky_density', 1.0))
-    _atmosphere_shader.set_uniform_f("cloud_density", getattr(obj, 'cloud_density', 0.5))
+    _atmosphere_shader.set_uniform_f("sun_size", getattr(obj, 'sun_size', 1.0))
+    _atmosphere_shader.set_uniform_f("sun_intensity", getattr(obj, 'sun_intensity', 10.0))
     _atmosphere_shader.set_uniform_f("time_of_day", getattr(obj, 'time_of_day', 0.25))
     
     # Large inverted sphere
@@ -113,6 +119,7 @@ def render_atmosphere(camera_pos, obj, time=0.0):
     glPopMatrix()
     _atmosphere_shader.stop()
     
+    glDisable(GL_BLEND)
     glEnable(GL_DEPTH_TEST)
     glEnable(GL_LIGHTING)
     glCullFace(GL_BACK)
