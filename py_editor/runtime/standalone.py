@@ -47,6 +47,14 @@ class StandaloneGameWindow(QMainWindow):
         # Simulation Backend
         self.backend = IRBackend()
         self.contexts = {} # Object ID -> List of ExecutionContexts
+
+        # Navigation manager (runtime tasks)
+        try:
+            from py_editor.core.navigation_manager import get_manager
+            self.nav_manager = get_manager()
+            self.nav_manager.set_backend(self.backend)
+        except Exception:
+            self.nav_manager = None
         
         # Load Templates
         load_templates()
@@ -62,7 +70,11 @@ class StandaloneGameWindow(QMainWindow):
         self.timer.timeout.connect(self._tick)
         self.timer.start(16) # 60 FPS target
         
+        self.controllers = {} # obj.id -> BaseController
+        # _init_controllers is now called via QTimer or initializeGL to ensure GL context
+        
         self.start_time = time.time()
+        self._last_tick_time = time.time()
 
     def _boot_logic(self):
         """Find all objects with a logic path and compile them."""
@@ -71,13 +83,10 @@ class StandaloneGameWindow(QMainWindow):
         
         for obj in objects:
             logic_path = getattr(obj, 'logic_path', None)
-            if not logic_path: continue
-            
-            self.contexts[obj.id] = []
-            if not Path(logic_path).exists():
-                print(f"[RUNTIME] Logic file not found: {logic_path}")
+            if not logic_path or not Path(logic_path).is_file(): 
                 continue
             
+            self.contexts[obj.id] = []
             try:
                 with open(logic_path, 'r', encoding='utf-8') as f:
                     graph_data = json.load(f)
@@ -87,6 +96,11 @@ class StandaloneGameWindow(QMainWindow):
                 ctx = ExecutionContext()
                 ctx.ir_module = ir_module
                 ctx.variables['self'] = obj.id
+                # Provide a mapping of scene objects for interpreter convenience
+                try:
+                    ctx.variables['__scene_objects__'] = {so.id: so for so in self.viewport.scene_objects}
+                except Exception:
+                    ctx.variables['__scene_objects__'] = {}
                 
                 self.contexts[obj.id].append((ir_module, ctx))
                 print(f"[RUNTIME] Booted logic {Path(logic_path).name} on {obj.name}")
@@ -98,19 +112,92 @@ class StandaloneGameWindow(QMainWindow):
                 import traceback
                 traceback.print_exc()
 
-    def _tick(self):
-        dt = 0.016
-        sim_time = time.time() - self.start_time
+    def _init_controllers(self):
+        """Bind physical controllers to scene objects."""
+        from py_editor.core.controller import AIController, PlayerController, AIGPUFishController, AIGPUBirdController
         
-        # 1. Update Viewport (Animation/Physics) - uses internal _tick
-        # No explicit call needed as viewport has its own QTimer
+        for obj in self.viewport.scene_objects:
+            name_lower = obj.name.lower()
+            type_lower = obj.obj_type.lower()
+            
+            # Fix AttributeError: handle logic_path being None
+            logic_raw = getattr(obj, "logic_path", "")
+            logic_path = (logic_raw or "").lower()
+            
+            # Explicit Controller Property override
+            ctrl_type = getattr(obj, "controller_type", "None")
+            
+            # Binding Logic
+            if ctrl_type == "AI (GPU Fish)" or (ctrl_type == "None" and ("fish" in name_lower or "ai_gpu_fish" in logic_path)):
+                ctrl = AIGPUFishController(obj)
+                self.controllers[obj.id] = ctrl
+                print(f"[RUNTIME] Assigned AIGPUFishController to {obj.name}")
+            
+            elif ctrl_type == "AI (GPU Bird)" or (ctrl_type == "None" and ("bird" in name_lower or "ai_gpu_bird" in logic_path)):
+                ctrl = AIGPUBirdController(obj)
+                self.controllers[obj.id] = ctrl
+                print(f"[RUNTIME] Assigned AIGPUBirdController to {obj.name}")
+
+            elif ctrl_type == "AI (CPU)" or (ctrl_type == "None" and obj.obj_type == 'fish'):
+                ctrl = AIController(obj)
+                self.controllers[obj.id] = ctrl
+                print(f"[RUNTIME] Assigned AIController to {obj.name}")
+            
+            elif ctrl_type == "Player" or (ctrl_type == "None" and obj.obj_type == 'player'):
+                ctrl = PlayerController(obj)
+                self.controllers[obj.id] = ctrl
+                print(f"[RUNTIME] Assigned PlayerController to {obj.name}")
+        
+        # Link flocks for Boids
+        all_ais = [c for c in self.controllers.values() if isinstance(c, AIController)]
+        for ai in all_ais:
+            ai.flock = all_ais
+
+        # Give navigation manager access to controllers so it can drive MoveTo tasks
+        try:
+            if self.nav_manager:
+                self.nav_manager.set_controllers(self.controllers)
+        except Exception:
+            pass
+
+    def _tick(self):
+        now = time.time()
+        dt = now - self._last_tick_time
+        self._last_tick_time = now
+        
+        sim_time = now - self.start_time
+        
+        # 1. Tick physical controllers (Boids, Physics, etc.)
+        for ctrl in self.controllers.values():
+            try:
+                ctrl.update(dt)
+            except Exception as e:
+                print(f"[RUNTIME] Controller error: {e}")
+
+        # Ensure controller-derived physics values are updated
+        for ctrl in self.controllers.values():
+            try:
+                ctrl.update_physics(dt)
+            except Exception:
+                pass
+
+        # Let navigation manager advance tasks (moves are applied from controllers)
+        try:
+            if self.nav_manager:
+                self.nav_manager.update(dt)
+        except Exception:
+            pass
+
+        # Resolve simple collisions after movement
+        try:
+            from py_editor.core.physics import resolve_collisions
+            resolve_collisions(self.viewport.scene_objects, dt)
+        except Exception:
+            pass
         
         # 2. Tick Logic Components
         for obj_id, ctx_pairs in self.contexts.items():
             for ir_module, ctx in ctx_pairs:
-                # Execute the full graph once.
-                # In a real engine, we'd trigger an 'OnTick' entry point here.
-                # For now, we reuse the existing one-pass logic.
                 try:
                     self.backend.execute_ir(ir_module, ctx)
                 except Exception:
@@ -122,6 +209,10 @@ def launch_standalone(scene_data: dict):
     app = QApplication.instance() or QApplication([])
     window = StandaloneGameWindow(scene_data)
     window.show()
+    
+    # Initialize controllers AFTER showing the window (ensures GL context for GPUBoids)
+    window._init_controllers()
+    
     if not QApplication.instance():
         sys.exit(app.exec())
     return window

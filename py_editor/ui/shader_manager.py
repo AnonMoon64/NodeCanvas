@@ -8,6 +8,171 @@ from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 import numpy as np
 
+def create_standard_shader():
+    v_src = """
+    #version 120
+    varying vec3 v_normal;
+    void main() {
+        v_normal = gl_NormalMatrix * gl_Normal;
+        gl_Position = ftransform();
+    }
+    """
+    f_src = """
+    #version 120
+    uniform vec4 base_color;
+    uniform vec3 sunDir;
+    varying vec3 v_normal;
+    void main() {
+        vec3 n = normalize(v_normal);
+        vec3 l = normalize(sunDir);
+        float diff = max(dot(n, l), 0.2);
+        gl_FragColor = vec4(base_color.rgb * diff, base_color.a);
+    }
+    """
+    return ShaderProgram(v_src, f_src)
+
+def create_fish_shader():
+    v_src = """
+    #version 120
+    uniform float time;
+    uniform float speed;
+    uniform float freq;
+    uniform float intensity;
+    
+    uniform float yaw_amp;
+    uniform float side_amp;
+    uniform float roll_amp;
+    uniform float flag_amp;
+    
+    uniform float forward_axis; // 0=X, 1=Y, 2=Z
+    uniform float invert_axis;  // 0=Normal, 1=Inverted
+    
+    varying vec3 v_pos;
+    varying vec3 v_normal;
+
+    mat3 rotate_y(float a) {
+        float c = cos(a); float s = sin(a);
+        return mat3(c, 0, s, 0, 1, 0, -s, 0, c);
+    }
+    mat3 rotate_z(float a) {
+        float c = cos(a); float s = sin(a);
+        return mat3(c, -s, 0, s, c, 0, 0, 0, 1);
+    }
+
+    void main() {
+        vec3 pos = gl_Vertex.xyz;
+        
+        // 1. Identify "Forward Distance" (0 at head, 1 at tail)
+        float d = pos.x;
+        if (forward_axis > 0.5 && forward_axis < 1.5) d = pos.y;
+        else if (forward_axis > 1.5) d = pos.z;
+        
+        float dist = d + 0.5; 
+        if (invert_axis > 0.5) dist = 0.5 - d;
+        
+        // Mask: Head stays still (0), Tail wiggles fully (1)
+        float mask = smoothstep(0.0, 1.0, dist);
+        float t = time * speed;
+        
+        // --- 2. Calculate Motion Components ---
+        // Primary Yaw (Large body swing)
+        float yaw = sin(t - dist * freq) * yaw_amp * intensity * mask;
+        
+        // Secondary Yaw (Tail flag/flicker - higher freq)
+        float flag = sin(t * 1.5 - dist * freq * 2.0) * flag_amp * intensity * pow(mask, 2.0);
+        
+        // Roll (Subtle bank)
+        float roll = cos(t - dist * freq) * roll_amp * intensity * mask;
+        
+        // Side Translation
+        float side = sin(t - dist * freq) * side_amp * intensity * mask;
+
+        // --- 3. Apply Transformations ---
+        // We transform the vertex relative to its forward position (d)
+        // Extract local offsets (e.g. if X is forward, offsets are Y and Z)
+        vec3 local_offset = pos;
+        if (forward_axis < 0.5) local_offset.x = 0.0;
+        else if (forward_axis < 1.5) local_offset.y = 0.0;
+        else local_offset.z = 0.0;
+        
+        // Rotate the local slice (keeps fins on body)
+        mat3 rot = rotate_y(yaw + flag) * rotate_z(roll);
+        local_offset = rot * local_offset;
+        
+        // Reassemble position
+        vec3 final_pos = pos;
+        if (forward_axis < 0.5) {
+            final_pos.y = local_offset.y;
+            final_pos.z = local_offset.z + side; // Add lateral shift
+        } else if (forward_axis < 1.5) {
+            final_pos.x = local_offset.x + side;
+            final_pos.z = local_offset.z;
+        } else {
+            final_pos.x = local_offset.x + side;
+            final_pos.y = local_offset.y;
+        }
+        
+        v_pos = (gl_ModelViewMatrix * vec4(final_pos, 1.0)).xyz;
+        v_normal = gl_NormalMatrix * (rot * gl_Normal); // Rotate normal too
+        gl_Position = gl_ModelViewProjectionMatrix * vec4(final_pos, 1.0);
+    }
+    """
+    f_src = """
+    #version 120
+    uniform vec4 base_color;
+    uniform vec3 sunDir;
+    varying vec3 v_pos;
+    varying vec3 v_normal;
+
+    void main() {
+        vec3 n = normalize(v_normal);
+        vec3 l = normalize(sunDir);
+        float diff = max(dot(n, l), 0.2);
+        gl_FragColor = vec4(base_color.rgb * diff, base_color.a);
+    }
+    """
+    return ShaderProgram(v_src, f_src)
+
+def create_flag_shader():
+    v_src = """
+    #version 120
+    uniform float time;
+    uniform float wave_speed;
+    uniform float wave_amplitude;
+    uniform float invert_axis;
+    
+    varying vec3 v_pos;
+    varying vec3 v_normal;
+
+    void main() {
+        vec3 pos = gl_Vertex.xyz;
+        float d = pos.x;
+        if (invert_axis > 0.5) d = -pos.x;
+        
+        float wave = sin(d * 2.0 + time * wave_speed) * cos(pos.z * 1.5 + time * wave_speed * 0.8);
+        pos.y += wave * wave_amplitude * (d + 0.5); 
+        
+        v_pos = (gl_ModelViewMatrix * vec4(pos, 1.0)).xyz;
+        v_normal = gl_NormalMatrix * gl_Normal;
+        gl_Position = gl_ModelViewProjectionMatrix * vec4(pos, 1.0);
+    }
+    """
+    f_src = """
+    #version 120
+    uniform vec4 base_color;
+    uniform vec3 sunDir;
+    varying vec3 v_pos;
+    varying vec3 v_normal;
+
+    void main() {
+        vec3 n = normalize(v_normal);
+        vec3 l = normalize(sunDir);
+        float diff = max(dot(n, l), 0.2);
+        gl_FragColor = vec4(base_color.rgb * diff, base_color.a);
+    }
+    """
+    return ShaderProgram(v_src, f_src)
+
 class ShaderProgram:
     def __init__(self, vertex_source, fragment_source):
         self.program = None
@@ -289,3 +454,168 @@ def create_ocean_shader_gerstner():
     }
     """
     return ShaderProgram(v_src, f_src)
+
+def create_pbr_shader():
+    v_src = """
+    #version 330 compatibility
+    layout(location = 0) in vec3 pos;
+    layout(location = 2) in vec3 norm;
+    layout(location = 8) in vec2 uv;
+    
+    uniform mat4 gl_ModelViewProjectionMatrix;
+    uniform mat4 gl_ModelViewMatrix;
+    uniform mat3 gl_NormalMatrix;
+    uniform vec2 u_tiling;
+    
+    out vec3 v_world_pos;
+    out vec3 v_normal;
+    out vec2 v_uv;
+    out mat3 v_tbn;
+
+    void main() {
+        v_world_pos = (gl_ModelViewMatrix * vec4(pos, 1.0)).xyz;
+        v_normal = normalize(gl_NormalMatrix * norm);
+        v_uv = uv * u_tiling;
+        
+        // Calculate TBN matrix for normal mapping
+        vec3 tangent = normalize(gl_NormalMatrix * vec3(1.0, 0.0, 0.0));
+        vec3 bitangent = cross(v_normal, tangent);
+        v_tbn = mat3(tangent, bitangent, v_normal);
+        
+        gl_Position = gl_ModelViewProjectionMatrix * vec4(pos, 1.0);
+    }
+    """
+    f_src = """
+    #version 330 compatibility
+    
+    uniform sampler2D albedoMap;
+    uniform sampler2D normalMap;
+    uniform sampler2D metallicMap;
+    uniform sampler2D roughnessMap;
+    uniform sampler2D aoMap;
+    
+    uniform vec4 u_base_color;
+    uniform float u_metallic;
+    uniform float u_roughness;
+    uniform vec3 sunDir;
+    uniform vec3 cam_pos;
+    
+    uniform bool hasAlbedo;
+    uniform bool hasNormal;
+    uniform bool hasMetallic;
+    uniform bool hasRoughness;
+    uniform bool hasAO;
+
+    in vec3 v_world_pos;
+    in vec3 v_normal;
+    in vec2 v_uv;
+    in mat3 v_tbn;
+
+    const float PI = 3.14159265359;
+
+    // PBR Functions
+    float DistributionGGX(vec3 N, vec3 H, float roughness) {
+        float a = roughness*roughness;
+        float a2 = a*a;
+        float NdotH = max(dot(N, H), 0.0);
+        float NdotH2 = NdotH*NdotH;
+        float num = a2;
+        float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+        denom = PI * denom * denom;
+        return num / denom;
+    }
+
+    float GeometrySchlickGGX(float NdotV, float roughness) {
+        float r = (roughness + 1.0);
+        float k = (r*r) / 8.0;
+        float num = NdotV;
+        float denom = NdotV * (1.0 - k) + k;
+        return num / denom;
+    }
+
+    float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
+        float NdotV = max(dot(N, V), 0.0);
+        float NdotL = max(dot(N, L), 0.0);
+        float ggx2 = GeometrySchlickGGX(NdotV, roughness);
+        float ggx1 = GeometrySchlickGGX(NdotL, roughness);
+        return ggx1 * ggx2;
+    }
+
+    vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+        return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+    }
+
+    void main() {
+        vec3 N = normalize(v_normal);
+        if (hasNormal) {
+            vec3 map_normal = texture(normalMap, v_uv).rgb * 2.0 - 1.0;
+            N = normalize(v_tbn * map_normal);
+        }
+        
+        vec3 V = normalize(cam_pos - v_world_pos);
+        vec3 L = normalize(sunDir);
+        vec3 H = normalize(V + L);
+
+        vec3 albedo = hasAlbedo ? texture(albedoMap, v_uv).rgb * u_base_color.rgb : u_base_color.rgb;
+        float metallic = hasMetallic ? texture(metallicMap, v_uv).r : u_metallic;
+        float roughness = hasRoughness ? texture(roughnessMap, v_uv).r : u_roughness;
+        float ao = hasAO ? texture(aoMap, v_uv).r : 1.0;
+
+        vec3 F0 = vec3(0.04); 
+        F0 = mix(F0, albedo, metallic);
+
+        // Reflectance equation
+        float NDF = DistributionGGX(N, H, roughness);   
+        float G   = GeometrySmith(N, V, L, roughness);      
+        vec3 F    = fresnelSchlick(max(dot(H, V), 0.0), F0);
+           
+        vec3 numerator    = NDF * G * F; 
+        float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+        vec3 specular = numerator / denominator;
+        
+        vec3 kS = F;
+        vec3 kD = vec3(1.0) - kS;
+        kD *= 1.0 - metallic;	  
+
+        float NdotL = max(dot(N, L), 0.0);        
+
+        vec3 ambient = vec3(0.03) * albedo * ao;
+        vec3 radiance = vec3(2.5, 2.3, 2.1); // Direct sunlight radiance approx
+
+        vec3 result = (kD * albedo / PI + specular) * radiance * NdotL;
+        result += ambient;
+
+        // Tone mapping & Gamma correction
+        result = result / (result + vec3(1.0));
+        result = pow(result, vec3(1.0/2.2));
+
+        gl_FragColor = vec4(result, u_base_color.a);
+    }
+    """
+    return ShaderProgram(v_src, f_src)
+
+# --- Global Shader Registry & Cache ---
+SHADER_REGISTRY = {
+    "Standard": create_standard_shader,
+    "Fish Swimming": create_fish_shader,
+    "Flag Waving": create_flag_shader,
+    "Ocean (FFT)": create_ocean_shader_fft,
+    "Ocean (Gerstner)": create_ocean_shader_gerstner,
+    "PBR Material": create_pbr_shader
+}
+
+_SHADER_CACHE = {}
+
+def get_shader(name):
+    """Retrieve a compiled shader from the cache or compile a new one."""
+    if name in _SHADER_CACHE:
+        return _SHADER_CACHE[name]
+    
+    print(f"[SHADER MANAGER] Initializing shader: {name}")
+    if name in SHADER_REGISTRY:
+        prog = SHADER_REGISTRY[name]()
+    else:
+        prog = create_standard_shader()
+    
+    _SHADER_CACHE[name] = prog
+    return prog

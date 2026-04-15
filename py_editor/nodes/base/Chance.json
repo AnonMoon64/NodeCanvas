@@ -1,0 +1,12 @@
+{
+  "type": "base",
+  "name": "Chance",
+  "category": "Random",
+  "inputs": {
+    "prob": "float"
+  },
+  "outputs": {
+    "result": "bool"
+  },
+  "code": "name = 'Chance'\ninputs = {'prob':'float'}\noutputs = {'result':'bool'}\nimport random\ndef process(prob=0.5):\n    try:\n        return random.random() < float(prob)\n    except Exception:\n        return False\n"
+}

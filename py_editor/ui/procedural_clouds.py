@@ -30,62 +30,93 @@ def create_cloud_shader():
     
     f_src = """
     #version 330 compatibility
-    
+
     uniform vec3 cam_pos;
     uniform float time_of_day;
     uniform float cloud_density;
-    
+
     in vec3 v_world_pos;
     in vec2 v_uv;
-    
-    float hash(vec2 p) {
-        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+
+    // ---- Noise helpers ----
+    float hash21(vec2 p) {
+        p = fract(p * vec2(127.1, 311.7));
+        p += dot(p, p + 19.19);
+        return fract(p.x * p.y);
     }
-    
-    float noise(vec2 p) {
+    float hash31(vec3 p) {
+        p = fract(p * vec3(127.1, 311.7, 74.7));
+        p += dot(p, p + 19.19);
+        return fract(p.x * p.y + p.z);
+    }
+    float noise2(vec2 p) {
         vec2 i = floor(p); vec2 f = fract(p);
-        vec2 u = f*f*(3.0-2.0*f);
-        return mix(mix(hash(i + vec2(0,0)), hash(i + vec2(1,0)), u.x),
-                   mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), u.x), u.y);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash21(i + vec2(0,0)), hash21(i + vec2(1,0)), u.x),
+                   mix(hash21(i + vec2(0,1)), hash21(i + vec2(1,1)), u.x), u.y);
     }
-    
+    // Multi-octave fBm with warp for more realistic clumping
     float fbm(vec2 p) {
-        float f = 0.0;
-        f += 0.5000 * noise(p); p *= 2.02;
-        f += 0.2500 * noise(p); p *= 2.03;
-        f += 0.1250 * noise(p); p *= 2.01;
-        f += 0.0625 * noise(p);
-        return f;
+        float v = 0.0, a = 0.5;
+        vec2 shift = vec2(100.0);
+        for (int i = 0; i < 6; i++) {
+            v += a * noise2(p);
+            p  = p * 2.1 + shift;
+            a *= 0.5;
+        }
+        return v;
     }
-    
+    // Domain-warped cloud: gives lumpy, cumulus-like shapes
+    float cloud_shape(vec2 p) {
+        // First pass: large structure
+        vec2 q = vec2(fbm(p), fbm(p + vec2(1.7, 9.2)));
+        // Second pass: detail warped by q
+        vec2 r = vec2(fbm(p + 1.0 * q + vec2(1.7, 9.2)),
+                      fbm(p + 1.0 * q + vec2(8.3, 2.8)));
+        return fbm(p + 1.0 * r);
+    }
+
     void main() {
-        vec2 uv = v_world_pos.xz * 0.0001; // Tiled world coordinates
-        uv += time_of_day * 0.05; // Wind movement
-        
-        float density = fbm(uv);
-        density = smoothstep(0.4, 0.8, density * cloud_density);
-        
-        // --- Lighting ---
-        float sol_angle = (time_of_day - 0.5) * 6.28318;
-        float day_ratio = clamp(cos(sol_angle) * 2.0 + 0.5, 0.0, 1.0);
+        float sol_angle  = (time_of_day - 0.5) * 6.28318;
+        float day_ratio  = clamp(cos(sol_angle) * 2.0 + 0.5, 0.0, 1.0);
         float sunset_val = clamp(1.0 - abs(cos(sol_angle)), 0.0, 1.0);
-        
-        vec3 day_color = vec3(1.0);
-        vec3 sunset_color = vec3(1.0, 0.5, 0.3);
-        vec3 night_color = vec3(0.05, 0.05, 0.1);
-        
-        vec3 cloud_rgb = mix(day_color, sunset_color, sunset_val);
-        cloud_rgb = mix(night_color, cloud_rgb, day_ratio);
-        
-        // --- Distance Fading ---
-        float dist = length(v_world_pos - cam_pos);
-        float fade = 1.0 - smoothstep(10000.0, 20000.0, dist);
-        
-        // Fly-through fade (transparent when camera is inside/close to layer)
-        float h_diff = abs(cam_pos.y - v_world_pos.y);
-        float h_fade = smoothstep(0.0, 500.0, h_diff);
-        
-        gl_FragColor = vec4(cloud_rgb, density * fade * h_fade);
+
+        // Slow wind drift
+        float wind_speed = 0.012;
+        vec2 uv = v_world_pos.xz * 0.000045;
+        uv += vec2(time_of_day * wind_speed, time_of_day * wind_speed * 0.4);
+
+        float shape = cloud_shape(uv);
+        // Sharpen: remap to get distinct cloud/clear-sky boundary
+        float threshold = mix(0.52, 0.42, cloud_density);
+        float raw = smoothstep(threshold, threshold + 0.18, shape);
+
+        // Soften edges with a second fbm for wispy details
+        float detail = fbm(uv * 3.0 + vec2(42.1, 7.3));
+        raw = clamp(raw + (detail - 0.5) * 0.12, 0.0, 1.0);
+
+        // ---- Lighting ----
+        // Top-lit: brighter on top, darker base (fake self-shadowing)
+        float self_shadow = clamp(1.0 - shape * 0.6, 0.0, 1.0);
+
+        vec3 day_top    = vec3(1.0, 1.0, 1.0);
+        vec3 day_base   = vec3(0.72, 0.75, 0.82);
+        vec3 sunset_top = vec3(1.0, 0.65, 0.35);
+        vec3 sunset_base= vec3(0.6,  0.3,  0.2);
+        vec3 night_col  = vec3(0.08, 0.08, 0.15);
+
+        vec3 cloud_top  = mix(day_top,  sunset_top,  sunset_val);
+        vec3 cloud_base = mix(day_base, sunset_base, sunset_val);
+        vec3 cloud_rgb  = mix(cloud_base, cloud_top, self_shadow);
+        cloud_rgb = mix(night_col, cloud_rgb, day_ratio);
+
+        // ---- Fading ----
+        float dist     = length(v_world_pos - cam_pos);
+        float dist_fade = 1.0 - smoothstep(12000.0, 22000.0, dist);
+        float h_diff   = abs(cam_pos.y - v_world_pos.y);
+        float h_fade   = smoothstep(0.0, 600.0, h_diff);
+
+        gl_FragColor = vec4(cloud_rgb, raw * dist_fade * h_fade);
     }
     """
     return ShaderProgram(v_src, f_src)

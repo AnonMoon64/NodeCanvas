@@ -1,0 +1,15 @@
+{
+  "name": "SetPhysicsEnabled",
+  "type": "action",
+  "inputs": {
+    "exec_in": "exec",
+    "target": "string",
+    "enabled": "bool"
+  },
+  "outputs": {
+    "exec_out": "exec",
+    "onEnabled": "exec",
+    "onDisabled": "exec"
+  },
+  "code": "name = \"SetPhysicsEnabled\"\ninputs = {\"exec_in\":\"exec\",\"target\":\"string\",\"enabled\":\"bool\"}\noutputs = {\"exec_out\":\"exec\", \"onEnabled\":\"exec\", \"onDisabled\":\"exec\"}\ndef process(exec_in, target, enabled):\n    # Runtime will handle toggling physics on the target actor.\n    return ('exec_out',)\n"
+}

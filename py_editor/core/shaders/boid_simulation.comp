@@ -1,0 +1,124 @@
+#version 430 core
+
+/* 
+ * OPTIMIZATION NOTE:
+ * This simulation has been moved to the GPU for massive parallelism.
+ * We use Spatial Partitioning (Uniform Grid) to reduce collision checks from O(N^2) to O(N).
+ * Neighbors are fetched from a linked-list grid structure built in a previous pass.
+ * This allows us to scale from hundreds of boids to tens of thousands with minimal CPU overhead.
+ */
+
+layout(local_size_x = 256) in;
+
+struct Boid {
+    vec4 pos; // xyz=position, w=intensity
+    vec4 vel; // xyz=velocity, w=type (0=fish, 1=bird)
+};
+
+layout(std430, binding = 0) buffer BoidBuffer {
+    Boid boids[];
+};
+
+layout(std430, binding = 1) buffer BoidOutputBuffer {
+    Boid boids_out[];
+};
+
+layout(std430, binding = 2) buffer GridHeadBuffer {
+    int gridHead[];
+};
+
+layout(std430, binding = 3) buffer GridNextBuffer {
+    int gridNext[];
+};
+
+uniform float dt;
+uniform float time;
+uniform int numBoids;
+
+// Weights for flocking behavior
+uniform float sepWeight;
+uniform float aliWeight;
+uniform float cohWeight;
+uniform float targetWeight;
+uniform float neighborDist;
+
+uniform vec3 targetPos;
+uniform vec3 gridDims;
+uniform vec3 gridMin;
+uniform float cellSize;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= numBoids) return;
+
+    vec3 myPos = boids[i].pos.xyz;
+    vec3 myVel = boids[i].vel.xyz;
+    float type = boids[i].vel.w;
+
+    vec3 sep = vec3(0.0);
+    vec3 ali = vec3(0.0);
+    vec3 coh = vec3(0.0);
+    int count = 0;
+
+    // Spatial Neighbor Lookup
+    ivec3 cellCoord = ivec3((myPos - gridMin) / cellSize);
+    
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            for (int z = -1; z <= 1; z++) {
+                ivec3 neighborCoord = cellCoord + ivec3(x, y, z);
+                if (any(lessThan(neighborCoord, ivec3(0))) || any(greaterThanEqual(neighborCoord, ivec3(gridDims)))) continue;
+                
+                int cellIdx = neighborCoord.x + int(gridDims.x) * (neighborCoord.y + int(gridDims.y) * neighborCoord.z);
+                int otherIdx = gridHead[cellIdx];
+                
+                while (otherIdx != -1) {
+                    if (otherIdx != int(i)) {
+                        vec3 otherPos = boids[otherIdx].pos.xyz;
+                        float d = distance(myPos, otherPos);
+                        if (d < neighborDist) {
+                            // Separation: steering away from neighbors
+                            sep += (myPos - otherPos) / (d + 0.0001);
+                            // Alignment: matching neighbor's velocity
+                            ali += boids[otherIdx].vel.xyz;
+                            // Cohesion: moving towards average center
+                            coh += otherPos;
+                            count++;
+                        }
+                    }
+                    otherIdx = gridNext[otherIdx];
+                }
+            }
+        }
+    }
+
+    vec3 steer = vec3(0.0);
+    if (count > 0) {
+        ali /= float(count);
+        coh = (coh / float(count)) - myPos;
+        steer = (sep * sepWeight + ali * aliWeight + coh * cohWeight);
+    }
+
+    // Target Seeking
+    vec3 tDir = targetPos - myPos;
+    float tDist = length(tDir);
+    if (tDist > 0.1) {
+        steer += (tDir / tDist) * targetWeight;
+    }
+
+    // Integrate
+    vec3 newVel = myVel + steer * dt;
+    float speedMult = (type < 0.5) ? 5.0 : 8.0; // Fish vs Bird speed
+    float s = length(newVel);
+    if (s > speedMult) newVel = (newVel / s) * speedMult;
+    if (s < speedMult * 0.1) newVel = normalize(newVel + 0.01) * speedMult * 0.1;
+    
+    vec3 newPos = myPos + newVel * dt;
+
+    // Intensity calculation (from accel)
+    vec3 accel = (newVel - myVel) / (dt + 1e-6);
+    float intensity = 0.5 + min(length(accel) * 0.1, 1.5);
+
+    boids_out[i].pos = vec4(newPos, intensity);
+    boids_out[i].vel = vec4(newVel, type);
+}

@@ -1106,6 +1106,35 @@ class IRBackend:
                                     results[ext_name] = result
                                     break
 
+    def trigger_output(self, ir_module, ctx, source_node_id, from_pin):
+        """Trigger execution of nodes connected to a specific output pin.
+
+        This is used by runtime subsystems (timers, navigation tasks) to
+        execute the branch attached to an exec-pin outside the normal
+        topological execution pass.
+        """
+        # Find connected IR node ids
+        targets = ir_module.output_connections.get((source_node_id, from_pin), [])
+        if not targets:
+            return
+
+        # Build a topological ordering for the module to allow _find_branch_nodes
+        sorted_nodes = self._topological_sort(ir_module)
+
+        # Execute all downstream nodes for each target
+        for target_id in targets:
+            branch_nodes = self._find_branch_nodes(target_id, ir_module, sorted_nodes)
+            for bn in branch_nodes:
+                try:
+                    res = self._execute_node(bn, ctx)
+                    ctx.set_value(bn.id, res)
+                    # Collect results (local results dict - not returned to caller)
+                    self._collect_node_results(bn, res, {}, ir_module)
+                except Exception as e:
+                    print(f"Error triggering branch node {bn.id.id}: {e}")
+                    import traceback
+                    traceback.print_exc()
+
     def _execute_sequence(self, sequence_node, branches, ctx, ir_module, executed_nodes, sorted_nodes, results):
         """Execute a Sequence node's branches in order (then0, then1, then2, ...)"""
         print(f"Sequence node {sequence_node.id.id}: executing branches in order")
@@ -1495,6 +1524,210 @@ class IRBackend:
                     print(f"StopSound error: {e}")
                 
                 return ('exec_out',)
+
+            # ===== NAVIGATION / SCENE UTILITIES =====
+            # MoveTo - register a navigation task with the runtime NavigationManager
+            if kind.name == 'MoveTo':
+                # Input order (after exec): target, speed, acceptable_distance
+                tgt_val = None
+                speed_val = None
+                acc_dist = None
+
+                if kind.inputs and len(kind.inputs) > 0:
+                    # target
+                    if kind.inputs[0]:
+                        tgt_val = ctx.get_value(kind.inputs[0])
+                    else:
+                        tgt_val = widget_vals.get('target')
+                    # speed
+                    if len(kind.inputs) > 1 and kind.inputs[1]:
+                        speed_val = ctx.get_value(kind.inputs[1])
+                    else:
+                        speed_val = widget_vals.get('speed')
+                    # acceptable distance
+                    if len(kind.inputs) > 2 and kind.inputs[2]:
+                        acc_dist = ctx.get_value(kind.inputs[2])
+                    else:
+                        acc_dist = widget_vals.get('acceptable_distance', widget_vals.get('distance', 0.5))
+                else:
+                    tgt_val = widget_vals.get('target')
+                    speed_val = widget_vals.get('speed')
+                    acc_dist = widget_vals.get('acceptable_distance', widget_vals.get('distance', 0.5))
+
+                # Resolve owner (default to 'self' variable)
+                owner_id = ctx.variables.get('self')
+
+                # Resolve target position
+                target_pos = None
+                if isinstance(tgt_val, (list, tuple)) and len(tgt_val) >= 3:
+                    try:
+                        target_pos = (float(tgt_val[0]), float(tgt_val[1]), float(tgt_val[2]))
+                    except Exception:
+                        target_pos = None
+                else:
+                    # Try to resolve from scene objects mapping if present
+                    scene_map = ctx.variables.get('__scene_objects__')
+                    if scene_map and isinstance(scene_map, dict):
+                        obj_id = None
+                        if isinstance(tgt_val, dict) and 'graphPath' in tgt_val:
+                            obj_id = tgt_val.get('graphPath')
+                        elif isinstance(tgt_val, str):
+                            obj_id = tgt_val
+                        if obj_id and obj_id in scene_map:
+                            obj = scene_map[obj_id]
+                            target_pos = getattr(obj, 'position', None)
+
+                # Register navigation task with NavigationManager
+                try:
+                    from py_editor.core.navigation_manager import get_manager
+                    nav_mgr = get_manager()
+                except Exception:
+                    nav_mgr = None
+
+                # Attempt to register; if not possible, trigger onFailed immediately
+                if nav_mgr and owner_id and target_pos is not None:
+                    # Ensure backend is set on the manager (best-effort)
+                    try:
+                        if not getattr(nav_mgr, 'backend', None):
+                            nav_mgr.set_backend(self)
+                    except Exception:
+                        pass
+                    nav_mgr.add_task(ctx.ir_module if hasattr(ctx, 'ir_module') else None, ctx, node.id.id, owner_id, target_pos, speed_val or 5.0, acc_dist or 0.5)
+                    return ('exec_out',)
+                else:
+                    # Fire onFailed branch if manager is available
+                    try:
+                        if nav_mgr and getattr(nav_mgr, 'backend', None):
+                            self.trigger_output(ctx.ir_module if hasattr(ctx, 'ir_module') else None, ctx, node.id.id, 'onFailed')
+                    except Exception:
+                        pass
+                    return ('exec_out',)
+
+            # GetParent - resolve via __scene_objects__ mapping when available
+            if kind.name == 'GetParent':
+                target_val = None
+                if kind.inputs and len(kind.inputs) > 0 and kind.inputs[0]:
+                    target_val = ctx.get_value(kind.inputs[0])
+                else:
+                    target_val = widget_vals.get('target')
+
+                scene_map = ctx.variables.get('__scene_objects__')
+                if scene_map and isinstance(scene_map, dict):
+                    obj_id = None
+                    if isinstance(target_val, dict) and 'graphPath' in target_val:
+                        obj_id = target_val.get('graphPath')
+                    elif isinstance(target_val, str):
+                        obj_id = target_val
+                    else:
+                        # Fallback to self
+                        obj_id = ctx.variables.get('self')
+
+                    if obj_id and obj_id in scene_map:
+                        obj = scene_map[obj_id]
+                        return getattr(obj, 'parent_id', None)
+                return None
+
+            # SetPhysicsEnabled - toggle physics on a scene object at runtime
+            if kind.name == 'SetPhysicsEnabled':
+                target_val = None
+                enabled_val = True
+                if kind.inputs and len(kind.inputs) > 0 and kind.inputs[0]:
+                    target_val = ctx.get_value(kind.inputs[0])
+                else:
+                    target_val = widget_vals.get('target')
+
+                if kind.inputs and len(kind.inputs) > 1 and kind.inputs[1]:
+                    enabled_val = ctx.get_value(kind.inputs[1])
+                else:
+                    enabled_val = widget_vals.get('enabled', True)
+
+                scene_map = ctx.variables.get('__scene_objects__')
+                obj_id = None
+                if isinstance(target_val, dict) and 'graphPath' in target_val:
+                    obj_id = target_val.get('graphPath')
+                elif isinstance(target_val, str) and target_val:
+                    obj_id = target_val
+                else:
+                    obj_id = ctx.variables.get('self')
+
+                if scene_map and isinstance(scene_map, dict) and obj_id in scene_map:
+                    try:
+                        scene_map[obj_id].physics_enabled = bool(enabled_val)
+                        # trigger branch for enabled/disabled
+                        if bool(enabled_val):
+                            self.trigger_output(ctx.ir_module if hasattr(ctx, 'ir_module') else None, ctx, node.id.id, 'onEnabled')
+                        else:
+                            self.trigger_output(ctx.ir_module if hasattr(ctx, 'ir_module') else None, ctx, node.id.id, 'onDisabled')
+                    except Exception:
+                        pass
+                return ('exec_out',)
+
+            # GetRandomPointInDistance - basic random sample
+            if kind.name == 'GetRandomPointInDistance':
+                center = None
+                dist = None
+                if kind.inputs and len(kind.inputs) > 0 and kind.inputs[0]:
+                    center = ctx.get_value(kind.inputs[0])
+                else:
+                    center = widget_vals.get('center')
+                if kind.inputs and len(kind.inputs) > 1 and kind.inputs[1]:
+                    dist = ctx.get_value(kind.inputs[1])
+                else:
+                    dist = widget_vals.get('distance', 1.0)
+
+                if center is None:
+                    # try self position
+                    scene_map = ctx.variables.get('__scene_objects__')
+                    self_id = ctx.variables.get('self')
+                    if scene_map and self_id and self_id in scene_map:
+                        center = getattr(scene_map[self_id], 'position', (0.0, 0.0, 0.0))
+                    else:
+                        center = (0.0, 0.0, 0.0)
+
+                import random, math
+                d = float(dist) if dist else 1.0
+                while True:
+                    x = random.uniform(-1.0, 1.0)
+                    y = random.uniform(-1.0, 1.0)
+                    z = random.uniform(-1.0, 1.0)
+                    if x*x + y*y + z*z <= 1.0:
+                        return (center[0] + x * d, center[1] + y * d, center[2] + z * d)
+
+            # GetRandomPointInNavigation - prefer nav_graph if available
+            if kind.name == 'GetRandomPointInNavigation':
+                center = None
+                dist = None
+                if kind.inputs and len(kind.inputs) > 0 and kind.inputs[0]:
+                    center = ctx.get_value(kind.inputs[0])
+                else:
+                    center = widget_vals.get('center')
+                if kind.inputs and len(kind.inputs) > 1 and kind.inputs[1]:
+                    dist = ctx.get_value(kind.inputs[1])
+                else:
+                    dist = widget_vals.get('distance', 1.0)
+
+                if center is None:
+                    scene_map = ctx.variables.get('__scene_objects__')
+                    self_id = ctx.variables.get('self')
+                    if scene_map and self_id and self_id in scene_map:
+                        center = getattr(scene_map[self_id], 'position', (0.0, 0.0, 0.0))
+                    else:
+                        center = (0.0, 0.0, 0.0)
+
+                try:
+                    from py_editor.core.nav_graph import get_nav_graph
+                    nav = get_nav_graph()
+                    return nav.random_point_in_sphere(center, float(dist or 1.0))
+                except Exception:
+                    # Fallback to simple sampler
+                    import random
+                    d = float(dist) if dist else 1.0
+                    while True:
+                        x = random.uniform(-1.0, 1.0)
+                        y = random.uniform(-1.0, 1.0)
+                        z = random.uniform(-1.0, 1.0)
+                        if x*x + y*y + z*z <= 1.0:
+                            return (center[0] + x * d, center[1] + y * d, center[2] + z * d)
             
             # Check if this is a composite node
             composite_templates = getattr(self.module, 'composite_templates', {})

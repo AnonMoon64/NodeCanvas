@@ -1,0 +1,11 @@
+{
+  "name": "GetParent",
+  "type": "utility",
+  "inputs": {
+    "target": "string"
+  },
+  "outputs": {
+    "parent": "string"
+  },
+  "code": "name = \"GetParent\"\ninputs = {\"target\":\"string\"}\noutputs = {\"parent\":\"string\"}\ndef process(target):\n    # Runtime will resolve scene object parent via __scene_objects__ mapping if present\n    return None\n"
+}

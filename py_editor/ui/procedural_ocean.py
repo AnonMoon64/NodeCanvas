@@ -217,9 +217,8 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
     glDepthFunc(GL_LESS)
     glDepthMask(GL_TRUE)
     
-    # Back-face Culling is critical for ocean surfaces
-    glEnable(GL_CULL_FACE)
-    glCullFace(GL_BACK)
+    # Ocean surface should be visible from below as well
+    glDisable(GL_CULL_FACE)
 
     # Conditional Blending
     if opacity < 0.99:

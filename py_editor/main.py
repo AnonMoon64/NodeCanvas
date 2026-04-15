@@ -55,7 +55,7 @@ class MainWindow(QMainWindow):
         # Wire global signals
         self.scene_editor.viewport.object_selected.connect(self._on_object_selected)
         self.hierarchy.outliner.object_selected.connect(self._on_object_selected)
-        self.explorer.file_tree.itemDoubleClicked.connect(self._on_explorer_double_click)
+        self.explorer.file_opened.connect(self._on_explorer_file_opened)
         self.properties.property_changed.connect(self._on_property_changed)
 
     def _setup_toolbar(self):
@@ -138,6 +138,13 @@ class MainWindow(QMainWindow):
                     self.scene_editor.load_scene_data(data)
                     # Refresh outliner sync
                     self._on_scene_loaded()
+                elif path.endswith('.prefab'):
+                    self.properties.set_prefab(path, data)
+                    # ensure the properties dock is visible when editing a prefab
+                    try:
+                        self.properties_dock.setVisible(True)
+                    except Exception:
+                        pass
                 else:
                     # Generic fallback to Text Editor
                     dlg = NodeEditorDialog(self)
@@ -156,9 +163,10 @@ class MainWindow(QMainWindow):
                  QMessageBox.critical(self, "Error", f"Failed to load: {e}")
 
     def _on_property_changed(self):
-        self._on_object_selected(self.properties._current_object)
-        # Inform viewport (though it usually polls or is connected)
+        # Notify components to redraw
         self.scene_editor.viewport.update()
+        # Potentially update outliner if names changed
+        # self.hierarchy.outliner.refresh()
 
     def _on_scene_loaded(self):
         """Sync all UI components when a new scene is active."""
@@ -191,6 +199,8 @@ class MainWindow(QMainWindow):
         self.properties_dock = QDockWidget("Properties", self)
         self.properties_dock.setWidget(self.properties)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.properties_dock)
+        # Hide properties dock until an object or prefab is selected/opened
+        self.properties_dock.setVisible(False)
         
         # Stack Properties below Variables
         self.splitDockWidget(self.variables_dock, self.properties_dock, Qt.Orientation.Vertical)
@@ -211,15 +221,19 @@ class MainWindow(QMainWindow):
         # Connect variables to logic updates
         self.logic_editor._scene.changed.connect(self.variables.refresh)
 
-    def _on_object_selected(self, obj):
+    def _on_object_selected(self, objs):
+        if not isinstance(objs, list):
+            objs = [objs] if objs else []
+            
         if hasattr(self, '_selection_updating') and self._selection_updating: return
         self._selection_updating = True
         
-        # Sync selection state to viewport
-        for scene_obj in self.scene_editor.viewport.scene_objects:
-            scene_obj.selected = (scene_obj == obj)
-        
-        self.properties.set_object(obj)
+        self.properties.set_objects(objs)
+        # Show or hide the properties dock depending on selection
+        try:
+            self.properties_dock.setVisible(True if objs else False)
+        except Exception:
+            pass
         self.hierarchy.outliner.set_objects(self.scene_editor.viewport.scene_objects)
         self.scene_editor.viewport.update()
         self._selection_updating = False
@@ -248,10 +262,8 @@ class MainWindow(QMainWindow):
         self.scene_editor.viewport.scene_objects.append(new_obj)
         self._on_object_selected(new_obj)
 
-    def _on_explorer_double_click(self, item, column):
-        path_str = item.data(0, Qt.ItemDataRole.UserRole)
-        if path_str:
-            self._load_file_path(path_str)
+    def _on_explorer_file_opened(self, path, type):
+        self._load_file_path(path)
 
     def _on_play_standalone(self):
         """Export current scene and launch standalone runtime."""
@@ -297,6 +309,45 @@ class MainWindow(QMainWindow):
              self.scene_editor.on_tab_activated()
         else:
              self.scene_editor.on_tab_deactivated()
+
+    def get_active_graph_identifier(self) -> str:
+        """Return a short identifier for the currently active graph or scene.
+
+        For logic graphs this returns a short SHA-based id plus node count.
+        For scenes this returns a short SHA-based id plus object count.
+        This is intentionally lightweight and does not require files to be saved.
+        """
+        try:
+            idx = self.tabs.currentIndex()
+            import json, hashlib
+            # Logic tab
+            if idx == 0 and hasattr(self, 'logic_editor'):
+                try:
+                    g = self.logic_editor.export_graph()
+                    s = json.dumps(g, sort_keys=True, separators=(',', ':'))
+                    h = hashlib.sha256(s.encode('utf-8')).hexdigest()[:8]
+                    node_count = len(g.get('nodes', [])) if isinstance(g, dict) else 0
+                    return f"logic://{node_count}nodes-{h}"
+                except Exception:
+                    return "logic://unsaved"
+
+            # Viewport / Scene tab
+            if idx == 1 and hasattr(self, 'scene_editor'):
+                try:
+                    sdata = self.scene_editor.export_scene_data()
+                    sstr = json.dumps(sdata, sort_keys=True, separators=(',', ':'))
+                    h = hashlib.sha256(sstr.encode('utf-8')).hexdigest()[:8]
+                    obj_count = 0
+                    if isinstance(sdata, dict):
+                        obj_count = len(sdata.get('nodes', sdata.get('objects', [])) or [])
+                    return f"scene://{obj_count}objs-{h}"
+                except Exception:
+                    return "scene://unsaved"
+
+            # Fallback for other tabs
+            return f"tab://{idx}"
+        except Exception:
+            return "unknown_graph"
 
 if __name__ == '__main__':
     faulthandler.enable()

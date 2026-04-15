@@ -125,8 +125,43 @@ class ConnectionItem(QGraphicsPathItem):
 
     def add_to_scene(self, scene):
         self._update_style_from_pin()  # Apply exec/data style before adding
-        self.update_path()
+        # Add to scene first so pin scene-geometry is available immediately.
         scene.addItem(self)
+
+        # Try an immediate path update; schedule a deferred update to
+        # ensure geometry is correct after Qt finishes pending layout.
+        try:
+            self.update_path()
+        except Exception:
+            traceback.print_exc()
+
+        # Ensure the view repaints. If a canvas reference exists, ask it
+        # to refresh connections for the endpoints and update the viewport.
+        try:
+            if self.canvas:
+                try:
+                    if hasattr(self.canvas, 'update_connections_for_node'):
+                        try:
+                            self.canvas.update_connections_for_node(self.from_node)
+                        except Exception:
+                            pass
+                        try:
+                            self.canvas.update_connections_for_node(self.to_node)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                try:
+                    self.canvas.viewport().update()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        try:
+            QTimer.singleShot(0, self.update_path)
+        except Exception:
+            pass
 
     def _pin_center(self, node, pin_name, is_output):
         if node is None:
@@ -141,8 +176,16 @@ class ConnectionItem(QGraphicsPathItem):
         pin_item = None
         if pin_name and pin_dict:
             pin_item = pin_dict.get(pin_name)
+        
         if pin_item:
-            return pin_item.sceneBoundingRect().center()
+            # Use mapToScene with the center of the local bounding rect.
+            # This is more robust than sceneBoundingRect() when items are newly 
+            # added or the scene index hasn't updated yet.
+            try:
+                return pin_item.mapToScene(pin_item.boundingRect().center())
+            except Exception:
+                pass
+
         # if no explicit pin, only use a fallback when node is alive in scene
         fallback_x = 126 if is_output else -126
         try:
@@ -199,7 +242,32 @@ class ConnectionItem(QGraphicsPathItem):
         c2 = end - QPointF(ctrl_dist, 0)
         
         path.cubicTo(c1, c2, end)
-        self.setPath(path)
+        try:
+            # Inform Qt that the item's geometry is about to change so the
+            # scene can update its spatial index and repaint correctly.
+            try:
+                self.prepareGeometryChange()
+            except Exception:
+                pass
+            self.setPath(path)
+        except Exception:
+            traceback.print_exc()
+        # Force an immediate update of this item and the scene so the
+        # freshly-created connection is visible without moving nodes.
+        try:
+            self.update()
+            if self.scene():
+                try:
+                    self.scene().update()
+                except Exception:
+                    pass
+            if self.canvas:
+                try:
+                    self.canvas.viewport().update()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         
         # Position delete marker at midpoint of connection
         if hasattr(self, 'delete_marker'):

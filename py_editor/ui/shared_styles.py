@@ -16,7 +16,7 @@ AXIS_Y_COLOR       = (0.333, 0.878, 0.333, 1.0)   # green
 AXIS_Z_COLOR       = (0.333, 0.333, 0.878, 1.0)   # blue
 ORIGIN_COLOR       = (1.0,   1.0,   1.0,   0.4)   # white dot
 SELECT_COLOR       = (0.310, 0.765, 0.969, 1.0)    # #4fc3f7
-OBJECT_COLOR       = (0.7,   0.7,   0.7,   0.8)    # default wireframe
+OBJECT_COLOR       = (0.7,   0.7,   0.7,   1.0)    # Opaque default
 OBJECT_FACE_COLOR  = (0.25,  0.25,  0.28,  1.0)    # Opaque fill
 GIZMO_ALPHA        = 0.9
 

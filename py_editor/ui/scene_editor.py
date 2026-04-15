@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget,
     QToolButton, QFrame
 )
+from pathlib import Path
 from PyQt6.QtCore import pyqtSignal, Qt
 
 # Local imports from the scene submodule
@@ -17,6 +18,7 @@ from .scene.primitives import PrimitiveTree
 from .scene.outliner import SceneOutliner
 from py_editor.core.simulation_controller import SimulationController
 from py_editor.core.node_templates import get_all_templates
+from py_editor.core.mesh_converter import MeshConverter
 
 class SceneEditorWidget(QWidget):
     """Orchestrator for the Scene Editor - Shell version (Viewport only)."""
@@ -76,13 +78,41 @@ class SceneEditorWidget(QWidget):
             self.viewport.scene_objects.remove(obj)
             self.viewport.update()
 
-    def _on_object_dropped(self, prim_type, wx, wz, mx, my, logic_path=""):
+    def _on_object_dropped(self, prim_type, wx, wz, mx, my, file_path=""):
+        # Auto-convert FBX / OBJ to .mesh if needed (scene_view may have already done
+        # this, but handle the case where the call came from another code path)
+        if prim_type == "mesh" and file_path:
+            fp = Path(file_path)
+            if fp.suffix.lower() in ('.fbx', '.obj'):
+                mesh_out = fp.with_suffix('.mesh')
+                try:
+                    if fp.suffix.lower() == '.fbx':
+                        MeshConverter.fbx_to_mesh(str(fp), str(mesh_out))
+                    else:
+                        MeshConverter.obj_to_mesh(str(fp), str(mesh_out))
+                    file_path = str(mesh_out)
+                except Exception as e:
+                    print(f"[SCENE] Auto-convert failed for {fp.name}: {e}")
+
         # Create a new SceneObject at the drop location
-        base_name = Path(logic_path).stem if logic_path else prim_type.capitalize()
+        base_name = Path(file_path).stem if file_path else prim_type.capitalize()
         name = f"{base_name}_{len(self.viewport.scene_objects)}"
         obj = SceneObject(name, prim_type, position=[wx, 0, wz])
-        if logic_path:
-            obj.logic_path = logic_path
+
+        if prim_type == "mesh":
+            obj.mesh_path = file_path
+            # Auto-link PBR maps from .material sidecar if present
+            if file_path:
+                try:
+                    pbr = MeshConverter.load_material_sidecar(file_path)
+                    if pbr:
+                        obj.pbr_maps.update(pbr)
+                        obj.shader_name = "PBR Material"
+                        print(f"[SCENE] Auto-linked {len(pbr)} PBR maps from sidecar for {obj.name}")
+                except Exception:
+                    pass
+        elif file_path:
+            obj.logic_path = file_path
         
         # Add to scene
         self.viewport.scene_objects.append(obj)
@@ -160,6 +190,34 @@ class SceneEditorWidget(QWidget):
             elif obj.obj_type == 'ocean':
                  nd['ocean_wave_speed'] = getattr(obj, 'ocean_wave_speed', 5.0)
                  nd['ocean_wave_intensity'] = getattr(obj, 'ocean_wave_intensity', 1.0)
+            elif obj.obj_type == 'voxel_world':
+                 nd['voxel_block_size'] = getattr(obj, 'voxel_block_size', 0.025)
+                 nd['voxel_render_style'] = getattr(obj, 'voxel_render_style', 'Smooth')
+                 nd['voxel_seed'] = getattr(obj, 'voxel_seed', 123)
+                 nd['voxel_type'] = getattr(obj, 'voxel_type', 'Round')
+                 nd['voxel_radius'] = getattr(obj, 'voxel_radius', 5.0)
+                 nd['voxel_lod_enabled'] = getattr(obj, 'voxel_lod_enabled', True)
+                 nd['voxel_smooth_iterations'] = getattr(obj, 'voxel_smooth_iterations', 2)
+                 nd['voxel_layers'] = getattr(obj, 'voxel_layers', [])
+                 nd['voxel_biomes'] = getattr(obj, 'voxel_biomes', [])
+            elif obj.obj_type == 'ocean_world':
+                 nd['voxel_radius'] = getattr(obj, 'voxel_radius', 0.5)
+                 nd['ocean_world_radius'] = getattr(obj, 'ocean_world_radius', 0.48)
+                 nd['ocean_world_wave_speed'] = getattr(obj, 'ocean_world_wave_speed', 3.0)
+                 nd['ocean_world_wave_intensity'] = getattr(obj, 'ocean_world_wave_intensity', 0.015)
+                 nd['ocean_world_color'] = getattr(obj, 'ocean_world_color', [0.05, 0.25, 0.6, 0.85])
+            # Always persist mesh path, texture, PBR maps and shader for mesh/cube objects
+            if obj.obj_type in ('mesh', 'cube', 'sphere', 'plane'):
+                if getattr(obj, 'mesh_path', None):
+                    nd['mesh_path'] = obj.mesh_path
+                if getattr(obj, 'texture_path', None):
+                    nd['texture_path'] = obj.texture_path
+                if getattr(obj, 'pbr_maps', None):
+                    nd['pbr_maps'] = obj.pbr_maps
+                if getattr(obj, 'pbr_tiling', None):
+                    nd['pbr_tiling'] = obj.pbr_tiling
+                nd['pbr_displacement_scale'] = getattr(obj, 'pbr_displacement_scale', 0.05)
+                nd['shader_name'] = getattr(obj, 'shader_name', 'Standard')
             nodes.append(nd)
         return {"nodes": nodes}
         

@@ -224,6 +224,11 @@ class NodeItem(QGraphicsRectItem):
         self._update_border_color()
         self.update()
 
+    def boundingRect(self):
+        """Expand bounding rect to include pins protruding from the sides."""
+        rect = super().boundingRect()
+        # Pins extend 12px out; add a bit of padding (16px) to be safe.
+        return rect.adjusted(-16, -2, 16, 2)
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)

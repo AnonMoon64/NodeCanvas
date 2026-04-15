@@ -1,0 +1,16 @@
+{
+  "name": "MoveTo",
+  "type": "action",
+  "inputs": {
+    "exec_in": "exec",
+    "target": "string",
+    "speed": "float",
+    "acceptable_distance": "float"
+  },
+  "outputs": {
+    "exec_out": "exec",
+    "onComplete": "exec",
+    "onFailed": "exec"
+  },
+  "code": "name = \"MoveTo\"\ninputs = {\"exec_in\":\"exec\",\"target\":\"string\",\"speed\":\"float\",\"acceptable_distance\":\"float\"}\noutputs = {\"exec_out\":\"exec\", \"onComplete\":\"exec\", \"onFailed\":\"exec\"}\ndef process(exec_in, target, speed, acceptable_distance):\n    # Movement handled by runtime NavigationManager; this node just registers a task.\n    return ('exec_out',)\n"
+}

@@ -20,6 +20,18 @@ class SceneObject:
         self.selected = False
         self.color = list(OBJECT_COLOR)
         self.file_path = None
+        self.mesh_path = None
+        self.texture_path = None
+        self.pbr_maps = {
+            "albedo": None,
+            "normal": None,
+            "roughness": None,
+            "metallic": None,
+            "ao": None,
+            "displacement": None
+        }
+        self.pbr_tiling = [1.0, 1.0]
+        self.pbr_displacement_scale = 0.05
         self.parent_id = None
         self.children_ids = []
         self.ocean_opacity = 0.6
@@ -36,6 +48,8 @@ class SceneObject:
         self.fov = 60.0    
         self.camera_speed = 10.0
         self.camera_sensitivity = 0.15
+        self.controller_type = "None"
+        self.alpha = 1.0
         
         # Environment Properties
         self.time_of_day = 0.25 # 0.0 is midnight, 0.5 is noon
@@ -95,8 +109,45 @@ class SceneObject:
         self.ocean_specular_intensity = 1.0
         self.ocean_reflection_tint = [0.5, 0.7, 1.0, 1.0] # Sky blue tint
         
-        # Logic assignment (Primary script)
-        self.logic_path = None # Path to .logic file
+        # Logic assignment (Array/List of scripts)
+        self.logic_list = [] # List of paths to .logic files
+        
+        # Voxel World Specifics
+        self.voxel_type = "Round"    # "Round" or "Flat"
+        self.voxel_radius = 5.0      # Radius in world units
+        self.voxel_block_size = 0.15
+        self.voxel_seed = 123
+        self.voxel_lod_enabled = True
+        self.voxel_smooth_iterations = 2
+        self.voxel_render_style = "Smooth"
+        self.voxel_layers = []
+        self.voxel_biomes = []
+
+        # Ocean World (spherical ocean on round planets)
+        self.ocean_world_radius = 0.48      # Slightly inside planet radius
+        self.ocean_world_wave_speed = 3.0
+        self.ocean_world_wave_intensity = 0.015
+        self.ocean_world_color = [0.05, 0.25, 0.6, 0.85]
+        
+        # Custom Shader Support
+        self.shader_name = "Standard"
+        self.shader_params = {
+            "speed": 2.0, "freq": 1.5, "intensity": 1.0,
+            "yaw_amp": 0.2, "side_amp": 0.1, "roll_amp": 0.05, "flag_amp": 0.05,
+            "wave_speed": 3.0, "wave_amplitude": 0.1,
+            "forward_axis": 0.0, "invert_axis": 0.0,
+            "base_color": [1.0, 1.0, 1.0, 1.0]
+        }
+
+        # Physics properties (base)
+        self.velocity = [0.0, 0.0, 0.0]
+        self.acceleration = [0.0, 0.0, 0.0]
+        self.physics_enabled = True
+        self.mass = 1.0
+        # Collision properties: list of dicts {tag, shape, radius, offset, enabled}
+        self.collision_properties = [
+            {"tag": "default", "shape": "sphere", "radius": 0.5 * max(self.scale), "offset": [0.0, 0.0, 0.0], "enabled": True}
+        ]
 
     def to_dict(self) -> dict:
         d = self.__dict__.copy()
@@ -106,6 +157,8 @@ class SceneObject:
     def from_dict(d: dict) -> 'SceneObject':
         obj = SceneObject(d['name'], d['type'], d.get('position'), d.get('rotation'), d.get('scale'))
         for k, v in d.items():
+            if k == 'logic_path' and 'logic_list' not in d:
+                obj.logic_list = [v] if v else []
             if hasattr(obj, k):
                 setattr(obj, k, v)
         return obj

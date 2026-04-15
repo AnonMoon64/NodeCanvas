@@ -19,6 +19,18 @@ class SimulationController(QObject):
         self._timer = QTimer()
         self._timer.timeout.connect(self._tick)
         self._timer.setInterval(100) # 10Hz for logic ticks
+        self._last_tick_time = None
+        # Navigation manager (optional)
+        try:
+            from py_editor.core.navigation_manager import get_manager
+            self._nav_manager = get_manager()
+            # Set backend so manager can call into interpreter when needed
+            try:
+                self._nav_manager.set_backend(self.backend)
+            except Exception:
+                pass
+        except Exception:
+            self._nav_manager = None
 
     def start(self, graph_data, templates, variables):
         self.is_running = True
@@ -32,6 +44,7 @@ class SimulationController(QObject):
         
         # Initial compilation
         self.ir_module = self.backend.canvas_to_ir(graph_data, templates)
+        self._last_tick_time = None
         self._timer.start()
         self.state_changed.emit(True)
 
@@ -73,8 +86,25 @@ class SimulationController(QObject):
         # In a high-quality engine, _tick would only run 'OnTick' nodes.
         # To avoid 'repeating bullshit', we only execute if scheduled or for specific triggers.
         # For now, we'll keep it simple but ensure it's not spamming the console.
+        import time
+        now = time.time()
+        if self._last_tick_time is None:
+            self._last_tick_time = now
+        dt = now - self._last_tick_time
+        self._last_tick_time = now
+
+        # Let nav manager advance tasks if controllers were attached
         try:
-             self.backend.execute_ir(self.ir_module, self.ctx)
+            if getattr(self, '_nav_manager', None):
+                try:
+                    self._nav_manager.update(dt)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        try:
+            self.backend.execute_ir(self.ir_module, self.ctx)
         except Exception as e:
-             print(f"Simulation Error: {e}")
-             self.stop()
+            print(f"Simulation Error: {e}")
+            self.stop()

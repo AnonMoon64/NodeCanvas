@@ -64,15 +64,24 @@ def create_atmosphere_shader():
         
         // --- 2. Sun & Mie Scattering (Halo) ---
         float sun_dot = max(dot(dir, sun_dir), 0.0);
-        float sun_visible = smoothstep(-0.1, 0.1, sun_dir.y);
-        
-        // Clean sun disk - scaling by sun_size
-        float disk_pow = 2000.0 / (sun_size + 0.001);
-        vec3 sun_disk = vec3(1.0, 1.0, 0.8) * pow(sun_dot, disk_pow) * sun_intensity * sun_visible;
-        
-        // Atmospheric halo
-        vec3 sun_halo = horizon_color * pow(sun_dot, 16.0 / sun_size) * 2.5 * day_ratio;
-        sky_rgb += (sun_disk + sun_halo);
+        float sun_visible = smoothstep(-0.05, 0.05, sun_dir.y);
+
+        // Realistic sun disk: ~0.5 degree angular diameter.
+        // disk_pow=60000 at sun_size=1 matches real-world angular size.
+        // User can make it larger (sun_size>1) or smaller (sun_size<1).
+        float disk_pow = 60000.0 / max(sun_size * sun_size, 0.001);
+        vec3 sun_color = mix(vec3(1.0, 0.85, 0.5), vec3(1.0, 1.0, 0.95), day_ratio);
+        vec3 sun_disk = sun_color * pow(sun_dot, disk_pow) * sun_intensity * sun_visible;
+
+        // Inner corona glow
+        float corona_pow = 800.0 / max(sun_size, 0.01);
+        vec3 sun_corona = sun_color * pow(sun_dot, corona_pow) * sun_intensity * 0.3 * sun_visible;
+
+        // Mie scattering halo (wide glow around sun position)
+        float mie_pow = max(4.0 / max(sun_size, 0.1), 1.0);
+        vec3 sun_halo = mix(horizon_color, vec3(1.0, 0.9, 0.7), 0.5)
+                        * pow(sun_dot, mie_pow) * 1.8 * day_ratio * sun_visible;
+        sky_rgb += sun_disk + sun_corona + sun_halo;
 
         // --- 3. Planetary Transition ---
         float atmosphere_fade = clamp(1.0 - (h / 6500.0), 0.0, 1.0);

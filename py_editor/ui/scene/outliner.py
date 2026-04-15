@@ -80,19 +80,25 @@ class SceneOutliner(QWidget):
         drag.exec(Qt.DropAction.CopyAction)
 
     def _get_icon(self, otype):
-        if otype == 'cube': return '📦'
-        if otype == 'sphere': return '⚪'
-        if otype == 'ocean': return '🌊'
-        if otype == 'landscape': return '🌍'
-        if otype in ('atmosphere', 'universe'): return '🌌'
-        return '📄'
+        icons = {
+            'cube': '📦', 'sphere': '⚪', 'plane': '▭', 'cylinder': '⬡',
+            'ocean': '🌊', 'ocean_world': '🌐', 'landscape': '🌍',
+            'atmosphere': '🌌', 'universe': '🌌', 'voxel_world': '🏔️',
+            'cloud_layer': '☁', 'clouds': '☁',
+            'camera': '🎥', 'light_point': '💡', 'light_directional': '☀',
+        }
+        return icons.get(otype, '📄')
 
     def _on_selection_changed(self):
         if self._updating: return
         items = self.tree.selectedItems()
+        # Always emit — even with one item, the scene needs to know
         if items:
             obj = items[0].data(0, Qt.ItemDataRole.UserRole)
-            self.object_selected.emit(obj)
+            if obj is not None:
+                self.object_selected.emit(obj)
+            else:
+                self.object_selected.emit(None)
         else:
             self.object_selected.emit(None)
 

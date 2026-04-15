@@ -1,0 +1,9 @@
+{
+  "facts": [
+    {
+      "id": "d17f7f7a2e7241d5a44e6e23f7e3e85f",
+      "text": "Created a custom ChanceNode that outputs a random boolean based on a probability input.",
+      "ts": 1776240451
+    }
+  ]
+}
