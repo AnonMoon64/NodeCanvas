@@ -277,6 +277,21 @@ class NodeItem(QGraphicsRectItem):
                 h_grad.setColorAt(1, self.header_color)
                 painter.setBrush(h_grad)
                 painter.drawPath(header_path.simplified())
+    
+    def mouseDoubleClickEvent(self, event):
+        """Enable renaming on double-click."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Check if we clicked the title
+            if self.title.contains(self.title.mapFromItem(self, event.pos())):
+                self.rename_node()
+        super().mouseDoubleClickEvent(event)
+
+    def rename_node(self):
+        new_title, ok = QInputDialog.getText(None, "Rename Node", "New Title:", text=self.title.toPlainText())
+        if ok and new_title:
+            self.title.setPlainText(new_title)
+            if hasattr(self.canvas, 'graph_changed'):
+                self.canvas.graph_changed.emit()
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self.scene():

@@ -115,8 +115,10 @@ class SceneObject:
         # Voxel World Specifics
         self.voxel_type = "Round"    # "Round" or "Flat"
         self.voxel_radius = 5.0      # Radius in world units
-        self.voxel_block_size = 0.15
+        self.voxel_block_size = 1.0
         self.voxel_seed = 123
+        # voxel_lod_enabled kept for backwards compatibility with saved scenes;
+        # the engine now always uses camera-distance LOD and ignores this value.
         self.voxel_lod_enabled = True
         self.voxel_smooth_iterations = 2
         self.voxel_render_style = "Smooth"

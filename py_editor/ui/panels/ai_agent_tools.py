@@ -871,11 +871,47 @@ class AgentToolExecutor:
                 "value": le.graph_variables[name]["value"]}
 
     # ------------------------------------------------------------------
+    # Tool: set_variable
+    # ------------------------------------------------------------------
+
+    def set_variable(self, name: str, value: Any) -> dict:
+        """Update the value of an existing graph variable."""
+        le = self._le()
+        if not hasattr(le, 'graph_variables') or name not in le.graph_variables:
+            return {"ok": False, "error": f"Variable '{name}' not found. Use add_variable to create it."}
+        
+        le.graph_variables[name]["value"] = value
+        try:
+            le.value_changed.emit()
+        except Exception:
+            pass
+        return {"ok": True, "name": name, "value": value}
+
+    # ------------------------------------------------------------------
+    # Tool: delete_variable
+    # ------------------------------------------------------------------
+
+    def delete_variable(self, name: str) -> dict:
+        """Remove a graph variable."""
+        le = self._le()
+        if not hasattr(le, 'graph_variables') or name not in le.graph_variables:
+            return {"ok": False, "error": f"Variable '{name}' not found."}
+        
+        del le.graph_variables[name]
+        try:
+            le.value_changed.emit()
+            if hasattr(self.mw, 'variables'):
+                self.mw.variables.refresh()
+        except Exception:
+            pass
+        return {"ok": True, "deleted": name}
+
+    # ------------------------------------------------------------------
     # Tool: get_variables
     # ------------------------------------------------------------------
 
     def get_variables(self) -> dict:
-        """Return all graph variables."""
+        """Return all graph variables (name, type, value)."""
         le = self._le()
         return {"ok": True, "variables": dict(getattr(le, 'graph_variables', {}) or {})}
 
@@ -1062,6 +1098,8 @@ class AgentToolExecutor:
         "clear_graph":      "clear_graph",
         "create_template":  "create_template",
         "add_variable":     "add_variable",
+        "set_variable":     "set_variable",
+        "delete_variable":  "delete_variable",
         "get_variables":    "get_variables",
         "run_graph":        "run_graph",
         "undo":             "undo",

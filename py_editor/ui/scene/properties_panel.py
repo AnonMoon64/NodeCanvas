@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
     QComboBox, QCheckBox, QDoubleSpinBox, QFrame, QSpinBox,
     QToolButton, QGroupBox, QSlider, QColorDialog, QGridLayout, QListWidget, QListWidgetItem,
-    QScrollArea, QMessageBox
+    QScrollArea
 )
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QColor
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -461,7 +461,7 @@ class ObjectPropertiesPanel(QWidget):
         self._current_objects = objs
         if not objs:
             self._title.setText("  No Selection")
-            for group in [self.pos_group, self.rot_group, self.scale_group, self.mat_group, self.env_group, self.land_group, self.ocean_group, self.logic_group, self.shader_group, self.mesh_group]:
+            for group in [self.pos_group, self.rot_group, self.scale_group, self.mat_group, self.env_group, self.land_group, self.ocean_group, self.logic_group, self.shader_group, self.mesh_group, self.vox_group, self.cont_group]:
                 group.hide()
             return
 
@@ -561,11 +561,10 @@ class ObjectPropertiesPanel(QWidget):
             self._last_vox_radius_index = idx
             self.vox_radius.blockSignals(False)
 
-            self.vox_lod.setChecked(getattr(obj, 'voxel_lod_enabled', True))
             self.vox_smooth.setValue(getattr(obj, 'voxel_smooth_iterations', 2))
 
             # Detail: match closest preset to the internal voxel_block_size
-            bval = float(getattr(obj, 'voxel_block_size', 0.15))
+            bval = float(getattr(obj, 'voxel_block_size', 1.0))
             try:
                 bidx = next(i for i, (_, v) in enumerate(self.vox_detail_presets_list) if float(v) == bval)
             except StopIteration:
@@ -980,12 +979,14 @@ class ObjectPropertiesPanel(QWidget):
         self._add_property_row(vg, "Style", self.vox_render_style)
 
         # Radius (preset dropdown) — safer than free slider
+        # Ordered smallest → largest so names match real-world intuition:
+        #   Pebble < Asteroid < Dwarf Planet < Moon < Planet
         self.vox_radius_presets_list = [
             ("Pebble (0.5 u)", 0.5),
-            ("Small Planet (5 u) — Default", 5.0),
-            ("Asteroid (50 u)", 50.0),
-            ("Small Moon (500 u)", 500.0),
-            ("Gas Giant (2000 u — Danger!)", 2000.0),
+            ("Asteroid (5 u) — Default", 5.0),
+            ("Dwarf Planet (50 u)", 50.0),
+            ("Moon (500 u)", 500.0),
+            ("Planet (2000 u)", 2000.0),
         ]
         self.vox_radius = QComboBox()
         for name, _ in self.vox_radius_presets_list:
@@ -999,26 +1000,27 @@ class ObjectPropertiesPanel(QWidget):
         # block_size is the physical world-unit length of one voxel face.
         # Effective resolution = world_diameter / block_size, capped at 512.
         self.vox_detail_presets_list = [
-            ("Draft (1.0 u/voxel)", 1.0),
-            ("Low (0.5 u/voxel)", 0.5),
-            ("Medium (0.15 u/voxel) — Default", 0.15),
-            ("High (0.075 u/voxel)", 0.075),
-            ("Ultra (0.04 u/voxel)", 0.04),
+            ("Draft (16.0 u/voxel)", 16.0),
+            ("Low (4.0 u/voxel)", 4.0),
+            ("Medium (1.0 u/voxel) — Default", 1.0),
+            ("High (0.5 u/voxel)", 0.5),
+            ("Ultra (0.1 u/voxel)", 0.1),
         ]
         self.vox_detail_combo = QComboBox()
         for name, _ in self.vox_detail_presets_list:
             self.vox_detail_combo.addItem(name)
         self.vox_detail_combo.setToolTip(
-            "Voxel face size in world units. Smaller = finer terrain detail, but heavier to generate.\n"
-            "The engine automatically chunks large grids into LOD tiles.")
+            "Voxel face size in world units. Smaller = finer terrain detail, heavier to generate.\n"
+            "Minimum enforced by style: Smooth ≥ 0.5 u/voxel, Minecraft ≥ 1.0 u/voxel.\n"
+            "LOD tiles are generated automatically based on camera distance.")
         self.vox_detail_combo.currentIndexChanged.connect(self._on_vox_detail_changed)
         self._add_property_row(vg, "Detail", self.vox_detail_combo)
 
-        # LOD
-        self.vox_lod = QCheckBox("Enable Chunked LOD")
-        self.vox_lod.setStyleSheet("color: #ccc; font-size: 11px;")
-        self.vox_lod.toggled.connect(lambda c: self.update_obj_prop('voxel_lod_enabled', c))
-        vg.addWidget(self.vox_lod)
+        # LOD is now always camera-distance-based — no manual toggle needed.
+        # A small info label replaces the old checkbox.
+        lod_info = QLabel("✓ Camera-distance LOD  (automatic)")
+        lod_info.setStyleSheet("color: #4fc3f7; font-size: 10px; font-weight: bold; padding: 2px 0;")
+        vg.addWidget(lod_info)
 
         # Smoothing passes (only used in Smooth style)
         self.vox_smooth = QSpinBox()
@@ -1256,21 +1258,7 @@ class ObjectPropertiesPanel(QWidget):
 
     def _on_vox_radius_changed(self, index):
         if self._updating: return
-        name, val = self.vox_radius_presets_list[index]
-        # Confirm large selections (Asteroid and above)
-        try:
-            if float(val) >= 50.0:
-                ans = QMessageBox.warning(self, "Large Size Selected",
-                    f"Selecting '{name}' (radius={val}) may trigger heavy recomputation and could crash the editor. Proceed?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                if ans != QMessageBox.StandardButton.Yes:
-                    # revert
-                    self.vox_radius.blockSignals(True)
-                    self.vox_radius.setCurrentIndex(self._last_vox_radius_index)
-                    self.vox_radius.blockSignals(False)
-                    return
-        except Exception:
-            pass
+        _, val = self.vox_radius_presets_list[index]
         self._last_vox_radius_index = index
         self.update_obj_prop('voxel_radius', float(val))
 

@@ -25,7 +25,7 @@ from py_editor.ui.panels.variable_panel import VariablePanel
 from py_editor.ui.scene.hierarchy_dock import HierarchyDock
 from py_editor.ui.scene.properties_panel import ObjectPropertiesPanel
 from py_editor.ui import (
-    LogicEditor, UIBuilderWidget, SceneEditorWidget, NodeEditorDialog
+    LogicEditor, UIBuilderWidget, SceneEditorWidget, NodeEditorDialog, NodeSettingsDialog
 )
 from py_editor.core import load_templates
 
@@ -89,6 +89,13 @@ class MainWindow(QMainWindow):
         
         compile_act = QAction("Compile", self); compile_act.setShortcut("F7")
         self.toolbar.addAction(compile_act)
+
+        self.toolbar.addSeparator()
+
+        # Settings
+        settings_act = QAction("Settings", self)
+        settings_act.triggered.connect(self._on_open_settings)
+        self.toolbar.addAction(settings_act)
 
     def _on_play_standalone(self):
         """Save current state to temp and launch standalone runtime as a separate process."""
@@ -161,6 +168,14 @@ class MainWindow(QMainWindow):
                      dlg.exec()
              except:
                  QMessageBox.critical(self, "Error", f"Failed to load: {e}")
+
+    def _on_open_settings(self):
+        """Open the global settings dialog."""
+        dlg = NodeSettingsDialog(self)
+        dlg.exec()
+        # Refresh logic templates if they were changed
+        if hasattr(self, 'logic_editor') and hasattr(self.logic_editor, 'refresh_templates'):
+             self.logic_editor.refresh_templates()
 
     def _on_property_changed(self):
         # Notify components to redraw

@@ -1139,6 +1139,8 @@ class LogicEditor(QGraphicsView):
                         pass
                 except Exception:
                     pass
+        self.graph_changed.emit()
+        self.value_changed.emit()
 
     def export_graph(self):
         nodes = []
@@ -1856,6 +1858,13 @@ class LogicEditor(QGraphicsView):
                     remove_output_action = QAction("Remove Output Pin", menu)
                     menu.addAction(remove_output_action)
             
+            # Add "Change Variable" for variable nodes
+            change_var_action = None
+            if tname in ('GetVariable', 'SetVariable'):
+                menu.addSeparator()
+                change_var_action = QAction("Change Variable...", menu)
+                menu.addAction(change_var_action)
+            
             # Add breakpoint toggle for debugging
             menu.addSeparator()
             breakpoint_text = "Remove Breakpoint" if target_node.has_breakpoint else "Add Breakpoint"
@@ -1883,6 +1892,22 @@ class LogicEditor(QGraphicsView):
                         self.update_connections_for_node(target_node)
                 except Exception:
                     traceback.print_exc()
+            if action == change_var_action and change_var_action:
+                vars = list(getattr(self, 'graph_variables', {}).keys())
+                if vars:
+                    new_var, ok = QInputDialog.getItem(self, "Change Variable", "Select Variable:", vars, 0, False)
+                    if ok and new_var:
+                        # Find the 'name' input widget and update it
+                        if hasattr(target_node, 'value_widgets') and 'name' in target_node.value_widgets:
+                            proxy = target_node.value_widgets['name']
+                            widget = proxy.widget()
+                            if isinstance(widget, QLineEdit):
+                                widget.setText(new_var)
+                                # Force update of pin_values
+                                target_node.pin_values['name'] = new_var
+                                self.value_changed.emit()
+                else:
+                    QMessageBox.information(self, "Change Variable", "No variables defined in graph.")
             if action == rename_action:
                 try:
                     tname = getattr(target_node, "template_name", None)
@@ -2433,9 +2458,9 @@ class LogicEditor(QGraphicsView):
             # Variable drops
             if text.startswith("variable:"):
                 parts = text.split(":")
-                if len(parts) >= 3:
+                if len(parts) >= 2:
                     var_name = parts[1]
-                    var_type = parts[2]
+                    var_type = parts[2] if len(parts) >= 3 else "any"
                     drop_pos = self.mapToScene(event.position().toPoint())
                     
                     from PyQt6.QtWidgets import QMenu

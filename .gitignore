@@ -36,3 +36,4 @@ Thumbs.db
 compass_artifact_wf-f8a3c148-1c5a-47c6-abce-91d03cba3655_text_markdown.md
 .github/copilot-instructions.md
 /brain
+.claude/settings.local.json

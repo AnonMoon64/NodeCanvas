@@ -1124,270 +1124,225 @@ class SceneViewport(QOpenGLWidget):
             ctrl.flock = current_ai_controllers
 
     def _draw_voxel_world(self, obj, shader_active=False):
-        """Stable, single-mesh rendering for Voxel Worlds."""
-        v_type      = str(getattr(obj, 'voxel_type', 'Round')).strip()
-        v_radius    = float(getattr(obj, 'voxel_radius', 5.0))
-        seed        = int(getattr(obj, 'voxel_seed', 123))
-        smooth      = int(getattr(obj, 'voxel_smooth_iterations', 2))
-        block_size  = float(getattr(obj, 'voxel_block_size', 0.15))
-        render_style= str(getattr(obj, 'voxel_render_style', 'Smooth'))
-        layers      = getattr(obj, 'voxel_layers', [])
-        obj_pos     = np.array(obj.position, dtype=np.float32)
+        """Chunk-streamed voxel world with full-planet camera-distance LOD.
 
-        # Compute resolution from block_size + planet extent
+        Seam fixes:
+        · total_samples = per_res + 2*margin + 1  makes linspace step == vox_step
+          exactly, so every chunk samples density at globally-aligned world positions.
+          Adjacent same-LOD chunks share boundary sample positions → identical vertices
+          at edges → no cracks.
+        · Half-open clip [cmin, cmax): every triangle belongs to exactly one chunk,
+          preventing both double-rendering (z-fighting) and missed triangles.
+        · LOD uses camera-AABB distance (not chunk-centre distance).  Face-adjacent
+          chunks can differ in AABB-distance by at most one chunk-width, which is less
+          than every threshold gap, so no two neighbours ever jump more than one LOD
+          tier — no explicit smoothing pass needed.
+
+        Full-planet rendering:
+        · All chunks across the entire planet are considered every frame (vectorised).
+        · 5 LOD tiers keep generation load proportional to distance regardless of size.
+        · Thread throttle (≤6 concurrent) prevents memory blowout on Moon/Planet.
+        """
+        v_type       = str(getattr(obj, 'voxel_type', 'Round')).strip()
+        v_radius     = float(getattr(obj, 'voxel_radius', 5.0))
+        seed         = int(getattr(obj, 'voxel_seed', 123))
+        smooth       = int(getattr(obj, 'voxel_smooth_iterations', 2))
+        block_size   = float(getattr(obj, 'voxel_block_size', 1.0))
+        render_style = str(getattr(obj, 'voxel_render_style', 'Smooth'))
+        layers       = getattr(obj, 'voxel_layers', [])
+        obj_pos      = np.array(obj.position, dtype=np.float32)
+
+        # Enforce minimum voxel size per style
+        if render_style == 'Minecraft':
+            smooth     = 0
+            block_size = max(block_size, 1.0)   # blocky: ≥1 unit/voxel
+        else:
+            block_size = max(block_size, 0.5)   # smooth: ≥0.5 units/voxel
+
+        res_limit = int(getattr(obj, 'voxel_max_single_chunk_res',
+                                getattr(self, 'voxel_max_single_chunk_res', 128)))
+
+        # World bounds
         if v_type.lower() == "round":
             extent     = v_radius * 1.5
-            world_size = extent * 2.0
-            res = max(16, min(512, round(world_size / block_size)))
+            world_span = v_radius * 3.0
+            world_min  = obj_pos - extent
+            world_max  = obj_pos + extent
         else:
-            res = max(16, min(512, round(100.0 / max(block_size, 0.1))))
+            extent     = None
+            world_span = 100.0
+            world_min  = obj_pos + np.array([-50, -20, -50], dtype=np.float32)
+            world_max  = obj_pos + np.array([ 50,  20,  50], dtype=np.float32)
 
-        # Override smoothing for Minecraft style (none) vs Smooth (from prop)
-        if render_style == 'Minecraft':
-            smooth = 0
+        # Adaptive chunk size: target ~4 chunks per radius (≤~64 chunks per sphere).
+        # No upper cap — large planets need large chunks to avoid iterating 100k+ cells.
+        chunk_vox_size = float(max(block_size * 8.0, world_span / 4.0))
 
         layers_hash = hash(str(layers))
         cache_key = (f"voxel_{obj.id}_{seed}_{v_type}_{v_radius}"
                      f"_{block_size}_{smooth}_{render_style}_{layers_hash}")
-        # Simple chunking strategy: avoid generating a single huge grid for
-        # large world sizes. Break the volume into smaller chunks around the
-        # camera and generate only those chunks (with simple LOD).
-        res_limit = getattr(obj, 'voxel_max_single_chunk_res', getattr(self, 'voxel_max_single_chunk_res', 128))
+
+        cam_pos = np.array(self._cam3d.pos, dtype=np.float32)
+
+        world_grid_min = np.floor(world_min / chunk_vox_size).astype(int)
+        world_grid_max = np.ceil(world_max  / chunk_vox_size).astype(int)
 
         if cache_key not in self.mesh_cache:
-            if v_type.lower() == "round":
-                extent = v_radius * 1.5
-                min_p  = obj_pos - extent
-                max_p  = obj_pos + extent
-                size   = np.array([extent * 2] * 3, dtype=np.float32)
-            else:
-                min_p = obj_pos + np.array([-50, -20, -50], dtype=np.float32)
-                max_p = obj_pos + np.array([ 50,  20,  50], dtype=np.float32)
-                size  = np.array([100.0, 40.0, 100.0], dtype=np.float32)
+            self.mesh_cache[cache_key] = []
 
-            # Generate mesh in a background thread so we never block the render loop.
-            # Even for small single-chunk planets (res≤128) the numpy calculation
-            # can take 1–4 s; running it async keeps the viewport responsive.
-            if res <= res_limit or not getattr(obj, 'voxel_lod_enabled', True):
-                # Mark as in-progress so we don't schedule it twice
-                if cache_key not in self._voxel_generation_in_progress:
-                    self.mesh_cache[cache_key] = None   # placeholder
-                    with self._voxel_gen_lock:
-                        self._voxel_generation_in_progress.add(cache_key)
-
-                    def _gen_single(cache_key_local, min_p_local, max_p_local, size_local):
-                        try:
-                            # Use a small margin even for single chunks to avoid edge artifacts
-                            margin = 2
-                            vox_step = size_local / max(1, res - 1)
-                            p_min = min_p_local - margin * vox_step
-                            p_max = max_p_local + margin * vox_step
-                            padded_r = res + 2 * margin
-
-                            grid = VoxelEngine.generate_density_grid(
-                                resolution=padded_r, seed=seed, mode=v_type,
-                                radius=v_radius, layers=layers,
-                                center=obj_pos, min_p=p_min, max_p=p_max
-                            )
-                            if smooth > 0:
-                                grid = VoxelEngine.smooth_grid(grid, iterations=smooth)
-                            if render_style == 'Minecraft':
-                                verts_s, idx_s, norms_s = VoxelEngine.blocky_mesh(grid)
-                            else:
-                                verts_s, idx_s, norms_s = VoxelEngine.surface_nets(grid)
-                            if len(verts_s) > 0:
-                                p_size = p_max - p_min
-                                p_offset = (p_min + p_max) * 0.5 - obj_pos
-                                verts_out = np.ascontiguousarray(verts_s * p_size + p_offset, dtype=np.float32)
-                                norms_out = np.ascontiguousarray(norms_s, dtype=np.float32)
-                                with self._voxel_gen_lock:
-                                    self._pending_voxel_chunks[cache_key_local] = (verts_out, idx_s, norms_out)
-                        except Exception as e:
-                            print(f"[VOXEL] Single-chunk generation failed: {e}")
-                        finally:
-                            with self._voxel_gen_lock:
-                                self._voxel_generation_in_progress.discard(cache_key_local)
-
-                    t = threading.Thread(target=_gen_single,
-                                         args=(cache_key, min_p, max_p, size),
-                                         daemon=True)
-                    t.start()
-            else:
-                # VOXEL-ALIGNED CHUNKING:
-                # Instead of dividing the world radius by N, we force each chunk to 
-                # span a fixed integer number of voxels (res_limit).
-                # This ensures boundaries are perfectly synchronized.
-                vox_step = float(block_size)
-                chunk_vox_size = float(res_limit) * vox_step
-                
-                min_p = np.array(min_p, dtype=np.float32)
-                max_p = np.array(max_p, dtype=np.float32)
-                
-                # Number of chunks needed to cover the extent
-                nx = int(np.ceil((max_p[0] - min_p[0]) / chunk_vox_size))
-                ny = int(np.ceil((max_p[1] - min_p[1]) / chunk_vox_size))
-                nz = int(np.ceil((max_p[2] - min_p[2]) / chunk_vox_size))
-
-                # Camera-local chunk indices
-                cam_pos = np.array(self._cam3d.pos, dtype=np.float32)
-                rel = cam_pos - min_p
-                cam_ix = int(np.clip(int(np.floor(rel[0] / chunk_vox_size)), 0, nx - 1))
-                cam_iy = int(np.clip(int(np.floor(rel[1] / chunk_vox_size)), 0, ny - 1))
-                cam_iz = int(np.clip(int(np.floor(rel[2] / chunk_vox_size)), 0, nz - 1))
-
-                neighborhood = int(getattr(obj, 'voxel_prefetch_neighborhood', getattr(self, 'voxel_prefetch_neighborhood', 1)))
-                chunk_keys = []
-                for ix in range(max(0, cam_ix - neighborhood), min(nx, cam_ix + neighborhood + 1)):
-                    for iy in range(max(0, cam_iy - neighborhood), min(ny, cam_iy + neighborhood + 1)):
-                        for iz in range(max(0, cam_iz - neighborhood), min(nz, cam_iz + neighborhood + 1)):
-                            cmin = min_p + np.array([ix, iy, iz], dtype=np.float32) * chunk_vox_size
-                            cmax = cmin + chunk_vox_size
-                            ccenter = (cmin + cmax) * 0.5
-
-                            # LOD: reduce resolution for distant chunks
-                            dist = np.linalg.norm(ccenter - cam_pos)
-                            if dist > v_radius * 2.5:
-                                lod_factor = 4
-                            elif dist > v_radius:
-                                lod_factor = 2
-                            else:
-                                lod_factor = 1
-                            
-                            # Voxel-aligned resolution for this LOD level
-                            per_res = max(4, int(res_limit // lod_factor) + 1)
-
-                            chunk_cache_key = f"{cache_key}_c_{ix}_{iy}_{iz}_{per_res}"
-                            if chunk_cache_key not in self.mesh_cache:
-                                # Schedule background generation for this chunk.
-                                with self._voxel_gen_lock:
-                                    if chunk_cache_key in self._voxel_generation_in_progress:
-                                        pass
-                                    else:
-                                        self._voxel_generation_in_progress.add(chunk_cache_key)
-                                        # mark mesh_cache placeholder so render knows it's scheduled
-                                        self.mesh_cache[chunk_cache_key] = None
-
-                                        def _gen_chunk(cmin, cmax, ccenter, per_res, chunk_cache_key, chunk_size_local):
-                                            try:
-                                                # Progressive: generate a quick low-res pass first
-                                                per_res_low = max(8, int(per_res // 4))
-                                                res_list = [per_res_low] if per_res_low < per_res else []
-                                                res_list.append(per_res)
-
-                                                for r in res_list:
-                                                    # SEAMLESS STRATEGY: 
-                                                    # Generate a grid slightly larger than the actual chunk (overlap).
-                                                    # This ensures smoothing and Surface Nets have context for neighbors.
-                                                    margin = 2 # 2 voxel overlap
-                                                    padded_r = r + 2 * margin
-                                                    
-                                                    # Calculate world-space voxel size
-                                                    vox_step = chunk_size_local / max(1, r - 1)
-                                                    p_min = cmin - margin * vox_step
-                                                    p_max = cmax + margin * vox_step
-                                                    
-                                                    grid = VoxelEngine.generate_density_grid(
-                                                        resolution=padded_r, seed=seed, mode=v_type,
-                                                        radius=v_radius, layers=layers,
-                                                        center=obj_pos, min_p=p_min, max_p=p_max
-                                                    )
-                                                    if smooth > 0:
-                                                        grid = VoxelEngine.smooth_grid(grid, iterations=smooth)
-
-                                                    if render_style == 'Minecraft':
-                                                        verts_c, idx_c, norms_c = VoxelEngine.blocky_mesh(grid)
-                                                    else:
-                                                        # Use SEAMLESS mode (pad=False) to avoid capping at margins
-                                                        verts_c, idx_c, norms_c = VoxelEngine.surface_nets(grid, pad=False)
-
-                                                    if len(verts_c) > 0:
-                                                        # verts_c are in [-0.5, 0.5] range of the PADDED grid.
-                                                        # Project them to world space using the PADDED bounds.
-                                                        p_size = p_max - p_min
-                                                        p_offset = (p_min + p_max) * 0.5 - obj_pos
-                                                        verts_w = verts_c * p_size + p_offset
-                                                        
-                                                        # STRICT CLIPPING:
-                                                        # Only keep triangles whose centroid is inside the core chunk bounds.
-                                                        # This ensures only one chunk renders the shared boundary, 
-                                                        # eliminating Z-fighting and precision gaps.
-                                                        cmin_rel = cmin - obj_pos
-                                                        cmax_rel = cmax - obj_pos
-                                                        
-                                                        indices_out = []
-                                                        for t in range(0, len(idx_c), 3):
-                                                            i1, i2, i3 = idx_c[t], idx_c[t+1], idx_c[t+2]
-                                                            v1, v2, v3 = verts_w[i1], verts_w[i2], verts_w[i3]
-                                                            centroid = (v1 + v2 + v3) / 3.0
-                                                            
-                                                            # HALF-OPEN INTERVAL CLIPPING: [min, max)
-                                                            # Ensures exactly one chunk owns any boundary triangle.
-                                                            if (np.all(centroid >= cmin_rel) and 
-                                                                np.all(centroid < cmax_rel)):
-                                                                indices_out.extend([i1, i2, i3])
-                                                        
-                                                        if len(indices_out) > 0:
-                                                            verts_out = np.ascontiguousarray(verts_w, dtype=np.float32)
-                                                            idx_out   = np.array(indices_out, dtype=np.uint32)
-                                                            norms_out = np.ascontiguousarray(norms_c, dtype=np.float32)
-                                                            
-                                                            with self._voxel_gen_lock:
-                                                                self._pending_voxel_chunks[chunk_cache_key] = (verts_out, idx_out, norms_out)
-
-                                            except Exception as e:
-                                                print(f"[VOXEL] Chunk generation failed {chunk_cache_key}: {e}")
-                                            finally:
-                                                with self._voxel_gen_lock:
-                                                    if chunk_cache_key in self._voxel_generation_in_progress:
-                                                        self._voxel_generation_in_progress.remove(chunk_cache_key)
-
-                                        t = threading.Thread(target=_gen_chunk, args=(cmin, cmax, ccenter, per_res, chunk_cache_key, chunk_vox_size), daemon=True)
-                                        t.start()
-
-                            chunk_keys.append(chunk_cache_key)
-
-                # Store the list of chunk keys for this object so rendering can
-                # iterate over them later.
-                self.mesh_cache[cache_key] = chunk_keys
-                
-        data = self.mesh_cache.get(cache_key)
-        if isinstance(data, list):
-            # chunked cache: iterate each chunk VAO. 
-            # Disable culling so we can see the interior of caves/planets.
-            glDisable(GL_CULL_FACE)
-            for ck in data:
-                d = self.mesh_cache.get(ck)
-                if not d:
-                    continue
-                glBindVertexArray(d['vao'])
-                glDrawElements(GL_TRIANGLES, d['count'], GL_UNSIGNED_INT, None)
-                # Draw wireframe overlay for Minecraft/Blocky style to show seams
-                if render_style == 'Minecraft':
-                    try:
-                        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
-                        glDisable(GL_CULL_FACE)
-                        glLineWidth(1.0)
-                        glDrawElements(GL_TRIANGLES, d['count'], GL_UNSIGNED_INT, None)
-                    except Exception:
-                        pass
-                    finally:
-                        try:
-                            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
-                        except Exception:
-                            pass
-
-                glBindVertexArray(0)
+        # ── Vectorised chunk selection (all planet chunks in one numpy pass) ──
+        ixs = np.arange(int(world_grid_min[0]), int(world_grid_max[0]))
+        iys = np.arange(int(world_grid_min[1]), int(world_grid_max[1]))
+        izs = np.arange(int(world_grid_min[2]), int(world_grid_max[2]))
+        if not (len(ixs) and len(iys) and len(izs)):
             glEnable(GL_CULL_FACE)
-        elif data:
-            glDisable(GL_CULL_FACE)
-            glBindVertexArray(data['vao'])
-            glDrawElements(GL_TRIANGLES, data['count'], GL_UNSIGNED_INT, None)
+            return
+
+        IX, IY, IZ = np.meshgrid(ixs, iys, izs, indexing='ij')
+        IX = IX.ravel(); IY = IY.ravel(); IZ = IZ.ravel()
+
+        cmin_all = np.stack([IX, IY, IZ], axis=1).astype(np.float32) * chunk_vox_size
+        cmax_all = cmin_all + chunk_vox_size
+
+        # Sphere-AABB overlap: closest point on each chunk box to the planet centre.
+        # This is correct for any planet-to-chunk size ratio (small planet, large chunk).
+        if v_type.lower() == "round":
+            closest_planet = np.clip(obj_pos, cmin_all, cmax_all)           # (N,3)
+            dist_planet    = np.linalg.norm(closest_planet - obj_pos, axis=1)  # (N,)
+            in_planet      = dist_planet <= extent
+        else:
+            in_planet = np.ones(len(IX), dtype=bool)
+
+        # Camera-AABB distance for LOD tier: nearest point on chunk AABB to camera.
+        # Neighbouring chunks differ in this distance by at most chunk_vox_size,
+        # which is less than every threshold gap → guaranteed ≤1 LOD tier per edge.
+        closest_cam = np.clip(cam_pos, cmin_all, cmax_all)
+        dist_cam    = np.linalg.norm(closest_cam - cam_pos, axis=1)
+        d_ch        = dist_cam / chunk_vox_size  # distance in chunk-units
+
+        # 5 LOD tiers: full planet always visible, detail scales with proximity.
+        #   0 = 1× step (closest)  …  4 = 16× step (whole-planet view)
+        lod_arr = np.full(len(IX), -1, dtype=np.int8)
+        lod_arr[in_planet & (d_ch <  2.5)]                       = 0
+        lod_arr[in_planet & (d_ch >= 2.5)  & (d_ch < 6.0)]      = 1
+        lod_arr[in_planet & (d_ch >= 6.0)  & (d_ch < 12.0)]     = 2
+        lod_arr[in_planet & (d_ch >= 12.0) & (d_ch < 30.0)]     = 3
+        lod_arr[in_planet & (d_ch >= 30.0)]                      = 4   # whole-planet LOD
+
+        vis = lod_arr >= 0
+        if not np.any(vis):
+            glEnable(GL_CULL_FACE)
+            return
+
+        chunk_lods = {(int(IX[i]), int(IY[i]), int(IZ[i])): int(lod_arr[i])
+                      for i in np.where(vis)[0]}
+
+        # Snapshot layers NOW so threads always use the state at scheduling time,
+        # not a mutated version that may arrive after the thread starts.
+        layers_snap = list(layers)
+
+        # ── Schedule generation & collect active chunk keys ──
+        chunk_keys = []
+        with self._voxel_gen_lock:
+            active_count = len(self._voxel_generation_in_progress)
+
+        for (ix, iy, iz), lod_level in chunk_lods.items():
+            lod_factor = 1 << lod_level               # 1, 2, 4, 8, or 16
+            # base_per_res: scale to match chunk size, but hard-cap at 40 so that
+            # large-chunk planets (Moon, Planet) never generate >47^3 ≈ 104K samples
+            # per thread.  Dwarf Planet (per_res=37) is unchanged; Asteroid uses 8.
+            base_per_res = max(8, min(40, min(res_limit, int(chunk_vox_size / block_size))))
+            per_res      = max(8, base_per_res // lod_factor)
+            vox_step     = chunk_vox_size / per_res
+
+            chunk_cache_key = f"{cache_key}_c_{ix}_{iy}_{iz}_{lod_level}"
+
+            # Schedule if: no VAO yet (absent or None/failed) AND not already running.
+            # Using isinstance(…, dict) lets empty/failed chunks retry on next frame
+            # so a settings change (layers added, noise params tweaked) always re-runs.
+            existing = self.mesh_cache.get(chunk_cache_key)
+            if not isinstance(existing, dict):
+                if active_count < 6:
+                    with self._voxel_gen_lock:
+                        if chunk_cache_key not in self._voxel_generation_in_progress:
+                            self._voxel_generation_in_progress.add(chunk_cache_key)
+                            self.mesh_cache[chunk_cache_key] = None   # in-progress marker
+                            active_count += 1
+
+                            cmin_loc = np.array([ix, iy, iz], dtype=np.float32) * chunk_vox_size
+                            cmax_loc = cmin_loc + chunk_vox_size
+
+                            def _gen_chunk(cmin, cmax, per_res, cck, vs, lsnap):
+                                try:
+                                    margin = 3
+                                    p_min  = cmin - margin * vs
+                                    p_max  = cmax + margin * vs
+                                    # per_res + 2*margin + 1 samples → linspace step == vs
+                                    # → globally-aligned density grid → seamless edges
+                                    total_samples = per_res + 2 * margin + 1
+
+                                    grid = VoxelEngine.generate_density_grid(
+                                        resolution=total_samples, seed=seed, mode=v_type,
+                                        radius=v_radius, layers=lsnap,
+                                        center=obj_pos, min_p=p_min, max_p=p_max)
+                                    if smooth > 0:
+                                        grid = VoxelEngine.smooth_grid(grid, iterations=smooth)
+                                    if render_style == 'Minecraft':
+                                        verts_c, idx_c, norms_c = VoxelEngine.blocky_mesh(grid)
+                                    else:
+                                        verts_c, idx_c, norms_c = VoxelEngine.surface_nets(
+                                            grid, pad=False)
+
+                                    if len(verts_c) > 0 and len(idx_c) > 0:
+                                        p_size   = p_max - p_min
+                                        p_offset = (p_min + p_max) * 0.5 - obj_pos
+                                        verts_w  = verts_c * p_size + p_offset
+
+                                        # Half-open clip [cmin, cmax) — one chunk owns each tri
+                                        cmin_rel  = cmin - obj_pos
+                                        cmax_rel  = cmax - obj_pos
+                                        tri_arr   = idx_c.reshape(-1, 3)
+                                        centroids = verts_w[tri_arr].mean(axis=1)
+                                        keep      = (np.all(centroids >= cmin_rel, axis=1) &
+                                                     np.all(centroids  < cmax_rel, axis=1))
+                                        idx_out   = tri_arr[keep].flatten()
+
+                                        if len(idx_out) > 0:
+                                            with self._voxel_gen_lock:
+                                                self._pending_voxel_chunks[cck] = (
+                                                    np.ascontiguousarray(verts_w,  dtype=np.float32),
+                                                    np.array(idx_out,              dtype=np.uint32),
+                                                    np.ascontiguousarray(norms_c,  dtype=np.float32),
+                                                )
+                                except Exception as e:
+                                    print(f"[VOXEL] Chunk {cck}: {e}")
+                                finally:
+                                    with self._voxel_gen_lock:
+                                        self._voxel_generation_in_progress.discard(cck)
+
+                            threading.Thread(
+                                target=_gen_chunk,
+                                args=(cmin_loc, cmax_loc, per_res,
+                                      chunk_cache_key, vox_step, layers_snap),
+                                daemon=True).start()
+
+            chunk_keys.append(chunk_cache_key)
+
+        self.mesh_cache[cache_key] = chunk_keys
+
+        # ── Render all chunks with a ready VAO ──
+        glDisable(GL_CULL_FACE)
+        for ck in chunk_keys:
+            d = self.mesh_cache.get(ck)
+            if not isinstance(d, dict):
+                continue
+            glBindVertexArray(d['vao'])
+            glDrawElements(GL_TRIANGLES, d['count'], GL_UNSIGNED_INT, None)
             if render_style == 'Minecraft':
                 try:
                     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
-                    glDisable(GL_CULL_FACE)
                     glLineWidth(1.0)
-                    glDrawElements(GL_TRIANGLES, data['count'], GL_UNSIGNED_INT, None)
+                    glDrawElements(GL_TRIANGLES, d['count'], GL_UNSIGNED_INT, None)
                 except Exception:
                     pass
                 finally:
@@ -1396,7 +1351,7 @@ class SceneViewport(QOpenGLWidget):
                     except Exception:
                         pass
             glBindVertexArray(0)
-            glEnable(GL_CULL_FACE)
+        glEnable(GL_CULL_FACE)
 
     def _create_voxel_vao(self, verts, idx, norms):
         """Create a VAO for voxel mesh with high-precision gradient normals."""

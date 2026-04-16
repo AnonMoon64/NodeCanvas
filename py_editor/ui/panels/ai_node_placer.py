@@ -32,7 +32,7 @@ NODE_W       = 180    # assumed node width         (px)
 NODE_H       = 90     # assumed node height        (px)
 H_EXEC       = 220    # left-edge-to-left-edge gap for exec-chain nodes   (px)
 H_DATA_BACK  = 60     # how far LEFT of the consumer's left edge a data node sits
-V_DATA_STEP  = 100    # vertical slot step for stacked data nodes         (px)
+V_DATA_STEP  = 140    # vertical slot step for stacked data nodes         (px)
 V_BRANCH     = 110    # vertical fan per extra branch output              (px)
 COLLISION_PAD = 16    # extra margin used in overlap detection            (px)
 
@@ -302,13 +302,14 @@ def suggest_position(
     cx, cy = ctx.pos().x(), ctx.pos().y()
 
     # =====================================================================
-    # Event nodes — place at the far left, stacked vertically
+    # Event nodes — place at the far left, stacked UPWARDS
     # =====================================================================
     if kind == 'event':
         lx = min(n.pos().x() for n in nodes)
         # Find y positions of existing nodes at that column
         col_ys = [n.pos().y() for n in nodes if n.pos().x() <= lx + NODE_W * 0.75]
-        ty = (max(col_ys) + NODE_H + V_DATA_STEP) if col_ys else 0.0
+        # Stack upwards to avoid crossing data nodes which stack downwards
+        ty = (min(col_ys) - NODE_H - V_DATA_STEP) if col_ys else -V_DATA_STEP
         return _free(lx, ty, rects)
 
     # =====================================================================
@@ -323,6 +324,7 @@ def suggest_position(
             and abs(n.pos().y() - cy) < NODE_H * 5
         ]
         slot = len(data_near)
+        # Start by placing data nodes BELOW (sign=1) the exec line
         sign = 1 if slot % 2 == 0 else -1
         ty   = cy + sign * (V_DATA_STEP * (slot // 2 + 1))
         return _free(tx, ty, rects)

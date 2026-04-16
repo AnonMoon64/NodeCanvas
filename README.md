@@ -12,7 +12,17 @@
 - **Stable Logic Engine**: Established a deterministic, one-shot execution model for visual scripting with support for cross-graph `Message` nodes and `Custom Events`.
 - **Logic Validation Pipeline**: Added a headless testing suite (`tests/test_logic_run.py`) for validating complex logic flows without UI overhead.
 - **Ultra Dynamic Atmosphere**: Implemented a high-fidelity scattering model with **Zenith-based Sky Grading**, **Mie halos**, and seamless **Land-to-Space** transitions (sky blue → black starfield).
-- **Professional UX**: Implemented a **UE5-style Dockable Workspace** and **On-Screen Viewport Logging** for real-time debugging feedback.
+- **Professional UX**: Implemented a **UE5-style Dockable Workspace**, **Global Settings Dialog**, and **On-Screen Viewport Logging** for real-time debugging feedback.
+- **Plugin & Template Management**: Integrated a comprehensive **Settings** suite for:
+  - **Dynamic Node Templates**: Create, edit, and delete custom node definitions in real-time.
+  - **Plugin Package Orchestration**: Install `.ncpkg` archives or `.json` packages to expand the node ecosystem.
+  - **Autonomous Export**: Package your custom logic nodes and Python modules into distributable plugin archives.
+- **Enhanced Variable Workflow**: Redesigned the Variables panel to support a **UE5-inspired workflow**:
+  - **In-Place Editing**: Double-click to rename, change types, or edit default values directly in the list.
+  - **Auto-Naming**: One-click variable creation with intelligent default name generation.
+  - **Type-Safe Accessors**: Drag-and-drop variables onto the canvas to instantly create Get/Set nodes with pre-populated references.
+  - **Context-Aware Editing**: Right-click nodes or list items for quick-access configuration menus.
+- **AI-Managed Variables**: Expanded the AI toolset with dedicated `set_variable` and `delete_variable` operations for autonomous logic orchestration.
 - **Enhanced Navigation**: Restored full **WASD + Mouse-look (RMB)** flight controls in the 3D viewport, including a real-time **Camera Speed Overlay**.
 - **Custom Mesh System**: Integrated a high-performance **binary .mesh format (NCMS)** with a native **OBJ conversion pipeline**. Models are optimized for fast GPU loading and render with custom textures.
 - **Persistence 1.0**: Full `.scene` serialization implemented. Save and Load your procedural environments instantly.
@@ -59,6 +69,9 @@ NodeCanvas is built on a modular "Separated Pipeline" architecture:
   - **Laplacian Smoothing**: Configurable pass count (0–8) eliminates the blocky voxel look and produces organic terrain.
   - **Multi-Type Noise Layers**: Each layer independently selects from `perlin`, `fbm`, `ridged`, `voronoi`, or `caves` noise. Layers support rename, reorder, save/load JSON presets, and `add`/`subtract`/`multiply` blend modes.
   - **Voxel Biomes**: Same data structure as the Landscape primitive — height/slope ranges, surface color, roughness and metallic per biome, fully editable in the Properties panel.
+  - **Unit-Based Adaptive LOD**: Advanced chunked LOD system using fixed unit scales (**1.0u, 4.0u, 16u, 64u**). Distant terrain resolution is aggressively reduced to maintain performance on planetary scales.
+  - **Refined Detail Presets**: Default voxel block size updated to **1.0 unit (Medium)** for optimal performance-to-detail ratio on Earth-sized worlds.
+  - **Safety Warnings**: Integrated performance warnings in the UI when attempting to disable LOD on large-scale objects.
   - **Ocean World Primitive**: New spherical ocean object (`ocean_world`) renders animated wave normals and Fresnel shading on a planet surface using a custom GLSL shader.
   - **Realistic Sun Disk**: Atmosphere shader rewritten — sun disk uses physically-motivated `disk_pow = 60000 / sun_size²` giving the correct ~0.5° angular diameter at `sun_size=1`. Includes separate inner corona and Mie halo passes.
   - **Improved Clouds**: Domain-warped fBm with 6 octaves, wind drift, top-lit self-shadowing, and wispy edge detail replaces the flat single-quad placeholder.
