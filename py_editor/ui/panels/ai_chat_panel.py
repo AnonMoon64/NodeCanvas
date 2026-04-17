@@ -429,8 +429,12 @@ class AIChatWidget(QWidget):
 
     def _on_agent_tool(self, tool_name: str, result: dict):
         ok = result.get("ok", True)
-        icon = "✓" if ok else "✗"
-        color = "#4caf50" if ok else "#f44336"
+        if not ok:
+            # Hide failed attempts from chat, but keep them in logs
+            return
+            
+        icon = "✓"
+        color = "#4caf50"
         # Show a compact one-liner per tool
         summary = self._summarize_tool_result(tool_name, result)
         self.chat_display.append(

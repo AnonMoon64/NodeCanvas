@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QWidget,
 )
-from PyQt6.QtGui import QPainterPath, QPen, QBrush, QColor, QPainter, QFont, QAction, QLinearGradient, QPolygonF
+from PyQt6.QtGui import QPainterPath, QPen, QBrush, QColor, QPainter, QFont, QAction, QLinearGradient, QPolygonF, QCursor
 from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer, pyqtSignal, QObject
 import traceback
 import importlib
@@ -231,6 +231,16 @@ class LogicEditor(QGraphicsView):
                 self.redo()
                 event.accept()
                 return
+            elif event.key() == Qt.Key.Key_D:
+                self.duplicate_selected()
+                event.accept()
+                return
+        
+        if event.key() == Qt.Key.Key_C and event.modifiers() == Qt.NoModifier:
+            self.add_comment_box()
+            event.accept()
+            return
+        
         super().keyPressEvent(event)
     
     def copy_selected(self):
@@ -392,6 +402,37 @@ class LogicEditor(QGraphicsView):
             print(f"Error deleting nodes: {e}")
             import traceback
             traceback.print_exc()
+            
+    def duplicate_selected(self):
+        """Duplicate currently selected nodes"""
+        self.copy_selected()
+        self.paste()
+        
+    def add_comment_box(self):
+        """Add a comment box to group nodes."""
+        try:
+            from .node_item import CommentBoxItem
+        except ImportError:
+            try:
+                from py_editor.ui.node_item import CommentBoxItem
+            except ImportError:
+                return
+
+        nodes = [n for n in self.nodes if n.isSelected()]
+        if nodes:
+            # Wrap selected nodes
+            min_x = min(n.pos().x() for n in nodes) - 40
+            min_y = min(n.pos().y() for n in nodes) - 60
+            max_r = max(n.pos().x() + n.node_width for n in nodes) + 40
+            max_b = max(n.pos().y() + n.node_height for n in nodes) + 40
+            box = CommentBoxItem(min_x, min_y, max_r - min_x, max_b - min_y)
+        else:
+            # Place at mouse or center
+            scene_pt = self.mapToScene(self.mapFromGlobal(QCursor.pos())) if self.underMouse() else self.mapToScene(self.viewport().rect().center())
+            box = CommentBoxItem(scene_pt.x() - 150, scene_pt.y() - 100, 300, 200)
+            
+        self._scene.addItem(box)
+        self.value_changed.emit()
     
     def save_state(self):
         """Save the current graph state to the undo stack"""
@@ -515,6 +556,8 @@ class LogicEditor(QGraphicsView):
         tmpl = get_template(template_name)
         node = NodeItem(self.next_id, template_name, canvas=self)
         node.template_name = template_name
+        if tmpl and "category" in tmpl:
+            node.category = tmpl["category"]
         self.next_id += 1
         if tmpl and tmpl.get("type") == "composite":
             # Get inputs/outputs with pin types from composite template
@@ -1713,8 +1756,10 @@ class LogicEditor(QGraphicsView):
             menu = QMenu()
             copy_action = QAction("Copy (Ctrl+C)", menu)
             paste_action = QAction("Paste (Ctrl+V)", menu)
+            duplicate_action = QAction("Duplicate (Ctrl+D)", menu)
             menu.addAction(copy_action)
             menu.addAction(paste_action)
+            menu.addAction(duplicate_action)
             menu.addSeparator()
             delete_sel_action = QAction("Delete", menu)
             collapse_action = QAction("Collapse Into Node", menu)
@@ -1726,6 +1771,9 @@ class LogicEditor(QGraphicsView):
                 return
             if action == paste_action:
                 self.paste()
+                return
+            if action == duplicate_action:
+                self.duplicate_selected()
                 return
             if action == delete_sel_action:
                 try:
@@ -1833,9 +1881,18 @@ class LogicEditor(QGraphicsView):
             menu = QMenu()
             rename_action = QAction("Rename", menu)
             edit_action = QAction("Edit Node", menu)
+            copy_action = QAction("Copy", menu)
+            paste_action = QAction("Paste", menu)
+            duplicate_action = QAction("Duplicate", menu)
             delete_action = QAction("Delete", menu)
+            
             menu.addAction(rename_action)
             menu.addAction(edit_action)
+            menu.addSeparator()
+            menu.addAction(copy_action)
+            menu.addAction(paste_action)
+            menu.addAction(duplicate_action)
+            menu.addSeparator()
             menu.addAction(delete_action)
             
             # Add "Set Pin Type" for composite I/O nodes
@@ -1857,6 +1914,21 @@ class LogicEditor(QGraphicsView):
                 if len(target_node.output_pins) > 2:
                     remove_output_action = QAction("Remove Output Pin", menu)
                     menu.addAction(remove_output_action)
+
+            # Variadic Input Logic (SelectInt, StringAppend)
+            add_input_action = None
+            remove_input_action = None
+            is_variadic_node = tname in ('SelectInt', 'StringAppend')
+            if is_variadic_node:
+                menu.addSeparator()
+                add_input_action = QAction("Add Input Pin", menu)
+                menu.addAction(add_input_action)
+                # Count current dynamic pins
+                prefix = 'option' if tname == 'SelectInt' else 'str'
+                dyn_pins = [p for p in target_node.inputs if p.startswith(prefix)]
+                if len(dyn_pins) > 1:
+                    remove_input_action = QAction("Remove Input Pin", menu)
+                    menu.addAction(remove_input_action)
             
             # Add "Change Variable" for variable nodes
             change_var_action = None
@@ -1892,6 +1964,58 @@ class LogicEditor(QGraphicsView):
                         self.update_connections_for_node(target_node)
                 except Exception:
                     traceback.print_exc()
+            if action == add_input_action and add_input_action:
+                prefix = 'option' if tname == 'SelectInt' else 'str'
+                pin_type = 'any' if tname == 'SelectInt' else 'string'
+                idx = 0
+                while f"{prefix}{idx}" in target_node.inputs:
+                    idx += 1
+                target_node.inputs[f"{prefix}{idx}"] = pin_type
+                target_node.setup_pins(target_node.inputs, target_node.outputs)
+                self.update_connections_for_node(target_node)
+                self.value_changed.emit()
+
+            if action == remove_input_action and remove_input_action:
+                prefix = 'option' if tname == 'SelectInt' else 'str'
+                dyn_pins = sorted([p for p in target_node.inputs if p.startswith(prefix)], 
+                               key=lambda x: int(x.replace(prefix, '')))
+                if dyn_pins:
+                    last_pin = dyn_pins[-1]
+                    # Disconnect all connections to this pin
+                    for conn in list(self.connections):
+                        if conn.to_node == target_node and conn.to_pin == last_pin:
+                            conn.remove()
+                            if conn in self.connections:
+                                self.connections.remove(conn)
+                    del target_node.inputs[last_pin]
+                    target_node.setup_pins(target_node.inputs, target_node.outputs)
+                    self.update_connections_for_node(target_node)
+                    self.value_changed.emit()
+
+            if action == add_output_action and add_output_action:
+                new_pin = f"then{len(target_node.output_pins)}"
+                target_node.outputs[new_pin] = "exec"
+                target_node.setup_pins(target_node.inputs, target_node.outputs)
+                self.update_connections_for_node(target_node)
+                self.value_changed.emit()
+            
+            if action == remove_output_action and remove_output_action:
+                # Remove last thenN pin
+                pins = sorted([p for p in target_node.outputs if p.startswith('then')], 
+                            key=lambda x: int(x.replace('then', '')))
+                if pins:
+                    last_pin = pins[-1]
+                    # disconnect
+                    for conn in list(self.connections):
+                        if conn.from_node == target_node and conn.from_pin == last_pin:
+                            conn.remove()
+                            if conn in self.connections:
+                                self.connections.remove(conn)
+                    del target_node.outputs[last_pin]
+                    target_node.setup_pins(target_node.inputs, target_node.outputs)
+                    self.update_connections_for_node(target_node)
+                    self.value_changed.emit()
+
             if action == change_var_action and change_var_action:
                 vars = list(getattr(self, 'graph_variables', {}).keys())
                 if vars:
@@ -1908,6 +2032,15 @@ class LogicEditor(QGraphicsView):
                                 self.value_changed.emit()
                 else:
                     QMessageBox.information(self, "Change Variable", "No variables defined in graph.")
+            if action == duplicate_action:
+                self.duplicate_selected()
+                return
+            if action == copy_action:
+                self.copy_selected()
+                return
+            if action == paste_action:
+                self.paste()
+                return
             if action == rename_action:
                 try:
                     tname = getattr(target_node, "template_name", None)

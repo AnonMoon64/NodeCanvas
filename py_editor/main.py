@@ -22,6 +22,7 @@ from PyQt6.QtCore import Qt
 from py_editor.ui.panels.explorer_panel import FileExplorerWidget
 from py_editor.ui.panels.ai_chat_panel import AIChatWidget
 from py_editor.ui.panels.variable_panel import VariablePanel
+from py_editor.ui.panels.node_properties import NodePropertiesPanel
 from py_editor.ui.scene.hierarchy_dock import HierarchyDock
 from py_editor.ui.scene.properties_panel import ObjectPropertiesPanel
 from py_editor.ui import (
@@ -204,7 +205,11 @@ class MainWindow(QMainWindow):
         # Stack Hierarchy below Explorer
         self.splitDockWidget(self.explorer_dock, self.hierarchy_dock, Qt.Orientation.Vertical)
         
-        # 2. Right Column
+        self.node_props = NodePropertiesPanel(self.logic_editor, self)
+        self.node_props_dock = QDockWidget("Node Properties", self)
+        self.node_props_dock.setWidget(self.node_props)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.node_props_dock)
+        
         self.variables = VariablePanel(self.logic_editor, self)
         self.variables_dock = QDockWidget("Variables", self)
         self.variables_dock.setWidget(self.variables)
@@ -214,20 +219,23 @@ class MainWindow(QMainWindow):
         self.properties_dock = QDockWidget("Properties", self)
         self.properties_dock.setWidget(self.properties)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.properties_dock)
-        # Hide properties dock until an object or prefab is selected/opened
-        self.properties_dock.setVisible(False)
-        
-        # Stack Properties below Variables
-        self.splitDockWidget(self.variables_dock, self.properties_dock, Qt.Orientation.Vertical)
         
         self.chat_panel = AIChatWidget(self)
         self.chat_dock = QDockWidget("AI Assistant", self)
         self.chat_dock.setWidget(self.chat_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.chat_dock)
         
-        # Stack Chat below Properties
-        self.splitDockWidget(self.properties_dock, self.chat_dock, Qt.Orientation.Vertical)
+        # Hide properties docks until relevant selection
+        self.properties_dock.setVisible(False)
+        self.node_props_dock.setVisible(False)
         
+        # Stack Node Properties at top, Variables below it, Chat at bottom
+        # We use splitDockWidget to establish the vertical relationship
+        self.splitDockWidget(self.node_props_dock, self.variables_dock, Qt.Orientation.Vertical)
+        self.splitDockWidget(self.variables_dock, self.chat_dock, Qt.Orientation.Vertical)
+        # Put object properties in the same position as node properties (they toggle anyway)
+        self.tabifyDockWidget(self.node_props_dock, self.properties_dock)
+         
         self.hierarchy.outliner.object_selected.connect(self._on_object_selected)
         self.hierarchy.outliner.object_deleted.connect(self._on_object_deleted)
         self.hierarchy.outliner.object_renamed.connect(self._on_object_renamed)
@@ -235,6 +243,16 @@ class MainWindow(QMainWindow):
         
         # Connect variables to logic updates
         self.logic_editor._scene.changed.connect(self.variables.refresh)
+        self.logic_editor._scene.selectionChanged.connect(self._on_node_selection_changed)
+
+    def _on_node_selection_changed(self):
+        selected = [i for i in self.logic_editor._scene.selectedItems() if hasattr(i, 'id')]
+        if len(selected) == 1:
+            self.node_props.set_node(selected[0])
+            self.node_props_dock.setVisible(True)
+        else:
+            self.node_props.set_node(None)
+            self.node_props_dock.setVisible(False)
 
     def _on_object_selected(self, objs):
         if not isinstance(objs, list):
@@ -321,9 +339,20 @@ class MainWindow(QMainWindow):
 
     def on_tab_changed(self, index):
         if index == 1: # Viewport
-             self.scene_editor.on_tab_activated()
+            self.scene_editor.on_tab_activated()
+            self.node_props_dock.setVisible(False)
+            # Show properties if there was a selection
+            objs = self.scene_editor.viewport.get_selected_objects()
+            self.properties_dock.setVisible(True if objs else False)
+        elif index == 0: # Logic
+             self.scene_editor.on_tab_deactivated()
+             self.properties_dock.setVisible(False)
+             # Show node properties if there is a selection
+             self._on_node_selection_changed()
         else:
              self.scene_editor.on_tab_deactivated()
+             self.properties_dock.setVisible(False)
+             self.node_props_dock.setVisible(False)
 
     def get_active_graph_identifier(self) -> str:
         """Return a short identifier for the currently active graph or scene.

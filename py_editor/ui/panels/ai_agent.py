@@ -103,7 +103,7 @@ clear_graph     {confirm:bool}
   → Removes ALL nodes. Requires confirm:true.
 
 add_variable    {name:str, type?:str, value?:any}
-  → Adds a graph variable (float|int|bool|string).
+  → Adds a graph variable (float|int|bool|string|vector2|vector3|array|map|struct|enum).
 
 get_variables   {}
   → Lists all graph variables.
@@ -116,6 +116,18 @@ run_graph       {}
 
 undo            {}  redo {}
   → Undo/redo last graph action.
+
+read_ai_docs    {query?:str}
+  → List all logic guidelines (null query) or read a specific guide (e.g. "health_system").
+  → CONSULT THESE GUIDES IF YOU ARE UNSURE HOW TO IMPLEMENT A COMPLEX REQUEST.
+
+validate_graph  {}
+  → Sanity-check the graph for execution orphans and wiring issues.
+  → CALL THIS BEFORE FINISHING any logic construction task.
+
+run_and_get_logs {}
+  → Execute the graph exactly once (dry-run) and return captured Print outputs (logs).
+  → Use this to verify that your logic actually triggers and produces expected values.
 
 POSITIONING — AUTOMATIC:
   - add_node places every node automatically using layout rules. You do NOT need
@@ -144,31 +156,37 @@ EXAMPLES = """
 EXAMPLES (study these patterns carefully):
 
 --- Example 1: "Create a health system" ---
-// Turn 1: create all nodes in one batch
+// Turn 1: initialize variables and create core nodes
 {
-  "thought": "I need: On Play to trigger, ConstFloat for max health, Add node, Print to log. Create all 4 at once then wire them.",
+  "thought": "I will build a robust health system. Rules: 1. Use variables for state. 2. Initialize Health=MaxHealth on Start. 3. Ensure no orphaned nodes. I'll create variables and nodes for initialization + print.",
   "tools": [
-    {"tool":"add_node","params":{"template":"On Play","x":0,"y":0,"ref":"trigger"}},
-    {"tool":"add_node","params":{"template":"ConstFloat","x":220,"y":0,"ref":"max_hp","label":"MaxHealth"}},
-    {"tool":"add_node","params":{"template":"Add","x":440,"y":0,"ref":"add_dmg"}},
-    {"tool":"add_node","params":{"template":"Print","x":660,"y":0,"ref":"log"}}
+    {"tool":"add_variable","params":{"name":"Health","type":"float","value":100.0}},
+    {"tool":"add_variable","params":{"name":"MaxHealth","type":"float","value":100.0}},
+    {"tool":"add_node","params":{"template":"OnStart","ref":"trigger"}},
+    {"tool":"add_node","params":{"template":"SetVariable","ref":"init_val"}},
+    {"tool":"add_node","params":{"template":"GetVariable","ref":"get_max"}},
+    {"tool":"add_node","params":{"template":"Print","ref":"log"}},
+    {"tool":"add_node","params":{"template":"GetVariable","ref":"get_cur"}}
   ],
   "done": false,
-  "message": "Creating health system nodes…"
+  "message": "Initializing robust health system with auto-initialization logic..."
 }
-// Turn 2: wire in one batch using batch_connect. No arrange_nodes needed — placement was automatic.
+// Turn 2: configure and wire the complete initialization flow
 {
-  "thought": "Nodes created. Use batch_connect for all 3 wires at once, then set MaxHealth=100.",
+  "thought": "Nodes spawned. Now I'll wire: OnStart -> SetVariable(Health = MaxHealth) -> Print(Health). This ensures the system is robust and uses all created nodes.",
   "tools": [
+    {"tool":"set_value","params":{"node":"init_val","pin":"name","value":"Health"}},
+    {"tool":"set_value","params":{"node":"get_max","pin":"name","value":"MaxHealth"}},
+    {"tool":"set_value","params":{"node":"get_cur","pin":"name","value":"Health"}},
     {"tool":"batch_connect","params":{"connections":[
-      {"from_node":"trigger","to_node":"add_dmg","from_pin":"out","to_pin":"a"},
-      {"from_node":"max_hp","to_node":"add_dmg","from_pin":"value","to_pin":"b"},
-      {"from_node":"add_dmg","to_node":"log","from_pin":"result","to_pin":"value"}
-    ]}},
-    {"tool":"set_value","params":{"node":"max_hp","pin":"value","value":100.0}}
+      {"from_node":"trigger","to_node":"init_val","from_pin":"exec_out","to_pin":"exec_in"},
+      {"from_node":"get_max","to_node":"init_val","from_pin":"value","to_pin":"value"},
+      {"from_node":"init_val","to_node":"log","from_pin":"exec_out","to_pin":"exec_in"},
+      {"from_node":"get_cur","to_node":"log","from_pin":"value","to_pin":"value"}
+    ]}}
   ],
   "done": true,
-  "message": "Health system built! MaxHealth=100 → Add → Print. Press Play to test."
+  "message": "Health system complete with Health=MaxHealth initialization on startup!"
 }
 
 --- Example 2: "What templates are available for timers?" ---
@@ -248,12 +266,12 @@ Execute first, explain after.
 ALWAYS respond with a SINGLE valid JSON object. NO markdown. NO plain text. NO extra keys.
 
 {{
-  "thought":  "<step-by-step reasoning: what the user wants, what tools to call, why>",
+  "thought":  "<COMPULSORY: detailed step-by-step reasoning. If the request is complex, call read_ai_docs first to find the correct architectural pattern. Explain which variables you will create and how the flow will connect.>",
   "tools":    [                        // list of tool calls to execute THIS turn (can be [])
     {{"tool": "TOOL_NAME", "params": {{...}} }}
   ],
   "done":     true | false,           // true = task complete; false = waiting for tool results
-  "message":  "<friendly reply shown in chat — always include this>"
+  "message":  "<friendly status update describing EXACTLY what you are doing in this step>"
 }}
 
 ═══ CORE RULES ═══
@@ -269,6 +287,12 @@ ALWAYS respond with a SINGLE valid JSON object. NO markdown. NO plain text. NO e
 9.  connect auto-detects pins (flow-first). On failure, use the pin list in the error to retry.
 10. Use batch_connect when wiring 3+ connections at once — one tool call beats many.
 11. Do NOT specify x/y in add_node unless you have a specific reason — let auto-placement work.
+12. Use Variables for state (Health, Score, Speed, Inventories, Transforms) instead of Constants whenever the value needs to be modified at runtime. Supports primitives and complex types like array, map, and struct.
+13. If you didn't finish the task in one turn, set done=false and continue in the next iteration.
+14. **USE OR DELETE**: Connect all variables and nodes you create to a valid logic flow. Never leave orphaned variables like MaxHealth without reading them.
+15. **COMPLEXITY BIAS**: Aim for robust, production-ready systems. A health system MUST initialize Health=MaxHealth on OnStart. 
+16. **STRICT STATE SYNC**: For any system with a 'Current' and 'Max' value (Health, Stamina, etc.), you MUST wire a logic branch starting at `OnStart` that performs `SetVariable(Current) = GetVariable(Max)` to ensure correct initial state.
+17. **VERIFY YOUR WORK**: Before concluding a task (done=true), you MUST call `validate_graph`. If it finds orphans or missing entry points, you MUST fix them. If you implemented a Print node, use `run_and_get_logs` to ensure the value is being logged correctly.
 {examples_block}
 {TOOL_SCHEMA}
 
@@ -413,7 +437,7 @@ class AtomAgent(QObject):
             sys_prompt   = build_system_prompt(graph_snap, template_cat, base_persona,
                                                iteration=iteration)
 
-            self._log(f"Step {iteration}/{MAX_ITERATIONS} — calling LLM…",
+            self._log(f"Atom is formulating architectural plan (Iteration {iteration})...",
                       self.status_update)
 
             # 3. Trim history to avoid context overflow (keep system + last N exchanges)
@@ -453,6 +477,10 @@ class AtomAgent(QObject):
             message = (parsed.get("message") or parsed.get("clarify") or
                        parsed.get("thought") or "Done.")
 
+            # Update status with AI's own message if it's descriptive
+            if message and not done:
+                self._log(message, self.status_update)
+
             if tools:
                 tool_names = [t.get('tool', '?') for t in tools if isinstance(t, dict)]
                 print(f"[Atom] Tools planned ({len(tool_names)}): {tool_names}", flush=True)
@@ -471,7 +499,7 @@ class AtomAgent(QObject):
 
                 print(f"[Atom]   → {tool_name}({json.dumps(params, separators=(',',':'))[:120]})",
                       flush=True)
-                self._log(f"Running {tool_name}…", self.status_update)
+                self._log(f"Atom is executing {tool_name}...", self.status_update)
                 
                 # BRIDGE: Execute tool on Main Thread (PyQt6 requirement)
                 # We emit a signal which is connected to a slot on this same 

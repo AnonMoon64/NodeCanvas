@@ -122,6 +122,9 @@ class SceneObject:
         self.voxel_lod_enabled = True
         self.voxel_smooth_iterations = 2
         self.voxel_render_style = "Smooth"
+        # Flat voxel worlds stream around the camera when enabled (on by default).
+        # Disable to pin a fixed 100u terrain box around the object's position.
+        self.voxel_infinite_flat = True
         self.voxel_layers = []
         self.voxel_biomes = []
 

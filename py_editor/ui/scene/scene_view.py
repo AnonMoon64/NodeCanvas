@@ -164,6 +164,9 @@ class SceneViewport(QOpenGLWidget):
         self._voxel_generation_in_progress = set()
         self._voxel_gen_lock = threading.Lock()
 
+    def get_selected_objects(self):
+        return [o for o in self.scene_objects if o.selected]
+
     def set_mode(self, mode: str):
         self._mode = mode
         self.update()
@@ -315,6 +318,12 @@ class SceneViewport(QOpenGLWidget):
                 data = self._pending_voxel_chunks.pop(key)
             except KeyError:
                 continue
+            # Empty-dict sentinel: chunk was generated but produced no geometry.
+            # Store the sentinel in mesh_cache so the scheduler sees it as "done"
+            # (isinstance(existing, dict) is True) and never reschedules it.
+            if isinstance(data, dict):
+                self.mesh_cache[key] = {}
+                continue
             if not data:
                 continue
             verts, idx, norms = data
@@ -326,7 +335,7 @@ class SceneViewport(QOpenGLWidget):
 
             # If an older VAO exists for this key, delete GL resources
             old = self.mesh_cache.get(key)
-            if isinstance(old, dict):
+            if isinstance(old, dict) and 'vao' in old:
                 try:
                     glDeleteVertexArrays(1, [old['vao']])
                 except Exception:
@@ -1162,27 +1171,42 @@ class SceneViewport(QOpenGLWidget):
         res_limit = int(getattr(obj, 'voxel_max_single_chunk_res',
                                 getattr(self, 'voxel_max_single_chunk_res', 128)))
 
+        # Camera position needed early for infinite-flat streaming bounds.
+        cam_pos = np.array(self._cam3d.pos, dtype=np.float32)
+
         # World bounds
         if v_type.lower() == "round":
-            extent     = v_radius * 1.5
-            world_span = v_radius * 3.0
-            world_min  = obj_pos - extent
-            world_max  = obj_pos + extent
+            extent         = v_radius * 1.5
+            world_span     = v_radius * 3.0
+            world_min      = obj_pos - extent
+            world_max      = obj_pos + extent
+            chunk_vox_size = float(max(block_size * 8.0, world_span / 4.0))
         else:
-            extent     = None
-            world_span = 100.0
-            world_min  = obj_pos + np.array([-50, -20, -50], dtype=np.float32)
-            world_max  = obj_pos + np.array([ 50,  20,  50], dtype=np.float32)
-
-        # Adaptive chunk size: target ~4 chunks per radius (≤~64 chunks per sphere).
-        # No upper cap — large planets need large chunks to avoid iterating 100k+ cells.
-        chunk_vox_size = float(max(block_size * 8.0, world_span / 4.0))
+            # Flat mode: single-LOD streaming around the camera when infinite is on.
+            # Single LOD avoids T-junction seams at chunk boundaries entirely.
+            extent   = None
+            infinite = bool(getattr(obj, 'voxel_infinite_flat', True))
+            if infinite:
+                horiz_extent = 250.0   # ±250u around camera (≈500u view diameter)
+                vert_extent  = 80.0    # ±80u vertical (fits Mountains + Continents)
+                center    = np.array([cam_pos[0], obj_pos[1], cam_pos[2]],
+                                     dtype=np.float32)
+                world_min = center + np.array([-horiz_extent, -vert_extent,
+                                               -horiz_extent], dtype=np.float32)
+                world_max = center + np.array([ horiz_extent,  vert_extent,
+                                                horiz_extent], dtype=np.float32)
+                world_span = 2.0 * horiz_extent
+            else:
+                world_span = 100.0
+                world_min  = obj_pos + np.array([-50, -20, -50], dtype=np.float32)
+                world_max  = obj_pos + np.array([ 50,  20,  50], dtype=np.float32)
+            # Flat chunks: ≥64u wide → ~64 columns × 3 y-layers ≈ 200 chunks in
+            # infinite mode (many end up empty above/below terrain and stream fast).
+            chunk_vox_size = float(max(block_size * 32.0, 64.0))
 
         layers_hash = hash(str(layers))
         cache_key = (f"voxel_{obj.id}_{seed}_{v_type}_{v_radius}"
                      f"_{block_size}_{smooth}_{render_style}_{layers_hash}")
-
-        cam_pos = np.array(self._cam3d.pos, dtype=np.float32)
 
         world_grid_min = np.floor(world_min / chunk_vox_size).astype(int)
         world_grid_max = np.ceil(world_max  / chunk_vox_size).astype(int)
@@ -1220,14 +1244,19 @@ class SceneViewport(QOpenGLWidget):
         dist_cam    = np.linalg.norm(closest_cam - cam_pos, axis=1)
         d_ch        = dist_cam / chunk_vox_size  # distance in chunk-units
 
-        # 5 LOD tiers: full planet always visible, detail scales with proximity.
-        #   0 = 1× step (closest)  …  4 = 16× step (whole-planet view)
+        # LOD tiers.  Flat mode forces single LOD 0 for every visible chunk —
+        # T-junction seams between different-LOD flat chunks are much more
+        # noticeable than on planets (no curvature to hide them), and a single
+        # LOD is cheap enough with the ~17×17 column window in infinite mode.
         lod_arr = np.full(len(IX), -1, dtype=np.int8)
-        lod_arr[in_planet & (d_ch <  2.5)]                       = 0
-        lod_arr[in_planet & (d_ch >= 2.5)  & (d_ch < 6.0)]      = 1
-        lod_arr[in_planet & (d_ch >= 6.0)  & (d_ch < 12.0)]     = 2
-        lod_arr[in_planet & (d_ch >= 12.0) & (d_ch < 30.0)]     = 3
-        lod_arr[in_planet & (d_ch >= 30.0)]                      = 4   # whole-planet LOD
+        if v_type.lower() == "round":
+            lod_arr[in_planet & (d_ch <  2.5)]                       = 0
+            lod_arr[in_planet & (d_ch >= 2.5)  & (d_ch < 6.0)]      = 1
+            lod_arr[in_planet & (d_ch >= 6.0)  & (d_ch < 12.0)]     = 2
+            lod_arr[in_planet & (d_ch >= 12.0) & (d_ch < 30.0)]     = 3
+            lod_arr[in_planet & (d_ch >= 30.0)]                      = 4   # whole-planet LOD
+        else:
+            lod_arr[in_planet] = 0   # flat: uniform, seamless mesh
 
         vis = lod_arr >= 0
         if not np.any(vis):
@@ -1273,6 +1302,7 @@ class SceneViewport(QOpenGLWidget):
                             cmax_loc = cmin_loc + chunk_vox_size
 
                             def _gen_chunk(cmin, cmax, per_res, cck, vs, lsnap):
+                                produced = False
                                 try:
                                     margin = 3
                                     p_min  = cmin - margin * vs
@@ -1314,9 +1344,17 @@ class SceneViewport(QOpenGLWidget):
                                                     np.array(idx_out,              dtype=np.uint32),
                                                     np.ascontiguousarray(norms_c,  dtype=np.float32),
                                                 )
+                                                produced = True
                                 except Exception as e:
                                     print(f"[VOXEL] Chunk {cck}: {e}")
                                 finally:
+                                    # Chunks entirely inside/outside the density surface produce
+                                    # no geometry.  Emit an empty-dict sentinel so the scheduler
+                                    # treats them as "done" and stops endlessly rescheduling —
+                                    # without this, empty chunks starve real chunks of threads.
+                                    if not produced:
+                                        with self._voxel_gen_lock:
+                                            self._pending_voxel_chunks[cck] = {}
                                     with self._voxel_gen_lock:
                                         self._voxel_generation_in_progress.discard(cck)
 
@@ -1334,8 +1372,8 @@ class SceneViewport(QOpenGLWidget):
         glDisable(GL_CULL_FACE)
         for ck in chunk_keys:
             d = self.mesh_cache.get(ck)
-            if not isinstance(d, dict):
-                continue
+            if not isinstance(d, dict) or 'vao' not in d:
+                continue  # skips in-progress (None) and known-empty ({}) chunks
             glBindVertexArray(d['vao'])
             glDrawElements(GL_TRIANGLES, d['count'], GL_UNSIGNED_INT, None)
             if render_style == 'Minecraft':

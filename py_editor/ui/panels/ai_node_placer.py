@@ -326,7 +326,8 @@ def suggest_position(
         slot = len(data_near)
         # Start by placing data nodes BELOW (sign=1) the exec line
         sign = 1 if slot % 2 == 0 else -1
-        ty   = cy + sign * (V_DATA_STEP * (slot // 2 + 1))
+        bias = 40 if sign > 0 else -40  # Ensure nodes are never "even" with the consumer
+        ty   = cy + sign * (V_DATA_STEP * (slot // 2 + 1)) + bias
         return _free(tx, ty, rects)
 
     # =====================================================================

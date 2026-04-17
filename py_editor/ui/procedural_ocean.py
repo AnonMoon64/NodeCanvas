@@ -175,34 +175,51 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
     """Render the ocean surface following the camera, choosing between FFT or Gerstner."""
     global _ocean_vbo, _ocean_shader_fft, _ocean_shader_gerstner, _fft_generators
     use_fft = getattr(obj, 'ocean_use_fft', True)
-    
+
     # Parameters
     level = getattr(obj, 'landscape_ocean_level', 0.0)
     color = obj.material.get('base_color', [0.0, 0.2, 0.5, 1.0])
     opacity = obj.material.get('opacity', 0.8)
     foam = getattr(obj, 'ocean_foam_amount', 0.5)
-    chunk_size = 2000.0 
-    
+    chunk_size = 2000.0
+
     # Wiring Sliders
     speed = getattr(obj, 'ocean_wave_speed', 1.0)
     scale = getattr(obj, 'ocean_wave_scale', 1.0)
     adjusted_time = sim_time * speed
 
-    # 1. Simulator Update (Only if FFT enabled)
-    gen = None
+    # 1. Cascade simulator updates (three FFT generators at different domain sizes)
+    gen = gen1 = gen2 = None
     if use_fft:
-        res = getattr(obj, 'ocean_fft_resolution', 128)
-        if res not in _fft_generators:
-            _fft_generators[res] = FFTOceanWaveGenerator(resolution=res)
-        gen = _fft_generators[res]
+        res        = getattr(obj, 'ocean_fft_resolution', 128)
         choppiness = getattr(obj, 'ocean_wave_choppiness', 1.5)
-        intensity = getattr(obj, 'ocean_wave_intensity', 1.0)
+        intensity  = getattr(obj, 'ocean_wave_intensity', 1.0)
+
+        # Cascade 0 — large swells (L=1000, primary wind direction)
+        key0 = (res, 1000.0)
+        if key0 not in _fft_generators:
+            _fft_generators[key0] = FFTOceanWaveGenerator(resolution=res, size=1000.0, wind_speed=30.0, wind_dir=(1.0, 0.2))
+        gen = _fft_generators[key0]
         gen.update(adjusted_time, choppiness=choppiness, intensity=intensity)
-    
+
+        # Cascade 1 — medium chop (diagonal wind breaks up the banding)
+        key1 = (64, 200.0)
+        if key1 not in _fft_generators:
+            _fft_generators[key1] = FFTOceanWaveGenerator(resolution=64, size=200.0, wind_speed=20.0, wind_dir=(0.6, 0.8))
+        gen1 = _fft_generators[key1]
+        gen1.update(adjusted_time, choppiness=choppiness, intensity=intensity)
+
+        # Cascade 2 — small ripples (cross-wind adds surface chaos)
+        key2 = (64, 50.0)
+        if key2 not in _fft_generators:
+            _fft_generators[key2] = FFTOceanWaveGenerator(resolution=64, size=50.0, wind_speed=10.0, wind_dir=(0.2, 1.0))
+        gen2 = _fft_generators[key2]
+        gen2.update(adjusted_time, choppiness=choppiness * 0.5, intensity=intensity)
+
     # Ensure resources ready
-    if _ocean_vbo is None or _ocean_shader_fft is None: 
+    if _ocean_vbo is None or _ocean_shader_fft is None:
         init_ocean_gpu()
-    
+
     # Select Shader
     shader = _ocean_shader_fft if use_fft else _ocean_shader_gerstner
     if not shader or not shader.program: return
@@ -216,7 +233,7 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
     glEnable(GL_DEPTH_TEST)
     glDepthFunc(GL_LESS)
     glDepthMask(GL_TRUE)
-    
+
     # Ocean surface should be visible from below as well
     glDisable(GL_CULL_FACE)
 
@@ -224,32 +241,66 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
     if opacity < 0.99:
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        glDepthMask(GL_FALSE) # Disable depth write for transparency sorting
+        glDepthMask(GL_FALSE)
     else:
         glDisable(GL_BLEND)
-    
+
     try:
         shader.use()
-        
+
         if use_fft and gen:
+            # Bind 6 textures: 3 displacement + 3 jacobian (one per cascade)
             glActiveTexture(GL_TEXTURE0)
             glBindTexture(GL_TEXTURE_2D, gen.tex_displacement)
             shader.set_uniform_i("u_displacement_map", 0)
-            
+
             glActiveTexture(GL_TEXTURE1)
             glBindTexture(GL_TEXTURE_2D, gen.tex_jacobian)
             shader.set_uniform_i("u_jacobian_map", 1)
-            
-            # Combine Choppiness and Steepness for maximum control in FFT mode
+
+            glActiveTexture(GL_TEXTURE2)
+            glBindTexture(GL_TEXTURE_2D, gen1.tex_displacement if gen1 else gen.tex_displacement)
+            shader.set_uniform_i("u_displacement_c1", 2)
+
+            glActiveTexture(GL_TEXTURE3)
+            glBindTexture(GL_TEXTURE_2D, gen1.tex_jacobian if gen1 else gen.tex_jacobian)
+            shader.set_uniform_i("u_jacobian_c1", 3)
+
+            glActiveTexture(GL_TEXTURE4)
+            glBindTexture(GL_TEXTURE_2D, gen2.tex_displacement if gen2 else gen.tex_displacement)
+            shader.set_uniform_i("u_displacement_c2", 4)
+
+            glActiveTexture(GL_TEXTURE5)
+            glBindTexture(GL_TEXTURE_2D, gen2.tex_jacobian if gen2 else gen.tex_jacobian)
+            shader.set_uniform_i("u_jacobian_c2", 5)
+
+            # Cascade blend weights
+            shader.set_uniform_f("u_cascade1_weight", getattr(obj, 'ocean_cascade1_weight', 0.5))
+            shader.set_uniform_f("u_cascade2_weight", getattr(obj, 'ocean_cascade2_weight', 0.3))
+
             total_choppiness = getattr(obj, 'ocean_wave_choppiness', 1.5) + getattr(obj, 'ocean_wave_steepness', 0.0)
             shader.set_uniform_f("u_choppiness", total_choppiness)
             shader.set_uniform_f("u_wave_scale", scale)
+
+            # Gerstner hero waves
+            hero_count = int(getattr(obj, 'ocean_hero_count', 1))
+            shader.set_uniform_i("u_hero_count", hero_count)
+            # Defaults spread across different directions to avoid banding
+            hero_amps   = [getattr(obj, f'ocean_hero_amp_{i}',   [4.0, 3.0, 2.0][i]) for i in range(3)]
+            hero_wlens  = [getattr(obj, f'ocean_hero_wlen_{i}',  [350.0, 180.0, 90.0][i]) for i in range(3)]
+            hero_dirs   = [math.radians(getattr(obj, f'ocean_hero_dir_{i}', [25.0, 70.0, 140.0][i])) for i in range(3)]
+            hero_steeps = [getattr(obj, f'ocean_hero_steep_{i}', [0.25, 0.35, 0.5][i]) for i in range(3)]
+            shader.set_uniform_f_array("u_hero_amp",   hero_amps)
+            shader.set_uniform_f_array("u_hero_wlen",  hero_wlens)
+            shader.set_uniform_f_array("u_hero_dir",   hero_dirs)
+            shader.set_uniform_f_array("u_hero_steep", hero_steeps)
+
         else:
             # Gerstner Uniforms
             shader.set_uniform_f("wave_speed", speed)
             shader.set_uniform_f("wave_scale", scale)
             shader.set_uniform_f("wave_steepness", getattr(obj, 'ocean_wave_steepness', 0.5))
-        
+
         # Shared Uniforms
         shader.set_uniform_f("time", adjusted_time)
         shader.set_uniform_f("foam_amount", foam)
@@ -259,13 +310,15 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
         shader.set_uniform_v3("cam_pos", *camera_pos)
         shader.set_uniform_f("grid_chunk_size", chunk_size)
         shader.set_uniform_f("time_of_day", getattr(obj, 'time_of_day', 0.25))
-        
+
         # Advanced Visuals
-        shader.set_uniform_f("u_fresnel_strength", getattr(obj, 'ocean_fresnel_strength', 0.3))
+        shader.set_uniform_f("u_fresnel_strength",  getattr(obj, 'ocean_fresnel_strength', 0.3))
         shader.set_uniform_f("u_specular_intensity", getattr(obj, 'ocean_specular_intensity', 1.0))
+        shader.set_uniform_f("u_peak_brightness",   getattr(obj, 'ocean_peak_brightness', 1.0))
+        shader.set_uniform_f("u_sss_strength",      getattr(obj, 'ocean_sss_strength', 1.0))
         tint = getattr(obj, 'ocean_reflection_tint', [0.5, 0.7, 1.0, 1.0])
         shader.set_uniform_v3("u_reflection_tint", tint[0], tint[1], tint[2])
-        
+
     except Exception as e:
         print(f"[OCEAN SHADER ERROR] {e}")
         glUseProgram(0)

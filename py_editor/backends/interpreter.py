@@ -110,6 +110,10 @@ class IRBackend:
                 return text in ('true', '1', 'yes', 'on')
             if pin_type == 'string':
                 return str(value)
+            if pin_type in ('vector2', 'vector3', 'array', 'map', 'struct', 'enum'):
+                # For complex types, we mostly trust the input or pass-through
+                # since they are already stored as lists/dicts.
+                return value
         except Exception:
             pass
         return value

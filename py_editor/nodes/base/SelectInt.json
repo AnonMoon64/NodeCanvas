@@ -1,0 +1,15 @@
+{
+  "type": "base",
+  "name": "SelectInt",
+  "category": "Flow Control",
+  "is_variadic": "inputs",
+  "inputs": {
+    "index": "int",
+    "option0": "any",
+    "option1": "any"
+  },
+  "outputs": {
+    "result": "any"
+  },
+  "code": "name = \"SelectInt\"\ninputs = {\"index\":\"int\", \"option0\":\"any\", \"option1\":\"any\"}\noutputs = {\"result\":\"any\"}\ndef process(index, *options):\n    \"\"\"Select from a list of options based on index\"\"\"\n    if 0 <= index < len(options):\n        return options[index]\n    return None\n"
+}

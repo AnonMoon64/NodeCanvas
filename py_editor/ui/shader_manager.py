@@ -212,149 +212,253 @@ class ShaderProgram:
         if loc != -1:
             glUniform4f(loc, x, y, z, w)
 
+    def set_uniform_f_array(self, name, values):
+        for i, v in enumerate(values):
+            loc = glGetUniformLocation(self.program, f"{name}[{i}]")
+            if loc != -1:
+                glUniform1f(loc, float(v))
+
     def set_uniform_matrix4(self, name, mat):
         loc = glGetUniformLocation(self.program, name)
         if loc != -1:
             glUniformMatrix4fv(loc, 1, GL_FALSE, mat)
 
 def create_ocean_shader_fft():
-    # VERTEX SHADER: Displacement & UV Pass with scaling
+    # VERTEX SHADER: 3-cascade displacement + Gerstner hero waves
     v_src = """
     #version 330 compatibility
-    
-    uniform sampler2D u_displacement_map;
-    uniform vec3 grid_origin;
+
+    uniform sampler2D u_displacement_map;  // Cascade 0: large swells  (L=1000)
+    uniform sampler2D u_displacement_c1;   // Cascade 1: medium chop   (L=200)
+    uniform sampler2D u_displacement_c2;   // Cascade 2: small ripples (L=50)
+    uniform vec3  grid_origin;
     uniform float grid_chunk_size;
     uniform float u_wave_scale;
     uniform float u_choppiness;
-    
-    out vec3 v_pos;
+    uniform float u_cascade1_weight;
+    uniform float u_cascade2_weight;
+    uniform float time;
+
+    // Gerstner hero waves (up to 3 artist-controlled swell waves)
+    uniform int   u_hero_count;
+    uniform float u_hero_amp[3];
+    uniform float u_hero_wlen[3];
+    uniform float u_hero_dir[3];   // radians
+    uniform float u_hero_steep[3];
+
+    out vec3  v_pos;
     out float v_height;
-    out vec3 v_view_dir;
-    out vec2 v_uv;
+    out vec3  v_view_dir;
+    out vec2  v_uv;
+
+    vec3 gerstner_hero(vec3 wp, float amp, float wlen, float dir_angle, float steep) {
+        float k     = 6.28318 / max(wlen, 0.01);
+        float c     = sqrt(9.81 / k);
+        vec2  d     = vec2(cos(dir_angle), sin(dir_angle));
+        float phase = k * (dot(d, wp.xz) - c * time);
+        float s     = clamp(steep, 0.0, 0.99);
+        return vec3(d.x * amp * s * cos(phase),
+                    amp * sin(phase),
+                    d.y * amp * s * cos(phase));
+    }
 
     void main() {
         vec3 world_p = (gl_Vertex.xyz * grid_chunk_size) + grid_origin;
-        v_uv = (world_p.xz / 1000.0) * u_wave_scale;
-        
-        vec3 disp = texture(u_displacement_map, v_uv).rgb;
-        v_height = disp.y;
-        
-        // Apply Choppiness to horizontal displacement
-        vec3 local_disp = disp;
-        local_disp.xz *= u_choppiness; 
-        local_disp.xz /= grid_chunk_size;
-        
-        vec3 displaced_v = gl_Vertex.xyz + local_disp;
-        v_pos = world_p + disp;
-        
+
+        // Cascade UV sets (different tiling scales derived from cascade-0 UV)
+        v_uv     = (world_p.xz / 1000.0) * u_wave_scale;
+        vec2 uv1 = v_uv * 5.0;   // /200 equivalent
+        vec2 uv2 = v_uv * 20.0;  // /50  equivalent
+
+        // --- Cascade displacements ---
+        // Large cascade: full XZ (drives main swell shape)
+        vec3 disp0 = texture(u_displacement_map, v_uv).rgb;
+        vec3 disp1 = texture(u_displacement_c1,  uv1).rgb * u_cascade1_weight;
+        vec3 disp2 = texture(u_displacement_c2,  uv2).rgb * u_cascade2_weight;
+
+        // Small cascades contribute mainly to height/normals, NOT to horizontal folding
+        // Full XZ from them would cause high-frequency vertex crossing
+        disp1.xz *= 0.25;
+        disp2.xz *= 0.05;
+
+        vec3 fft_disp = disp0 + disp1 + disp2;
+
+        // --- Gerstner hero waves ---
+        vec3 hero = vec3(0.0);
+        if (u_hero_count > 0) hero += gerstner_hero(world_p, u_hero_amp[0], u_hero_wlen[0], u_hero_dir[0], u_hero_steep[0]);
+        if (u_hero_count > 1) hero += gerstner_hero(world_p, u_hero_amp[1], u_hero_wlen[1], u_hero_dir[1], u_hero_steep[1]);
+        if (u_hero_count > 2) hero += gerstner_hero(world_p, u_hero_amp[2], u_hero_wlen[2], u_hero_dir[2], u_hero_steep[2]);
+
+        v_height = fft_disp.y + hero.y;
+        v_pos    = world_p + fft_disp + hero;
+
+        // --- Vertex displacement ---
+        // XZ: FFT gets choppiness scaling; hero uses raw horizontal (steepness already controls it)
+        // Both divide by grid_chunk_size to convert world-metres → local [-1,1] space
+        float inv_chunk = 1.0 / grid_chunk_size;
+        vec3 displaced_v = gl_Vertex.xyz;
+        displaced_v.xz  += fft_disp.xz * u_choppiness * inv_chunk;
+        displaced_v.xz  += hero.xz * inv_chunk;
+        displaced_v.y   += fft_disp.y + hero.y;
+
+        // Clamp XZ so vertices can never cross their neighbours (prevents tearing)
+        // Max safe displacement ≈ 55% of vertex spacing (2.0/255 units in local space)
+        float max_disp = (2.0 / 255.0) * 0.55;
+        displaced_v.xz  = clamp(displaced_v.xz,
+                                 gl_Vertex.xz - max_disp,
+                                 gl_Vertex.xz + max_disp);
+
         vec4 eye_pos = gl_ModelViewMatrix * vec4(displaced_v, 1.0);
-        v_view_dir = normalize(-eye_pos.xyz);
-        
+        v_view_dir   = normalize(-eye_pos.xyz);
+
         gl_Position = gl_ModelViewProjectionMatrix * vec4(displaced_v, 1.0);
     }
     """
 
-    # FRAGMENT SHADER: High-detail per-pixel normals & Advanced Bubbly Foam
+    # FRAGMENT SHADER: Multi-cascade normals/foam, peak glow, SSS, specular
     f_src = """
     #version 330 compatibility
-    
-    uniform vec4 ocean_color;
+
+    uniform vec4  ocean_color;
     uniform float ocean_opacity;
     uniform float foam_amount;
     uniform float time;
-    uniform vec3 cam_pos;
+    uniform vec3  cam_pos;
+
+    // Cascade displacement + jacobian textures
     uniform sampler2D u_displacement_map;
+    uniform sampler2D u_displacement_c1;
+    uniform sampler2D u_displacement_c2;
     uniform sampler2D u_jacobian_map;
+    uniform sampler2D u_jacobian_c1;
+    uniform sampler2D u_jacobian_c2;
     uniform float u_wave_scale;
+    uniform float u_cascade1_weight;
+    uniform float u_cascade2_weight;
     uniform float time_of_day;
-    
+
     // Advanced Visuals
     uniform float u_fresnel_strength;
     uniform float u_specular_intensity;
-    uniform vec3 u_reflection_tint;
-    
-    in vec3 v_pos;
-    in float v_height;
-    in vec3 v_view_dir;
-    in vec2 v_uv;
+    uniform vec3  u_reflection_tint;
+    uniform float u_peak_brightness;
+    uniform float u_sss_strength;
 
-    // Fast procedural bubble noise for advanced foam
-    float bubble_noise(vec2 p) {
-        vec2 i = floor(p);
-        vec2 f = fract(p);
-        float a = sin(dot(i, vec2(12.9898, 78.233)) * 43758.5453);
-        float b = sin(dot(i + vec2(1.0, 0.0), vec2(12.9898, 78.233)) * 43758.5453);
-        float c = sin(dot(i + vec2(0.0, 1.0), vec2(12.9898, 78.233)) * 43758.5453);
-        float d = sin(dot(i + vec2(1.0, 1.0), vec2(12.9898, 78.233)) * 43758.5453);
-        vec2 u = f*f*(3.0-2.0*f);
-        return mix(a, b, u.x) + (c - a)*u.y*(1.0-u.x) + (d - b)*u.x*u.y;
-    }
+    in vec3  v_pos;
+    in float v_height;
+    in vec3  v_view_dir;
+    in vec2  v_uv;
 
     void main() {
-        // High-precision per-pixel normals using resolution-aware sampling
-        float d = 1.0 / 128.0; // Matches FFT_SIZE
-        float hL = texture(u_displacement_map, v_uv - vec2(d, 0)).y;
-        float hR = texture(u_displacement_map, v_uv + vec2(d, 0)).y;
-        float hD = texture(u_displacement_map, v_uv - vec2(0, d)).y;
-        float hU = texture(u_displacement_map, v_uv + vec2(0, d)).y;
-        
-        vec3 normal = normalize(vec3(hL - hR, 0.12, hD - hU)); // Tighter ridge definition
+        // Cascade UVs derived from cascade-0 UV
+        vec2 uv1 = v_uv * 5.0;
+        vec2 uv2 = v_uv * 20.0;
+
+        // --- Multi-cascade per-pixel normals ---
+        // Smaller cascades contribute proportionally more to surface detail
+        float d0 = 1.0 / 128.0;
+        float d1 = 1.0 / 64.0;
+        float hL  = texture(u_displacement_map, v_uv - vec2(d0, 0.0)).y;
+        float hR  = texture(u_displacement_map, v_uv + vec2(d0, 0.0)).y;
+        float hD  = texture(u_displacement_map, v_uv - vec2(0.0, d0)).y;
+        float hU  = texture(u_displacement_map, v_uv + vec2(0.0, d0)).y;
+
+        float hL1 = texture(u_displacement_c1, uv1 - vec2(d1, 0.0)).y * u_cascade1_weight;
+        float hR1 = texture(u_displacement_c1, uv1 + vec2(d1, 0.0)).y * u_cascade1_weight;
+        float hD1 = texture(u_displacement_c1, uv1 - vec2(0.0, d1)).y * u_cascade1_weight;
+        float hU1 = texture(u_displacement_c1, uv1 + vec2(0.0, d1)).y * u_cascade1_weight;
+
+        float hL2 = texture(u_displacement_c2, uv2 - vec2(d1, 0.0)).y * u_cascade2_weight;
+        float hR2 = texture(u_displacement_c2, uv2 + vec2(d1, 0.0)).y * u_cascade2_weight;
+        float hD2 = texture(u_displacement_c2, uv2 - vec2(0.0, d1)).y * u_cascade2_weight;
+        float hU2 = texture(u_displacement_c2, uv2 + vec2(0.0, d1)).y * u_cascade2_weight;
+
+        vec3 normal = normalize(vec3(
+            (hL - hR) + (hL1 - hR1) * 3.0 + (hL2 - hR2) * 6.0,
+            0.12,
+            (hD - hU) + (hD1 - hU1) * 3.0 + (hD2 - hU2) * 6.0
+        ));
         vec3 view_dir = normalize(v_view_dir);
-        
+
         // --- Day/Night Lighting ---
-        vec3 sun_dir = normalize(vec3(sin(time_of_day * 6.28), cos(time_of_day * 6.28), 0.2));
-        vec3 light_dir = sun_dir;
+        vec3  sun_dir   = normalize(vec3(sin(time_of_day * 6.28), cos(time_of_day * 6.28), 0.2));
+        vec3  light_dir = sun_dir;
         float day_ratio = max(sin(time_of_day * 3.14159), 0.0);
-        
-        // Deep Drama water color (High Contrast)
-        float h_norm = clamp(v_height * 0.12 + 0.45, 0.0, 1.0);
-        vec3 color_deep = ocean_color.rgb * 0.02;
-        vec3 color_shallow = ocean_color.rgb * 1.4;
-        vec3 water_rgb = mix(color_deep, color_shallow, h_norm);
-        
-        // Advanced Foam System
-        float jacobian = texture(u_jacobian_map, v_uv).r;
-        float jac_mask = clamp(1.0 - jacobian, 0.0, 1.0);
-        
-        // Smoother procedural bubbles for foam detail
+        // Minimum ambient so water always shows its body color (never pure black)
+        float ambient   = 0.25 + day_ratio * 0.75;
+
+        // --- Base Water Color: SoT deep-to-shallow ramp ---
+        float h_norm    = clamp(v_height * 0.04 + 0.55, 0.0, 1.0);
+        vec3 color_deep = ocean_color.rgb * 0.22;
+        vec3 color_shal = ocean_color.rgb * 0.80;
+        vec3 water_rgb  = mix(color_deep, color_shal, h_norm);
+
+        // --- Directional Diffuse (THE key SoT element) ---
+        // Wave normals face the sun = lit face; away = shadow. This is the "painted" look.
+        float NdotL  = dot(normal, light_dir);
+        float diffuse = mix(0.18, 1.0, clamp(NdotL * 0.5 + 0.5, 0.0, 1.0));
+        // Day blends in full diffuse; night keeps faint ambient glow
+        diffuse = mix(0.15, diffuse, day_ratio);
+        water_rgb *= diffuse;
+
+        // --- Multi-Cascade Foam ---
+        float jac0   = texture(u_jacobian_map, v_uv).r;
+        float jac1   = texture(u_jacobian_c1,  uv1).r;
+        float jac2   = texture(u_jacobian_c2,  uv2).r;
+        float jmask0 = clamp(1.0 - jac0, 0.0, 1.0);
+        float jmask1 = clamp(1.0 - jac1, 0.0, 1.0) * u_cascade1_weight;
+        float jmask2 = clamp(1.0 - jac2, 0.0, 1.0) * u_cascade2_weight;
+        float jac_mask = clamp(jmask0 * 0.6 + jmask1 * 0.25 + jmask2 * 0.15, 0.0, 1.0);
+
         float bubbles = sin(v_pos.x * 4.0 + time) * cos(v_pos.z * 4.0 - time * 0.5) * 0.5 + 0.5;
         bubbles *= sin(v_pos.x * 20.0 - time * 2.0) * 0.3 + 0.7;
-        bubbles = smoothstep(0.5, 0.9, bubbles * jac_mask);
-        
-        float foam_mask = pow(jac_mask, 3.5) * foam_amount * 4.0;
-        foam_mask = clamp(foam_mask + bubbles * foam_amount * 2.0, 0.0, 1.0);
-        
-        vec3 foam_rgb = vec3(0.9, 0.95, 1.0);
-        water_rgb = mix(water_rgb, foam_rgb, foam_mask);
-        
-        // Sub-Surface Scattering (SSS) - The teal ridge glow from the old version
-        float sss = pow(max(dot(view_dir, -light_dir), 0.0), 4.0) * max(v_height * 0.2, 0.0);
-        water_rgb += vec3(0.1, 0.7, 0.6) * sss;
-        
-        // Dual-Layer Specular
-        vec3 half_v = normalize(light_dir + view_dir + vec3(1e-5));
-        float spec_broad = pow(max(dot(normal, half_v), 0.0), 128.0) * 0.5 * u_specular_intensity;
-        float spec_sparkle = pow(max(dot(normal, half_v), 0.0), 4096.0) * 10.0 * u_specular_intensity; // Facet sparkle
-        
-        // Fresnel Reflection (Configurable)
-        float fresnel = pow(1.0 - max(dot(normal, view_dir), 0.0), 5.0) * u_fresnel_strength;
-        
-        // Dynamic Reflection Tint
-        vec3 day_tint = u_reflection_tint;
-        vec3 sunset_tint = vec3(1.0, 0.5, 0.3);
-        vec3 sky_ref = mix(day_tint, sunset_tint, clamp(1.0 - abs(sin(time_of_day * 3.14159)), 0.0, 1.0));
-        sky_ref *= day_ratio; // Darken at night
-        
-        water_rgb = mix(water_rgb, sky_ref, fresnel); 
-        
+        bubbles  = smoothstep(0.5, 0.9, bubbles * jac_mask);
+
+        float foam_mask = pow(jac_mask, 2.8) * foam_amount * 5.0;
+        foam_mask = clamp(foam_mask + bubbles * foam_amount * 2.5, 0.0, 1.0);
+        // Foam picks up diffuse lighting — it's not self-illuminated
+        vec3 foam_lit = vec3(0.92, 0.95, 0.93) * mix(0.4, 1.0, diffuse);
+        water_rgb = mix(water_rgb, foam_lit, foam_mask);
+
+        // --- SoT Sub-Surface Scattering ---
+        // View through the wave: crest facing camera + partially backlit by sun = teal glow
+        float sss_back = max(-NdotL, 0.0);                               // back-facing to sun
+        float sss_view = pow(max(dot(view_dir, light_dir), 0.0), 2.0);   // looking into light
+        float sss_h    = clamp(v_height * 0.12, 0.0, 1.0);               // only crests
+        float sss      = sss_back * sss_view * sss_h;
+        water_rgb += vec3(0.0, 0.50, 0.42) * sss * u_sss_strength * day_ratio;
+
+        // --- Wave Crest Whitecap (tight, only very top of wave) ---
+        float crest = smoothstep(0.72, 1.0, h_norm) * clamp(NdotL, 0.0, 1.0) * day_ratio;
+        water_rgb  += vec3(0.78, 0.88, 0.85) * crest * u_peak_brightness * 0.35;
+
+        // --- Dual-Layer Specular ---
+        vec3  half_v     = normalize(light_dir + view_dir + vec3(1e-5));
+        float spec_broad   = pow(max(dot(normal, half_v), 0.0),  96.0) * 0.5  * u_specular_intensity * day_ratio;
+        float spec_sparkle = pow(max(dot(normal, half_v), 0.0), 3000.0) * 12.0 * u_specular_intensity * day_ratio;
+
+        // --- Fresnel Reflection ---
+        float fresnel = pow(1.0 - max(dot(normal, view_dir), 0.0), 4.0) * u_fresnel_strength;
+
+        // --- Sky Reflection Tint ---
+        float day_t   = clamp(1.0 - abs(sin(time_of_day * 3.14159)), 0.0, 1.0);
+        vec3  sky_ref = mix(u_reflection_tint, vec3(1.0, 0.55, 0.25), day_t);
+        // At night, reflect a faint dark sky colour
+        sky_ref = mix(vec3(0.02, 0.04, 0.10), sky_ref, day_ratio);
+        water_rgb = mix(water_rgb, sky_ref, fresnel);
+
         vec3 final_rgb = water_rgb + spec_broad + spec_sparkle;
-        
-        // Distance Fog - Darker to match the old abyss
-        float dist = length(v_pos - cam_pos);
-        float fog = clamp((dist - 3000.0) / 2000.0, 0.0, 1.0);
-        final_rgb = mix(final_rgb, vec3(0.02, 0.04, 0.05), fog);
-        
+
+        // --- Atmospheric Horizon Haze (rich blue, NOT dark) ---
+        // SoT starts haze much closer and uses a rich mid-blue, not near-black
+        float hdist     = length(v_pos.xz - cam_pos.xz);
+        float haze      = clamp((hdist - 350.0) / 700.0, 0.0, 1.0);
+        haze            = pow(haze, 1.4);
+        vec3 haze_day   = mix(ocean_color.rgb * 0.5, vec3(0.40, 0.58, 0.80), 0.55);
+        vec3 haze_night = vec3(0.02, 0.03, 0.07);
+        vec3 haze_color = mix(haze_night, haze_day, day_ratio);
+        final_rgb = mix(final_rgb, haze_color, haze * 0.88);
+
         gl_FragColor = vec4(final_rgb, ocean_opacity);
     }
     """

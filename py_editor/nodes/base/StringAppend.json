@@ -1,0 +1,14 @@
+{
+  "type": "base",
+  "name": "StringAppend",
+  "category": "Math",
+  "is_variadic": "inputs",
+  "inputs": {
+    "str0": "string",
+    "str1": "string"
+  },
+  "outputs": {
+    "result": "string"
+  },
+  "code": "name = \"StringAppend\"\ninputs = {\"str0\":\"string\", \"str1\":\"string\"}\noutputs = {\"result\":\"string\"}\ndef process(*args):\n    \"\"\"Append multiple strings together\"\"\"\n    return \"\".join(str(v) for v in args)\n"
+}

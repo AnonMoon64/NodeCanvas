@@ -13,7 +13,8 @@ Supported tools (24):
   arrange_nodes, clear_graph, find_nodes,
   create_template, add_variable, get_variables,
   run_graph, undo, redo, duplicate_node,
-  select_nodes, get_connections
+  select_nodes, get_connections, read_ai_docs,
+  validate_graph, run_and_get_logs
 """
 
 import math
@@ -858,7 +859,11 @@ class AgentToolExecutor:
         le = self._le()
         if not hasattr(le, 'graph_variables') or le.graph_variables is None:
             le.graph_variables = {}
-        default_values = {"float": 0.0, "int": 0, "bool": False, "string": "", "any": None}
+        default_values = {
+            "float": 0.0, "int": 0, "bool": False, "string": "", "any": None,
+            "vector2": [0.0, 0.0], "vector3": [0.0, 0.0, 0.0],
+            "array": [], "map": {}, "struct": {}, "enum": ""
+        }
         le.graph_variables[name] = {
             "type": type,
             "value": value if value is not None else default_values.get(type, None)
@@ -1109,6 +1114,9 @@ class AgentToolExecutor:
         "get_connections":  "get_connections",
         "find_nodes":       "find_nodes",
         "batch_connect":    "batch_connect",
+        "read_ai_docs":     "read_ai_docs",
+        "validate_graph":   "validate_graph",
+        "run_and_get_logs": "run_and_get_logs",
     }
 
     def execute(self, tool_name: str, params: dict) -> dict:
@@ -1125,3 +1133,143 @@ class AgentToolExecutor:
             return {"ok": False, "error": f"Tool param error for {tool_name}: {e}"}
         except Exception as e:
             return {"ok": False, "error": f"Tool {tool_name} raised: {e}"}
+
+    def read_ai_docs(self, query: Optional[str] = None) -> dict:
+        """List and read documentation files in the ai_docs directory.
+        If query is provided, it returns the content of the best matching file.
+        Otherwise, it lists available files.
+        """
+        import os
+        from pathlib import Path
+        
+        docs_dir = Path.cwd() / "ai_docs"
+        if not docs_dir.exists():
+            return {"ok": False, "error": "ai_docs directory not found."}
+            
+        files = [f for f in os.listdir(docs_dir) if f.endswith('.md')]
+        
+        if not query:
+            return {"ok": True, "files": files, "message": "List of available logic guidelines. Provide a filename as 'query' to read its content."}
+            
+        # Try exact match
+        target = query if query.endswith('.md') else f"{query}.md"
+        if target in files:
+            path = docs_dir / target
+            with open(path, 'r', encoding='utf-8') as f:
+                return {"ok": True, "content": f.read(), "file": target}
+                
+        # Try substring match
+        for f in files:
+            if query.lower() in f.lower():
+                path = docs_dir / f
+                with open(path, 'r', encoding='utf-8') as f_in:
+                    return {"ok": True, "content": f_in.read(), "file": f}
+                    
+        return {"ok": False, "error": f"Documentation '{query}' not found. Available: {files}"}
+    # ------------------------------------------------------------------
+    # Tool: validate_graph
+    # ------------------------------------------------------------------
+
+    def validate_graph(self) -> dict:
+        """Check for orphaned nodes and execution path consistency."""
+        from py_editor.ui.panels.ai_node_placer import classify_from_pins
+        le = self._le()
+        if not le: return {"ok": False, "error": "No logic editor found"}
+        
+        nodes = getattr(le, 'nodes', []) or []
+        conns = getattr(le, 'connections', []) or []
+        
+        # Identify entry points
+        events = []
+        for n in nodes:
+            kind = classify_from_pins(n.template_name, n.inputs, n.outputs)
+            if kind == 'event':
+                events.append(n)
+        
+        if not events:
+            return {
+                "ok": False, 
+                "error": "No Event nodes (like OnStart) found. The graph will never execute.",
+                "hint": "Add an 'OnStart' node to trigger your logic chains."
+            }
+
+        # Simplified reachability analysis
+        exec_adj = {}
+        for c in conns:
+            # Heuristic for exec pins
+            f_pin = str(c.from_pin).lower()
+            t_pin = str(c.to_pin).lower()
+            if 'exec' in f_pin or 'out' == f_pin or 'exec' in t_pin or 'in' == t_pin:
+                fid = c.from_node.id
+                tid = c.to_node.id
+                if fid not in exec_adj: exec_adj[fid] = []
+                exec_adj[fid].append(tid)
+
+        visited = set()
+        queue = [n.id for n in events]
+        while queue:
+            curr = queue.pop(0)
+            if curr in visited: continue
+            visited.add(curr)
+            for neighbor in exec_adj.get(curr, []):
+                if neighbor not in visited:
+                    queue.append(neighbor)
+
+        orphans = []
+        for n in nodes:
+            kind = classify_from_pins(n.template_name, n.inputs, n.outputs)
+            if kind in ('exec', 'branch') and n.id not in visited:
+                orphans.append(f"{n.template_name} (id:{n.id})")
+
+        if orphans:
+            return {
+                "ok": False, 
+                "error": f"Logic error: {len(orphans)} nodes are disconnected from the execution flow.",
+                "orphans": orphans,
+                "suggestion": "Wiring must form a continuous chain from an Event node using white execution pins."
+            }
+            
+        return {"ok": True, "message": "Graph validation passed: All execution nodes are connected."}
+
+    # ------------------------------------------------------------------
+    # Tool: run_and_get_logs
+    # ------------------------------------------------------------------
+
+    def run_and_get_logs(self) -> dict:
+        """Execute the graph once and return captured Print outputs (logs)."""
+        le = self._le()
+        if not le: return {"ok": False, "error": "No logic editor found"}
+        
+        try:
+            # 1. Export graph
+            graph_data = le.export_graph()
+            
+            # 2. Get templates & variables
+            from py_editor.core.node_templates import _templates
+            variables = dict(getattr(le, 'graph_variables', {}) or {})
+            
+            # 3. Use SimulationController (via MW) to run
+            mw = self.mw
+            if not hasattr(mw, 'simulation_controller'):
+                return {"ok": False, "error": "Simulation controller not found"}
+            
+            sim = mw.simulation_controller
+            results = sim.run_once(graph_data, _templates, variables)
+            
+            if not results or "error" in results:
+                return {"ok": False, "error": results.get("error", "Sim failed")}
+                
+            return {
+                "ok": True, 
+                "logs": results.get("prints", []),
+                "errors": results.get("_node_errors", {}),
+                "message": "One-shot execution finished."
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+def _register_all_tools(executor: AgentToolExecutor):
+    """Register all available tools with the executor's lookup map."""
+    # ... existing registrations ...
+    # This might already be handled dynamically by some tool, let's check
+    pass

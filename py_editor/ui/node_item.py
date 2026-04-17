@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QWidget,
 )
-from PyQt6.QtGui import QPainterPath, QPen, QBrush, QColor, QPainter, QFont, QAction, QLinearGradient, QPolygonF
+from PyQt6.QtGui import QPainterPath, QPen, QBrush, QColor, QPainter, QFont, QAction, QLinearGradient, QPolygonF, QKeyEvent
 from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer, pyqtSignal, QObject
 import traceback
 import importlib
@@ -105,9 +105,11 @@ class NodeItem(QGraphicsRectItem):
         )
         self.title = QGraphicsTextItem(title, self)
         self.title.setDefaultTextColor(QColor(255, 255, 255))
-        title_font = QFont("Segoe UI Semibold", 11)
+        title_font = QFont("Segoe UI Semibold", 10)
         self.title.setFont(title_font)
-        self.title.setPos(-112, -40)
+        # Position centered above node
+        title_rect = self.title.boundingRect()
+        self.title.setPos(-title_rect.width()/2, -self.node_height/2 - title_rect.height() - 4)
         self.input_pins = {}
         self.output_pins = {}
         self.pin_labels = []
@@ -117,6 +119,7 @@ class NodeItem(QGraphicsRectItem):
         self.inputs = {}
         self.outputs = {}
         self.composite_graph = None
+        self.category = "General"
         self.canvas = canvas
         self.has_error = False
         self.error_message = None
@@ -225,10 +228,11 @@ class NodeItem(QGraphicsRectItem):
         self.update()
 
     def boundingRect(self):
-        """Expand bounding rect to include pins protruding from the sides."""
+        """Expand bounding rect to include pins protruding from the sides and floating title above."""
         rect = super().boundingRect()
         # Pins extend 12px out; add a bit of padding (16px) to be safe.
-        return rect.adjusted(-16, -2, 16, 2)
+        # Title floats ~20px above; add 30px to top margin.
+        return rect.adjusted(-16, -32, 16, 2)
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -260,23 +264,9 @@ class NodeItem(QGraphicsRectItem):
             
         painter.drawRoundedRect(rect, 6, 6)
         
-        # 4. Header Bar (if not compact)
-        if not self.is_compact:
-            header_rect = QRectF(rect.x(), rect.y(), rect.width(), 26)
-            header_path = QPainterPath()
-            header_path.setFillRule(Qt.FillRule.WindingFill)
-            header_path.addRoundedRect(header_rect, 6, 6)
-            bottom_rect = QRectF(rect.x(), rect.y() + 13, rect.width(), 13)
-            header_path.addRect(bottom_rect)
-            
-            painter.setPen(QPen(Qt.PenStyle.NoPen))
-            # Use specific header color from brushes
-            if hasattr(self, 'header_color'):
-                h_grad = QLinearGradient(header_rect.topLeft(), header_rect.bottomLeft())
-                h_grad.setColorAt(0, self.header_color.lighter(110))
-                h_grad.setColorAt(1, self.header_color)
-                painter.setBrush(h_grad)
-                painter.drawPath(header_path.simplified())
+        # 4. Floating Header removal: 
+        # User requested names float above node instead of in it.
+        # We no longer draw the header bar path here.
     
     def mouseDoubleClickEvent(self, event):
         """Enable renaming on double-click."""
@@ -290,26 +280,10 @@ class NodeItem(QGraphicsRectItem):
         new_title, ok = QInputDialog.getText(None, "Rename Node", "New Title:", text=self.title.toPlainText())
         if ok and new_title:
             self.title.setPlainText(new_title)
+            self.title.setPos(-self.title.boundingRect().width()/2, -self.node_height/2 - self.title.boundingRect().height() - 4)
             if hasattr(self.canvas, 'graph_changed'):
                 self.canvas.graph_changed.emit()
 
-    def itemChange(self, change, value):
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self.scene():
-            # Snap to grid logic
-            grid = 24  # Matches grid spacing in drawBackground
-            new_pos = value
-            x = round(new_pos.x() / grid) * grid
-            y = round(new_pos.y() / grid) * grid
-            return QPointF(x, y)
-            
-        result = super().itemChange(change, value)
-        if (
-            change
-            == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged
-            and self.canvas
-        ):
-            self.canvas.update_connections_for_node(self)
-        return result
 
     def _clear_pin_items(self):
         for pin in list(self.input_pins.values()) + list(self.output_pins.values()):
@@ -328,21 +302,21 @@ class NodeItem(QGraphicsRectItem):
         self.output_pins.clear()
         self.pin_labels.clear()
         self.value_widgets.clear()
-
+    
     def setup_pins(self, inputs, outputs):
         self._clear_pin_items()
         self.inputs = inputs or {}
         self.outputs = outputs or {}
         input_defs = list(self.inputs.keys())
         output_defs = list(self.outputs.keys())
-
+    
         has_exec = False
         for p_dict in [self.inputs, self.outputs]:
             for p_name, p_val in p_dict.items():
                 p_type = p_val if isinstance(p_val, str) else p_val.get('type')
                 if p_type == 'exec':
                     has_exec = True
-
+    
         self.is_compact = not has_exec
         self.node_width = 180 if self.is_compact else 240
         spacing = 20 if self.is_compact else 24
@@ -351,19 +325,21 @@ class NodeItem(QGraphicsRectItem):
         max_pins = max(len(input_defs), len(output_defs))
         self.node_height = max(32 if self.is_compact else 64, header_height + (max_pins * spacing) + 16)
         self.setRect(-self.node_width/2, -self.node_height/2, self.node_width, self.node_height)
-
-        # Update title position and style
+    
+        # Update title position and style (Now floating above)
         if self.is_compact:
             self.title.setFont(QFont("Segoe UI Semibold", 8))
-            self.title.setPos(-self.node_width/2 + 8, -self.node_height/2 + 2)
             self.title.setDefaultTextColor(QColor(180, 180, 180))
         else:
             self.title.setFont(QFont("Segoe UI Semibold", 10))
-            self.title.setPos(-self.node_width/2 + 8, -self.node_height/2 + 1)
             self.title.setDefaultTextColor(QColor(255, 255, 255))
-
+        
+        # Recenter title above node
+        title_rect = self.title.boundingRect()
+        self.title.setPos(-title_rect.width()/2, -self.node_height/2 - title_rect.height() - 4)
+    
         y_offset = -self.node_height/2 + header_height + 14
-
+    
         for idx, name in enumerate(input_defs):
             y = y_offset + idx * spacing
             
@@ -407,7 +383,7 @@ class NodeItem(QGraphicsRectItem):
             # But NOT for exec pins
             if pin_type and pin_type in ('int', 'float', 'string', 'bool'):
                 self._create_value_widget(name, pin_type, y)
-
+    
         for idx, name in enumerate(output_defs):
             y = y_offset + idx * spacing
             
@@ -580,7 +556,7 @@ class NodeItem(QGraphicsRectItem):
     def get_input_value(self, pin_name):
         """Get the value for an input pin (either from widget or default)."""
         return self.pin_values.get(pin_name)
-
+    
     def cleanup(self):
         """Detach visuals and effects so the node can be removed safely mid-event."""
         try:
@@ -596,7 +572,7 @@ class NodeItem(QGraphicsRectItem):
                     pass
         except Exception:
             pass
-
+    
         # Remove pin and label items from scene without touching parent-child relations
         try:
             for pin in list(self.input_pins.values()) + list(self.output_pins.values()):
@@ -608,7 +584,7 @@ class NodeItem(QGraphicsRectItem):
                     pass
         except Exception:
             pass
-
+    
         try:
             for label in list(self.pin_labels):
                 try:
@@ -619,7 +595,7 @@ class NodeItem(QGraphicsRectItem):
                     pass
         except Exception:
             pass
-
+    
         # Remove value widgets
         try:
             for proxy in list(self.value_widgets.values()):
@@ -631,7 +607,7 @@ class NodeItem(QGraphicsRectItem):
                     pass
         except Exception:
             pass
-
+    
         # Attempt to remove title text item separately
         try:
             if getattr(self, 'title', None):
@@ -643,7 +619,7 @@ class NodeItem(QGraphicsRectItem):
                     pass
         except Exception:
             pass
-
+    
         # clear internal references
         try:
             self.input_pins.clear()
@@ -653,6 +629,20 @@ class NodeItem(QGraphicsRectItem):
         except Exception:
             pass
         # cleanup complete — pins will be recreated when setup_pins is called
+    
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self.scene():
+            # Snap to grid logic
+            grid = 24  # Matches grid spacing in drawBackground
+            new_pos = value
+            x = round(new_pos.x() / grid) * grid
+            y = round(new_pos.y() / grid) * grid
+            return QPointF(x, y)
+            
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged and hasattr(self, "canvas") and self.canvas:
+            self.canvas.update_connections_for_node(self)
+            
+        return super().itemChange(change, value)
     
     def _add_type_selector_widget(self, pin_name, current_type, y_pos):
         """Add a type selector dropdown for composite I/O nodes."""
@@ -752,5 +742,75 @@ class NodeItem(QGraphicsRectItem):
         if not hasattr(self, 'name_editors'):
             self.name_editors = {}
         self.name_editors[pin_name] = name_proxy
+    
 
 
+
+class CommentBoxItem(QGraphicsRectItem):
+    """A floating comment box to group nodes."""
+    def __init__(self, x, y, w, h, title="Comment"):
+        super().__init__(0, 0, w, h)
+        self.setPos(x, y)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setZValue(-100) # Below nodes
+        
+        self.setBrush(QBrush(QColor(40, 40, 40, 80)))
+        self.setPen(QPen(QColor(255, 255, 255, 60), 1, Qt.PenStyle.DashLine))
+        
+        self.title_item = QGraphicsTextItem(title, self)
+        self.title_item.setDefaultTextColor(QColor(255, 255, 255, 180))
+        font = QFont("Segoe UI", 12, QFont.Weight.Bold)
+        self.title_item.setFont(font)
+        self.title_item.setPos(10, 5)
+        
+        # Corner resize handle
+        self.handle_size = 12
+        self.resizing = False
+        
+    def paint(self, painter, option, widget=None):
+        super().paint(painter, option, widget)
+        # Draw resize handle
+        rect = self.rect()
+        painter.setBrush(QColor(100, 100, 100, 150))
+        painter.setPen(Qt.PenStyle.NoPen)
+        handle_rect = QRectF(rect.right() - self.handle_size, rect.bottom() - self.handle_size, self.handle_size, self.handle_size)
+        painter.drawRect(handle_rect)
+    
+    def mousePressEvent(self, event):
+        rect = self.rect()
+        if event.pos().x() > rect.right() - self.handle_size and event.pos().y() > rect.bottom() - self.handle_size:
+            self.resizing = True
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+            
+    def mouseMoveEvent(self, event):
+        if self.resizing:
+            new_w = max(100, event.pos().x())
+            new_h = max(60, event.pos().y())
+            self.setRect(0, 0, new_w, new_h)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+            
+    def mouseReleaseEvent(self, event):
+        self.resizing = False
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        new_title, ok = QInputDialog.getText(None, "Comment Box", "Edit Text:", text=self.title_item.toPlainText())
+        if ok:
+            self.title_item.setPlainText(new_title)
+        super().mouseDoubleClickEvent(event)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self.scene():
+            # Snap to grid logic
+            grid = 24  # Matches grid spacing in drawBackground
+            new_pos = value
+            x = round(new_pos.x() / grid) * grid
+            y = round(new_pos.y() / grid) * grid
+            return QPointF(x, y)
+        return super().itemChange(change, value)

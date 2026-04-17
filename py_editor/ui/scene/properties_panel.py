@@ -142,12 +142,30 @@ class ObjectPropertiesPanel(QWidget):
     """The Right-side properties inspector."""
     property_changed = pyqtSignal()   
     
+    # Layer presets tuned for "No Man's Sky"-style terrain.
+    # Frequencies are in normalised units (per-radius for round, per-100u for flat),
+    # so the same preset yields analogous-looking features across modes.
+    # For best results: stack Continents + Mountains (or Sharp Peaks), then
+    # LOWER "Smoothing" to 0 or 1 when using Mountains/Sharp Peaks — smoothing
+    # rounds off the ridges and makes peaks look like dunes.
     VOXEL_LAYER_PRESETS = {
-        "Continents": {"noise_type": "fbm", "freq": 1.2, "amp": 0.25, "blend": "add"},
-        "Mountains": {"noise_type": "ridged", "freq": 3.5, "amp": 0.18, "blend": "add"},
-        "Canyons": {"noise_type": "voronoi", "freq": 2.2, "amp": 0.3, "blend": "subtract"},
-        "Caves": {"noise_type": "caves", "freq": 5.0, "amp": 0.5, "blend": "subtract"},
-        "Crater Moon": {"noise_type": "voronoi", "freq": 1.5, "amp": 0.2, "blend": "subtract"},
+        # Base landmass shape — 2-3 huge landmasses across the world
+        "Continents":   {"noise_type": "fbm",     "freq": 0.35, "amp": 0.55, "blend": "add"},
+        # Rolling hills on top of continents
+        "Hills":        {"noise_type": "fbm",     "freq": 1.2,  "amp": 0.20, "blend": "add"},
+        # Mountain chains — ridged noise, taller and higher-frequency than before
+        # so they read as mountains rather than dunes after Gaussian smoothing.
+        "Mountains":    {"noise_type": "ridged",  "freq": 2.5,  "amp": 0.65, "blend": "add"},
+        # Dramatic individual peaks for very mountainous worlds
+        "Sharp Peaks":  {"noise_type": "ridged",  "freq": 4.0,  "amp": 0.45, "blend": "add"},
+        # Fine rocky surface roughness
+        "Rocky Detail": {"noise_type": "fbm",     "freq": 5.0,  "amp": 0.08, "blend": "add"},
+        # Deep carved valleys / river systems
+        "Canyons":      {"noise_type": "voronoi", "freq": 1.2,  "amp": 0.35, "blend": "subtract"},
+        # Sparse large impact craters — NMS-style moons
+        "Crater Moon":  {"noise_type": "voronoi", "freq": 0.8,  "amp": 0.25, "blend": "subtract"},
+        # Underground cave networks
+        "Caves":        {"noise_type": "caves",   "freq": 4.0,  "amp": 0.60, "blend": "subtract"},
     }
     
     VOXEL_BIOME_PRESETS = {
@@ -546,8 +564,25 @@ class ObjectPropertiesPanel(QWidget):
             self.ocean_intensity.setValue(getattr(obj, 'ocean_wave_intensity', 1.0))
             self.ocean_choppiness.setValue(getattr(obj, 'ocean_wave_choppiness', 1.5))
             self.ocean_steepness.setValue(getattr(obj, 'ocean_wave_steepness', 0.15))
+            # Cascades
+            self.ocean_cascade1_w.setValue(getattr(obj, 'ocean_cascade1_weight', 0.5))
+            self.ocean_cascade2_w.setValue(getattr(obj, 'ocean_cascade2_weight', 0.3))
+            # Hero waves
+            self.ocean_hero_count.blockSignals(True)
+            self.ocean_hero_count.setCurrentIndex(min(int(getattr(obj, 'ocean_hero_count', 1)), 3))
+            self.ocean_hero_count.blockSignals(False)
+            _hero_defaults = [(4.0, 350.0, 25.0, 0.25), (3.0, 180.0, 70.0, 0.35), (2.0, 90.0, 140.0, 0.5)]
+            for i, (amp_s, wlen_s, dir_s, steep_s) in enumerate(self._hero_sliders):
+                d = _hero_defaults[i]
+                amp_s.setValue(getattr(obj, f'ocean_hero_amp_{i}',   d[0]))
+                wlen_s.setValue(getattr(obj, f'ocean_hero_wlen_{i}', d[1]))
+                dir_s.setValue(getattr(obj, f'ocean_hero_dir_{i}',   d[2]))
+                steep_s.setValue(getattr(obj, f'ocean_hero_steep_{i}', d[3]))
+            # Advanced visuals
             self.ocean_fresnel.setValue(getattr(obj, 'ocean_fresnel_strength', 0.3))
             self.ocean_specular.setValue(getattr(obj, 'ocean_specular_intensity', 1.0))
+            self.ocean_peak_bright.setValue(getattr(obj, 'ocean_peak_brightness', 1.0))
+            self.ocean_sss_str.setValue(getattr(obj, 'ocean_sss_strength', 1.0))
         elif obj.obj_type == 'voxel_world':
             # Radius: choose closest preset and apply
             radius_val = float(getattr(obj, 'voxel_radius', 0.5))
@@ -576,6 +611,12 @@ class ObjectPropertiesPanel(QWidget):
             self.vox_seed.setValue(getattr(obj, 'voxel_seed', 123))
             idx = self.vox_type.findText(getattr(obj, 'voxel_type', 'Round'))
             if idx != -1: self.vox_type.setCurrentIndex(idx)
+            # Infinite-flat checkbox (sync state + hide for Round mode)
+            self.vox_infinite_flat.blockSignals(True)
+            self.vox_infinite_flat.setChecked(bool(getattr(obj, 'voxel_infinite_flat', True)))
+            self.vox_infinite_flat.blockSignals(False)
+            self.vox_infinite_flat.setVisible(
+                str(getattr(obj, 'voxel_type', 'Round')).lower() == 'flat')
             rs_idx = self.vox_render_style.findText(getattr(obj, 'voxel_render_style', 'Smooth'))
             if rs_idx != -1: self.vox_render_style.setCurrentIndex(rs_idx)
             # Prefetch and max chunk resolution (per-object overrides)
@@ -680,43 +721,104 @@ class ObjectPropertiesPanel(QWidget):
         self.ocean_group = QGroupBox("Ocean Settings")
         self.ocean_group.setStyleSheet(PROPS_SS)
         og = QVBoxLayout(self.ocean_group)
-        
+
         # Simulation Model
         self.ocean_model = QComboBox()
         self.ocean_model.addItems(["FFT (Advanced Storm)", "Gerstner (Stable Calm)"])
         self.ocean_model.setStyleSheet(COMBO_SS)
         self.ocean_model.currentIndexChanged.connect(lambda i: self.update_obj_prop('ocean_use_fft', i == 0))
         self._add_property_row(og, "Model", self.ocean_model)
-        
+
         self.ocean_speed = PropertySlider(5.0, 0.0, 20.0)
         self.ocean_speed.valueChanged.connect(lambda v: self.update_obj_prop('ocean_wave_speed', v))
         self._add_property_row(og, "Wave Speed", self.ocean_speed)
-        
+
         self.ocean_intensity = PropertySlider(1.0, 0.0, 5.0)
         self.ocean_intensity.valueChanged.connect(lambda v: self.update_obj_prop('ocean_wave_intensity', v))
         self._add_property_row(og, "Intensity", self.ocean_intensity)
-        
+
         self.ocean_choppiness = PropertySlider(1.5, 0.0, 5.0)
         self.ocean_choppiness.valueChanged.connect(lambda v: self.update_obj_prop('ocean_wave_choppiness', v))
         self._add_property_row(og, "Choppiness", self.ocean_choppiness)
-        
+
         self.ocean_steepness = PropertySlider(0.15, 0.0, 1.0)
         self.ocean_steepness.valueChanged.connect(lambda v: self.update_obj_prop('ocean_wave_steepness', v))
         self._add_property_row(og, "Steepness", self.ocean_steepness)
 
-        og.addSpacing(10)
-        lbl = QLabel("ADVANCED VISUALS")
-        lbl.setStyleSheet("color: #4fc3f7; font-size: 10px; font-weight: bold; margin-top: 5px;")
-        og.addWidget(lbl)
-        
+        # ---- CASCADES ----
+        og.addSpacing(8)
+        lbl_cas = QLabel("CASCADES")
+        lbl_cas.setStyleSheet("color: #4fc3f7; font-size: 10px; font-weight: bold;")
+        og.addWidget(lbl_cas)
+
+        self.ocean_cascade1_w = PropertySlider(0.5, 0.0, 2.0)
+        self.ocean_cascade1_w.valueChanged.connect(lambda v: self.update_obj_prop('ocean_cascade1_weight', v))
+        self._add_property_row(og, "Mid Weight", self.ocean_cascade1_w)
+
+        self.ocean_cascade2_w = PropertySlider(0.3, 0.0, 2.0)
+        self.ocean_cascade2_w.valueChanged.connect(lambda v: self.update_obj_prop('ocean_cascade2_weight', v))
+        self._add_property_row(og, "Small Weight", self.ocean_cascade2_w)
+
+        # ---- HERO WAVES (Gerstner) ----
+        og.addSpacing(8)
+        lbl_hw = QLabel("HERO WAVES (Gerstner)")
+        lbl_hw.setStyleSheet("color: #4fc3f7; font-size: 10px; font-weight: bold;")
+        og.addWidget(lbl_hw)
+
+        self.ocean_hero_count = QComboBox()
+        self.ocean_hero_count.addItems(["0 — Disabled", "1 Wave", "2 Waves", "3 Waves"])
+        self.ocean_hero_count.setStyleSheet(COMBO_SS)
+        self.ocean_hero_count.currentIndexChanged.connect(lambda i: self.update_obj_prop('ocean_hero_count', i))
+        self._add_property_row(og, "Count", self.ocean_hero_count)
+
+        self._hero_sliders = []
+        _hero_defaults = [(4.0, 350.0, 25.0, 0.25), (3.0, 180.0, 70.0, 0.35), (2.0, 90.0, 140.0, 0.5)]
+        for wi in range(3):
+            amp_d, wlen_d, dir_d, steep_d = _hero_defaults[wi]
+            wlbl = QLabel(f"  Wave {wi + 1}")
+            wlbl.setStyleSheet("color: #888; font-size: 10px; margin-top: 3px; font-style: italic;")
+            og.addWidget(wlbl)
+
+            amp_s = PropertySlider(amp_d, 0.0, 50.0)
+            amp_s.valueChanged.connect(lambda v, i=wi: self.update_obj_prop(f'ocean_hero_amp_{i}', v))
+            self._add_property_row(og, "  Amplitude", amp_s)
+
+            wlen_s = PropertySlider(wlen_d, 10.0, 2000.0)
+            wlen_s.valueChanged.connect(lambda v, i=wi: self.update_obj_prop(f'ocean_hero_wlen_{i}', v))
+            self._add_property_row(og, "  Wavelength", wlen_s)
+
+            dir_s = PropertySlider(dir_d, 0.0, 360.0, step=1.0, decimals=1)
+            dir_s.valueChanged.connect(lambda v, i=wi: self.update_obj_prop(f'ocean_hero_dir_{i}', v))
+            self._add_property_row(og, "  Direction °", dir_s)
+
+            steep_s = PropertySlider(steep_d, 0.0, 1.0)
+            steep_s.valueChanged.connect(lambda v, i=wi: self.update_obj_prop(f'ocean_hero_steep_{i}', v))
+            self._add_property_row(og, "  Steepness", steep_s)
+
+            self._hero_sliders.append((amp_s, wlen_s, dir_s, steep_s))
+
+        # ---- ADVANCED VISUALS ----
+        og.addSpacing(8)
+        lbl_av = QLabel("ADVANCED VISUALS")
+        lbl_av.setStyleSheet("color: #4fc3f7; font-size: 10px; font-weight: bold;")
+        og.addWidget(lbl_av)
+
         self.ocean_fresnel = PropertySlider(0.3, 0.0, 1.0)
         self.ocean_fresnel.valueChanged.connect(lambda v: self.update_obj_prop('ocean_fresnel_strength', v))
         self._add_property_row(og, "Fresnel", self.ocean_fresnel)
-        
+
         self.ocean_specular = PropertySlider(1.0, 0.0, 5.0)
         self.ocean_specular.valueChanged.connect(lambda v: self.update_obj_prop('ocean_specular_intensity', v))
         self._add_property_row(og, "Specular", self.ocean_specular)
-        
+
+        self.ocean_peak_bright = PropertySlider(1.0, 0.0, 3.0)
+        self.ocean_peak_bright.valueChanged.connect(lambda v: self.update_obj_prop('ocean_peak_brightness', v))
+        self._add_property_row(og, "Peak Bright", self.ocean_peak_bright)
+
+        self.ocean_sss_str = PropertySlider(1.0, 0.0, 5.0)
+        self.ocean_sss_str.valueChanged.connect(lambda v: self.update_obj_prop('ocean_sss_strength', v))
+        self._add_property_row(og, "SSS Strength", self.ocean_sss_str)
+
         tint_btn = QPushButton("Select Tint")
         tint_btn.setStyleSheet(BTN_SS)
         tint_btn.clicked.connect(self._on_tint_clicked)
@@ -966,6 +1068,18 @@ class ObjectPropertiesPanel(QWidget):
         self.vox_type.setStyleSheet(COMBO_SS)
         self.vox_type.currentTextChanged.connect(self._on_vox_type_changed)
         self._add_property_row(vg, "Mode", self.vox_type)
+
+        # Infinite flat terrain — streams chunks around the camera for flat mode.
+        # Hidden for Round mode (always bounded by radius).
+        self.vox_infinite_flat = QCheckBox("Infinite (stream around camera)")
+        self.vox_infinite_flat.setChecked(True)
+        self.vox_infinite_flat.setStyleSheet("color: #ddd; font-size: 11px; padding: 2px 0;")
+        self.vox_infinite_flat.setToolTip(
+            "When on, flat voxel terrain streams chunks around the camera (no fixed size).\n"
+            "Turn off to pin a 100u × 40u × 100u box around the object's position.")
+        self.vox_infinite_flat.toggled.connect(
+            lambda v: self.update_obj_prop('voxel_infinite_flat', bool(v)))
+        vg.addWidget(self.vox_infinite_flat)
 
         # Render Style
         self.vox_render_style = QComboBox()
@@ -1301,6 +1415,7 @@ class ObjectPropertiesPanel(QWidget):
         self.update_obj_prop('voxel_type', t)
         # We now keep radius enabled as it controls proxy scale and LOD for both modes
         self.vox_radius.setEnabled(True)
+        self.vox_infinite_flat.setVisible(str(t).lower() == 'flat')
 
     def _init_mesh_ui(self, layout):
         self.mesh_group = QGroupBox("Mesh & Material")

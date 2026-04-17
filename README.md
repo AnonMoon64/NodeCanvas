@@ -18,11 +18,14 @@
   - **Plugin Package Orchestration**: Install `.ncpkg` archives or `.json` packages to expand the node ecosystem.
   - **Autonomous Export**: Package your custom logic nodes and Python modules into distributable plugin archives.
 - **Enhanced Variable Workflow**: Redesigned the Variables panel to support a **UE5-inspired workflow**:
+  - **Complex Data Support**: Expanded type system supporting **Vector2**, **Vector3**, **Arrays**, **Maps**, **Structs**, and **Enums**.
   - **In-Place Editing**: Double-click to rename, change types, or edit default values directly in the list.
   - **Auto-Naming**: One-click variable creation with intelligent default name generation.
   - **Type-Safe Accessors**: Drag-and-drop variables onto the canvas to instantly create Get/Set nodes with pre-populated references.
-  - **Context-Aware Editing**: Right-click nodes or list items for quick-access configuration menus.
-- **AI-Managed Variables**: Expanded the AI toolset with dedicated `set_variable` and `delete_variable` operations for autonomous logic orchestration.
+- **AI Agent Autonomy & Self-Verification**:
+  - **Mandatory Quality Loop**: The AI agent (Atom) now performs static graph validation and reachability analysis before finishing tasks.
+  - **Dynamic Simulation Verification**: Atom can "run" logic in a sandbox, inspect logs, and debug its own wiring errors autonomously.
+  - **Chain-of-Thought Reasoning**: Explicit thought steps and progress reporting for complex multi-node system generation.
 - **Enhanced Navigation**: Restored full **WASD + Mouse-look (RMB)** flight controls in the 3D viewport, including a real-time **Camera Speed Overlay**.
 - **Custom Mesh System**: Integrated a high-performance **binary .mesh format (NCMS)** with a native **OBJ conversion pipeline**. Models are optimized for fast GPU loading and render with custom textures.
 - **Persistence 1.0**: Full `.scene` serialization implemented. Save and Load your procedural environments instantly.
@@ -40,30 +43,35 @@ NodeCanvas is a high-performance orchestration platform designed to bridge the g
 NodeCanvas is built on a modular "Separated Pipeline" architecture:
 
 ### 1. The Multi-Graph Logic Engine
-* **Encapsulated Logic**: Organize complex behaviors into named graphs (e.g., `Main`, `WeatherSystem`, `ActorAI`).
-* **Global Data Bus**: Shared project-wide variables allow different graphs to communicate and synchronize state.
-* **Inter-Graph Calls**: Use the `CallGraph` node to run sub-logic as functional routines.
-* **Performance Optimized**: A hardware-accelerated canvas designed to handle hundreds of nodes with zero lag.
+
+- **Encapsulated Logic**: Organize complex behaviors into named graphs (e.g., `Main`, `WeatherSystem`, `ActorAI`).
+- **Global Data Bus**: Shared project-wide variables allow different graphs to communicate and synchronize state.
+- **Modernized Node UI**: Title labels now **float elegantly above** node bodies, reducing visual clutter and improving graph readability.
+- **Node Properties Inspector**: Highly interactive variadic nodes like **SelectInt** and **StringAppend** feature a dedicated Properties panel for dynamic pin management (+/- pins).
+- **Inter-Graph Calls**: Use the `CallGraph` node to run sub-logic as functional routines.
+- **Performance Optimized**: A hardware-accelerated canvas designed to handle hundreds of nodes with zero lag.
 
 ### 2. The 3D Scene Compositor
+
 * **PBR Workflow**: Industry-standard Metallic-Roughness workflow for realistic surface properties.
-* **Hierarchical Outliner**: Manage complex scenes with deep object nesting and bulk property editing.
-* **Integrated Rendering**: Support for Point Lights, Directional Lights, and a **Global Shared OpenGL Context** with **Context-Aware Display List Caching** to ensure seamless material persistence between the Editor and Play Mode.
-* **Custom Shader Pipeline**: A flexible shader system with a selectable **Shader Registry**. Includes specialized vertex displacement shaders for **Fish Swimming** (sine-wave wiggling) and **Flag Waving** (cloth-sim approximation) with dynamic, UI-controllable parameters and **Multi-Axis Support** (X, Y, or Z forward).
-* **Simulation Stability**: Robust camera possession and **High-Precision Relative Sampling** (0-indexed local clocks) to eliminate floating-point precision loss and ensures a rock-solid world-building experience.
-* **Precision Property Editor**: A redesigned inspector with a **Unified Row Layout**, synchronized **PropertySliders**, and **Batch Update Support**. Includes **Per-Object Opacity** controls for fine-tuning transparency.
-* **Autonomous Controllers**: Implemented a structured `BaseController` hierarchy allowing for **AI autonomous wandering** or **Direct Player Control** axes, selectable via an explicit **Controller Type** dropdown in the UI.
+- **Hierarchical Outliner**: Manage complex scenes with deep object nesting and bulk property editing.
+- **Integrated Rendering**: Support for Point Lights, Directional Lights, and a **Global Shared OpenGL Context** with **Context-Aware Display List Caching** to ensure seamless material persistence between the Editor and Play Mode.
+- **Custom Shader Pipeline**: A flexible shader system with a selectable **Shader Registry**. Includes specialized vertex displacement shaders for **Fish Swimming** (sine-wave wiggling) and **Flag Waving** (cloth-sim approximation) with dynamic, UI-controllable parameters and **Multi-Axis Support** (X, Y, or Z forward).
+- **Simulation Stability**: Robust camera possession and **High-Precision Relative Sampling** (0-indexed local clocks) to eliminate floating-point precision loss and ensures a rock-solid world-building experience.
+- **Precision Property Editor**: A redesigned inspector with a **Unified Row Layout**, synchronized **PropertySliders**, and **Batch Update Support**. Includes **Per-Object Opacity** controls for fine-tuning transparency.
+- **Autonomous Controllers**: Implemented a structured `BaseController` hierarchy allowing for **AI autonomous wandering** or **Direct Player Control** axes, selectable via an explicit **Controller Type** dropdown in the UI.
 
 ### 3. Advanced Procedural Landscapes
+
 * **Seamless Discovery Pipeline**: Features a **Dual-Stage Rendering** system that eliminates visual "flashing." New terrain areas appear instantly as **Cached Draft Meshes** (low-poly VRAM previews) and progressively "sharpen" into high-detail geometry.
-*   **Liquid-Smooth Performance**: Integrated **Dithered Spawning** logic throttles heavy vegetation and object generation to ensure a consistent 60FPS even when flying at high speeds through infinite worlds.
-* **GPU-Cached Rendering**: Uses **OpenGL Display Lists** to cache both high-res and draft terrain chunks directly in VRAM, enabling 60FPS+ performance.
-* **Vectorized Production**: A high-performance **NumPy-based noise engine** for lightning-fast terrain calculation.
-* **Infinite Streaming**: Real-time terrain loading/unloading around the camera with configurable **Loading Radii**.
-* **Dynamic Resolution (Detail Level)**: Fine-tune detail from **Low (16x16)** to **Very High (128x128)** per chunk.
-* **Smooth Shading**: Integrated per-vertex normal sampling for organic, shaded terrain.
-* **GPU-Accelerated Ocean**: A full real-time water system powered by **Gerstner Wave Shaders** and static GPU VBO grids for infinite, fluid-animated seas. Includes **Double-Sided Rendering** for seamless underwater viewing.
-* **Planetary Voxel Engine**: A fully overhauled voxel system for rendering procedural planets from pebble to Earth scale.
+- **Liquid-Smooth Performance**: Integrated **Dithered Spawning** logic throttles heavy vegetation and object generation to ensure a consistent 60FPS even when flying at high speeds through infinite worlds.
+- **GPU-Cached Rendering**: Uses **OpenGL Display Lists** to cache both high-res and draft terrain chunks directly in VRAM, enabling 60FPS+ performance.
+- **Vectorized Production**: A high-performance **NumPy-based noise engine** for lightning-fast terrain calculation.
+- **Infinite Streaming**: Real-time terrain loading/unloading around the camera with configurable **Loading Radii**.
+- **Dynamic Resolution (Detail Level)**: Fine-tune detail from **Low (16x16)** to **Very High (128x128)** per chunk.
+- **Smooth Shading**: Integrated per-vertex normal sampling for organic, shaded terrain.
+- **GPU-Accelerated Ocean**: A full real-time water system powered by **Gerstner Wave Shaders** and static GPU VBO grids for infinite, fluid-animated seas. Includes **Double-Sided Rendering** for seamless underwater viewing.
+- **Planetary Voxel Engine**: A fully overhauled voxel system for rendering procedural planets from pebble to Earth scale.
   - **Corrected Surface Nets**: Fixed float32/float64 GL upload bug and Perlin lattice truncation bug that caused vertex spikes and screen-filling corruption.
   - **Exposed Resolution Control**: Per-object grid resolution (16–256) lets you trade generation speed for surface detail.
   - **Laplacian Smoothing**: Configurable pass count (0–8) eliminates the blocky voxel look and produces organic terrain.
@@ -83,22 +91,23 @@ NodeCanvas is built on a modular "Separated Pipeline" architecture:
 
 As and Alpha-stage development environment, the following areas are currently identified as **Primary Development Focus**:
 
-*   **Visual Polish**: The current lighting model uses a dual-pass fixed-function approach. While atmospheric, it lacks advanced shadows and Screen-Space Ambient Occlusion (SSAO).
-*   **Materials**: Materials are currently vertex-colored per biome; full PBR texture support is in the pipeline.
-*   **Ocean Foam**: The current foam system is a visual placeholder. It effectively simulates surface brightness/crests but lacks the "bubbly" volumetric detail and physically-based bubble noise required for production-grade realism. A complete overhaul is planned.
+- **Visual Polish**: The current lighting model uses a dual-pass fixed-function approach. While atmospheric, it lacks advanced shadows and Screen-Space Ambient Occlusion (SSAO).
+- **Materials**: Materials are currently vertex-colored per biome; full PBR texture support is in the pipeline.
+- **Ocean Foam**: The current foam system is a visual placeholder. It effectively simulates surface brightness/crests but lacks the "bubbly" volumetric detail and physically-based bubble noise required for production-grade realism. A complete overhaul is planned.
 
 ---
 
 ## 🚧 Engineering Roadmap
 
 ### Phase 1: Landscape Fidelity (Current)
+
 - [x] **Infinite Streaming**: Multi-threaded async loading.
 - [x] **Smooth Normals**: Organic terrain shading.
-- [x] **Hardened Persistence**: 
+- [x] **Hardened Persistence**:
   - Centralized **.scene** format for full world serialization.
   - Full persistence for landscape properties (Resolution, Radius, Chunk Size).
   - Integrated **Camera State Persistence** (retains position/rotation on load).
-- [x] **Extreme Performance**:
+- [ ] **Extreme Performance**:
   - **Quad-Chunk Discovery**: Optimized spawner processes multiple areas per tick.
   - **Billboard Correction**: Fixed invalid OpenGL states for flickering-free vegetation.
   - **VRAM Caching**: Optimized display lists for consistent 60FPS exploration.
@@ -108,11 +117,13 @@ As and Alpha-stage development environment, the following areas are currently id
 - [ ] **Advanced Biome Blending**: Smooth transitions between differing terrain types.
 
 ### Phase 2: Generation & Simulation
+
 - [ ] **Erosion Simulation**: Hydraulic and thermal erosion for realistic mountain profiles.
 - [ ] **Temperature + Humidity Simulation**: Dynamic climate maps that respond to latitude and elevation.
 - [ ] **Dense Foliage & Ecosystems**: GPU-accelerated rendering for thousands of trees/bushes.
 
 ### Phase 3: Infrastructure & Physics
+
 - [x] **GPU-Accelerated Rendering**: Migrating the CPU-bound mesh generation to vertex/compute shaders.
 - [x] **High-Performance Swarms**: Integrated **Compute-Shader Boids** (Separation, Alignment, Cohesion) with **Indirect Instancing**.
 - [x] **Custom Mesh Pipeline**: Native **.obj to .mesh** binary conversion and hardware-accelerated model rendering.
@@ -120,6 +131,7 @@ As and Alpha-stage development environment, the following areas are currently id
 - [ ] **Physics Integration**: Rigid body support for spawned actors on slopes.
 
 ### Phase 4: Security & Ecosystem (Long-Term)
+
 - [ ] **Sandboxed Logic Execution**: implementing a secure environment for visual script execution to prevent arbitrary code execution from untrusted projects.
 - [ ] **Secure Asset Registry**: Establishing a verified pipeline for sharing logic graphs and procedural assets.
 - [ ] **Encrypted Serialization**: Optional encryption for .scene and .logic files to protect proprietary procedural algorithms.
@@ -133,9 +145,10 @@ As and Alpha-stage development environment, the following areas are currently id
 The current focus is on creating a photorealistic, physically-based world environment. We are building this in layers to ensure stability and performance at every step.
 
 ### 🌊 The Ocean Roadmap
-*   **Layer 1: Motion (Done)** – Wave speed, height, and Gerstner-based direction blending.
-*   **Layer 2: Surface (Done)** – Shorter-crested Gerstner peaks, reflection tints, and animated foam.
-*   **Layer 3: Integration (In Progress)** – Shoreline depth-blending and vertical bias stabilization.
+
+* **Layer 1: Motion (Done)** – Wave speed, height, and Gerstner-based direction blending.
+- **Layer 2: Surface (Done)** – Shorter-crested Gerstner peaks, reflection tints, and animated foam.
+- **Layer 3: Integration (In Progress)** – Shoreline depth-blending and vertical bias stabilization.
 
 ### 💡 High-Impact Features Pipeline
 

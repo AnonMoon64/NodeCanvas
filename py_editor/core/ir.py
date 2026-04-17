@@ -35,13 +35,19 @@ class ValueType(str, Enum):
     FLOAT = "float"
     BOOL = "bool"
     STRING = "string"
+    VECTOR2 = "vector2"
+    VECTOR3 = "vector3"
+    ARRAY = "array"
+    MAP = "map"
+    STRUCT = "struct"
+    ENUM = "enum"
 
 
 @dataclass
 class Value:
     """Generic value type for simple built-in constants and defaults."""
     type: ValueType
-    data: Union[int, float, bool, str]
+    data: Any  # Supports int, float, bool, str, list, dict
     
     def to_dict(self):
         return {"type": self.type.value, "data": self.data}
@@ -66,6 +72,30 @@ class Value:
     @staticmethod
     def string_value(value: str):
         return Value(ValueType.STRING, value)
+
+    @staticmethod
+    def vector2_value(x: float, y: float):
+        return Value(ValueType.VECTOR2, [x, y])
+
+    @staticmethod
+    def vector3_value(x: float, y: float, z: float):
+        return Value(ValueType.VECTOR3, [x, y, z])
+
+    @staticmethod
+    def array_value(items: list):
+        return Value(ValueType.ARRAY, items)
+
+    @staticmethod
+    def map_value(data: dict):
+        return Value(ValueType.MAP, data)
+
+    @staticmethod
+    def struct_value(data: dict):
+        return Value(ValueType.STRUCT, data)
+
+    @staticmethod
+    def enum_value(value: str):
+        return Value(ValueType.ENUM, value)
 
 
 @dataclass
