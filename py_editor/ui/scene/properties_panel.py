@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
     QComboBox, QCheckBox, QDoubleSpinBox, QFrame, QSpinBox,
     QToolButton, QGroupBox, QSlider, QColorDialog, QGridLayout, QListWidget, QListWidgetItem,
-    QScrollArea
+    QScrollArea, QFileDialog, QInputDialog, QMenu
 )
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QColor
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -309,6 +309,7 @@ class ObjectPropertiesPanel(QWidget):
         self._init_ocean_ui(layout)
         self._init_voxel_ui(layout)
         self._init_controller_ui(layout)
+        self._init_weather_ui(layout)
         self._init_camera_ui(layout)
         self._init_shader_ui(layout)
         self._init_logic_ui(layout)
@@ -410,7 +411,6 @@ class ObjectPropertiesPanel(QWidget):
         self.property_changed.emit()
 
     def _on_megascans_import(self):
-        from PyQt6.QtWidgets import QFileDialog
         dir_path = QFileDialog.getExistingDirectory(self, "Select Megascans Folder")
         if not dir_path or not self._current_objects: return
         
@@ -507,11 +507,13 @@ class ObjectPropertiesPanel(QWidget):
         self.pbr_group.setVisible(primary.obj_type in ('cube', 'sphere', 'plane', 'mesh'))
         self.env_group.setVisible(primary.obj_type in ('atmosphere', 'universe'))
         self.land_group.setVisible(primary.obj_type == 'landscape')
-        self.ocean_group.setVisible(primary.obj_type == 'ocean')
+        # ocean_world shares the same wave controls as ocean (FFT toggle, cascades, hero, foam…)
+        self.ocean_group.setVisible(primary.obj_type in ('ocean', 'ocean_world'))
         self.cam_group.setVisible(primary.obj_type == 'camera')
         self.mesh_group.setVisible(primary.obj_type == 'mesh')
         self.voxel_group.setVisible(primary.obj_type == 'voxel_world')
         self.controller_group.setVisible(primary.obj_type in ('cube', 'sphere', 'mesh', 'voxel_world'))
+        self.weather_group.setVisible(primary.obj_type == 'weather')
         
         if self.mat_group.isVisible():
             preset = primary.material.get('preset', 'Custom')
@@ -559,7 +561,7 @@ class ObjectPropertiesPanel(QWidget):
             self.land_ocean_lvl.setValue(getattr(obj, 'landscape_ocean_level', 0.0))
             idx = self.land_type.findText(getattr(obj, 'landscape_type', 'procedural').capitalize())
             if idx != -1: self.land_type.setCurrentIndex(idx)
-        elif obj.obj_type == 'ocean':
+        elif obj.obj_type in ('ocean', 'ocean_world'):
             self.ocean_speed.setValue(getattr(obj, 'ocean_wave_speed', 5.0))
             self.ocean_intensity.setValue(getattr(obj, 'ocean_wave_intensity', 1.0))
             self.ocean_choppiness.setValue(getattr(obj, 'ocean_wave_choppiness', 1.5))
@@ -939,7 +941,6 @@ class ObjectPropertiesPanel(QWidget):
         
     def set_prefab(self, path, data):
         """Enter Prefab Editing mode."""
-        from py_editor.ui.scene.object_system import SceneObject
         root = data.get("root", {})
         obj = SceneObject.from_dict(root)
         obj.name = Path(path).stem
@@ -966,7 +967,6 @@ class ObjectPropertiesPanel(QWidget):
         if not self._current_objects: return
         primary = self._current_objects[0]
         current = getattr(primary, 'ocean_reflection_tint', [0.5, 0.7, 1.0, 1.0])
-        from PyQt6.QtWidgets import QColorDialog
         color = QColorDialog.getColor(QColor.fromRgbF(current[0], current[1], current[2]), self, "Reflection Tint")
         if color.isValid():
             for obj in self._current_objects:
@@ -1078,7 +1078,6 @@ class ObjectPropertiesPanel(QWidget):
         self._add_property_row(lg, "Physics", self.physics_chk)
 
         # Mass for simple collision resolution
-        from PyQt6.QtWidgets import QDoubleSpinBox
         self.mass_spin = QDoubleSpinBox()
         self.mass_spin.setRange(0.01, 10000.0); self.mass_spin.setDecimals(2)
         self.mass_spin.setValue(1.0); self.mass_spin.setStyleSheet(SPIN_SS)
@@ -1086,7 +1085,6 @@ class ObjectPropertiesPanel(QWidget):
         self._add_property_row(lg, "Mass", self.mass_spin)
 
         # Simple Collision Properties list (add/remove)
-        from PyQt6.QtWidgets import QListWidget, QPushButton, QHBoxLayout
         self.coll_list = QListWidget()
         self.coll_list.setFixedHeight(80)
         self._add_property_row(lg, "Collisions", self.coll_list)
@@ -1104,7 +1102,6 @@ class ObjectPropertiesPanel(QWidget):
 
     def _init_voxel_ui(self, layout):
         import json, os
-        from PyQt6.QtWidgets import QFileDialog, QInputDialog
 
         self.vox_group = QGroupBox("Voxel World Settings")
         self.vox_group.setStyleSheet(PROPS_SS)
@@ -1290,7 +1287,6 @@ class ObjectPropertiesPanel(QWidget):
 
     def _on_vox_biome_context(self, pos):
         if not self._current_objects: return
-        from PyQt6.QtWidgets import QMenu
         menu = QMenu(self)
         menu.setStyleSheet("background:#252526; color:#ccc;")
         
@@ -1347,7 +1343,6 @@ class ObjectPropertiesPanel(QWidget):
 
     def _on_vox_layer_context(self, pos):
         if not self._current_objects: return
-        from PyQt6.QtWidgets import QMenu
         menu = QMenu(self)
         menu.setStyleSheet("background:#252526; color:#ccc;")
         
@@ -1491,3 +1486,26 @@ class ObjectPropertiesPanel(QWidget):
             obj.texture_path = path
         self.tex_slot.set_texture(path)
         self.property_changed.emit()
+    def _init_weather_ui(self, layout):
+        self.weather_group = QGroupBox("Weather Simulator")
+        self.weather_group.setStyleSheet(PROPS_SS)
+        wg = QVBoxLayout(self.weather_group)
+        wg.setContentsMargins(10, 14, 10, 10); wg.setSpacing(6)
+        
+        self.weather_type = QComboBox()
+        self.weather_type.addItems(['Auto', 'Clear', 'Rain', 'Snow', 'Storm', 'Fog', 'Sandstorm'])
+        self.weather_type.setStyleSheet(COMBO_SS)
+        self.weather_type.currentIndexChanged.connect(lambda i: self.update_obj_prop('weather_type_override', self.weather_type.currentText()))
+        self._add_property_row(wg, "Override", self.weather_type)
+        
+        self.weather_intensity = PropertySlider(0.8, 0.0, 1.0)
+        self.weather_intensity.valueChanged.connect(lambda v: self.update_obj_prop('weather_intensity_override', v))
+        self._add_property_row(wg, "Intensity", self.weather_intensity)
+        
+        self.weather_seed = QSpinBox()
+        self.weather_seed.setRange(0, 9999); self.weather_seed.setValue(1234)
+        self.weather_seed.setStyleSheet(SPIN_SS); self.weather_seed.setFixedWidth(80)
+        self.weather_seed.valueChanged.connect(lambda v: self.update_obj_prop('weather_seed', v))
+        self._add_property_row(wg, "Seed", self.weather_seed)
+        
+        layout.addWidget(self.weather_group)

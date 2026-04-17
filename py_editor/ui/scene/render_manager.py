@@ -194,46 +194,137 @@ def _draw_cone(radius=0.15, height=0.5, segments=12):
         glVertex3f(radius * math.cos(theta), 0, radius * math.sin(theta))
     glEnd()
 
-def _draw_gizmo(pos, selected_axis=None):
-    """Draw professional 3D transformation gizmo at position."""
+def _gizmo_screen_scale(pos, camera=None):
+    """Scale gizmo so its length feels consistent at any camera distance."""
+    if camera is None:
+        return 1.0
+    d = _length(_sub(pos, camera.pos))
+    # Map distance → world-length so gizmo occupies roughly constant screen space.
+    return max(0.5, d * 0.12)
+
+def _draw_gizmo(pos, selected_axis=None, mode="translate", camera=None):
+    """Draw professional 3D transformation gizmo at position.
+
+    mode: "translate" | "rotate" | "scale"
+    """
     from py_editor.ui.shared_styles import AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR, GIZMO_ALPHA
-    glDisable(GL_DEPTH_TEST) # Always show gizmo on top
+    glDisable(GL_DEPTH_TEST)
+    glDisable(GL_CULL_FACE)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    # Smooth lines / points for a cleaner look
+    try:
+        glEnable(GL_LINE_SMOOTH)
+        glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)
+    except Exception:
+        pass
+
+    glUseProgram(0)
     glPushMatrix()
     glTranslatef(*pos)
-    
-    # Scale based on distance to camera to keep constant screen size
-    # (Simplified for now: fixed scale 1.0)
-    
-    # X Axis (Red)
-    is_sel = (selected_axis == 'x')
-    glColor4f(*AXIS_X_COLOR[:3], 1.0 if is_sel else GIZMO_ALPHA)
-    glLineWidth(2.5 if is_sel else 1.5)
-    glBegin(GL_LINES); glVertex3f(0,0,0); glVertex3f(2,0,0); glEnd()
-    glPushMatrix()
-    glTranslatef(2, 0, 0); glRotatef(90, 0, 0, -1); _draw_cone()
-    glPopMatrix()
-    
-    # Y Axis (Green)
-    is_sel = (selected_axis == 'y')
-    glColor4f(*AXIS_Y_COLOR[:3], 1.0 if is_sel else GIZMO_ALPHA)
-    glLineWidth(2.5 if is_sel else 1.5)
-    glBegin(GL_LINES); glVertex3f(0,0,0); glVertex3f(0,2,0); glEnd()
-    glPushMatrix()
-    glTranslatef(0, 2, 0); _draw_cone()
-    glPopMatrix()
-    
-    # Z Axis (Blue)
-    is_sel = (selected_axis == 'z')
-    glColor4f(*AXIS_Z_COLOR[:3], 1.0 if is_sel else GIZMO_ALPHA)
-    glLineWidth(2.5 if is_sel else 1.5)
-    glBegin(GL_LINES); glVertex3f(0,0,0); glVertex3f(0,0,2); glEnd()
-    glPushMatrix()
-    glTranslatef(0, 0, 2); glRotatef(90, 1, 0, 0); _draw_cone()
-    glPopMatrix()
-    
+
+    s = _gizmo_screen_scale(pos, camera)
+    glScalef(s, s, s)
+
+    axes = [
+        ('x', AXIS_X_COLOR, (1, 0, 0), (90, 0, 0, -1)),
+        ('y', AXIS_Y_COLOR, (0, 1, 0), None),
+        ('z', AXIS_Z_COLOR, (0, 0, 1), (90, 1, 0, 0)),
+    ]
+
+    # Small filled centre sphere
+    glColor4f(1.0, 1.0, 1.0, 0.55)
+    q = gluNewQuadric()
+    gluSphere(q, 0.08, 12, 8)
+    gluDeleteQuadric(q)
+
+    if mode == "rotate":
+        segs = 64
+        for name, col, axis_vec, _ in axes:
+            is_sel = (selected_axis == name)
+            a = 1.0 if is_sel else GIZMO_ALPHA
+            # Glow pass (thick, low-alpha)
+            glColor4f(col[0], col[1], col[2], a * 0.35)
+            glLineWidth(6.0 if is_sel else 4.5)
+            glBegin(GL_LINE_LOOP)
+            for i in range(segs):
+                t = 2 * math.pi * i / segs
+                cs, sn = math.cos(t) * 2.0, math.sin(t) * 2.0
+                if name == 'x':   glVertex3f(0, cs, sn)
+                elif name == 'y': glVertex3f(cs, 0, sn)
+                else:             glVertex3f(cs, sn, 0)
+            glEnd()
+            # Solid pass
+            glColor4f(col[0], col[1], col[2], a)
+            glLineWidth(2.5 if is_sel else 1.8)
+            glBegin(GL_LINE_LOOP)
+            for i in range(segs):
+                t = 2 * math.pi * i / segs
+                cs, sn = math.cos(t) * 2.0, math.sin(t) * 2.0
+                if name == 'x':   glVertex3f(0, cs, sn)
+                elif name == 'y': glVertex3f(cs, 0, sn)
+                else:             glVertex3f(cs, sn, 0)
+            glEnd()
+        glLineWidth(1.0)
+        glPopMatrix()
+        glEnable(GL_DEPTH_TEST)
+        glEnable(GL_CULL_FACE)
+        return
+
+    # translate / scale: axis shafts with a glow underlay
+    for name, col, axis_vec, _ in axes:
+        is_sel = (selected_axis == name)
+        a = 1.0 if is_sel else GIZMO_ALPHA
+        tip = (axis_vec[0]*1.85, axis_vec[1]*1.85, axis_vec[2]*1.85)
+        # Glow
+        glColor4f(col[0], col[1], col[2], a * 0.3)
+        glLineWidth(7.0 if is_sel else 5.0)
+        glBegin(GL_LINES); glVertex3f(0, 0, 0); glVertex3f(*tip); glEnd()
+        # Core
+        glColor4f(col[0], col[1], col[2], a)
+        glLineWidth(3.0 if is_sel else 2.0)
+        glBegin(GL_LINES); glVertex3f(0, 0, 0); glVertex3f(*tip); glEnd()
+
+    # axis tips: smooth cones (translate) or rounded cubes (scale)
+    for name, col, axis_vec, rot in axes:
+        is_sel = (selected_axis == name)
+        a = 1.0 if is_sel else GIZMO_ALPHA
+        # Highlight selected tip with extra brightness
+        bright = 1.2 if is_sel else 1.0
+        tip_col = (min(col[0]*bright, 1.0), min(col[1]*bright, 1.0), min(col[2]*bright, 1.0))
+        glColor4f(tip_col[0], tip_col[1], tip_col[2], a)
+        glPushMatrix()
+        glTranslatef(axis_vec[0]*1.85, axis_vec[1]*1.85, axis_vec[2]*1.85)
+        if mode == "scale":
+            hx = 0.16
+            verts = [(-hx,-hx,-hx),(hx,-hx,-hx),(hx,hx,-hx),(-hx,hx,-hx),
+                     (-hx,-hx,hx),(hx,-hx,hx),(hx,hx,hx),(-hx,hx,hx)]
+            faces = [(0,1,2,3),(4,5,6,7),(0,1,5,4),(2,3,7,6),(0,3,7,4),(1,2,6,5)]
+            glBegin(GL_QUADS)
+            for f in faces:
+                for vi in f: glVertex3f(*verts[vi])
+            glEnd()
+            # Edge outline
+            glColor4f(tip_col[0]*0.4, tip_col[1]*0.4, tip_col[2]*0.4, a)
+            glLineWidth(1.5)
+            edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+            glBegin(GL_LINES)
+            for aidx, bidx in edges:
+                glVertex3f(*verts[aidx]); glVertex3f(*verts[bidx])
+            glEnd()
+        else:
+            if rot: glRotatef(*rot)
+            _draw_cone(radius=0.15, height=0.45, segments=20)
+        glPopMatrix()
+
     glLineWidth(1.0)
     glPopMatrix()
     glEnable(GL_DEPTH_TEST)
+    glEnable(GL_CULL_FACE)
+    try:
+        glDisable(GL_LINE_SMOOTH)
+    except Exception:
+        pass
 def _draw_camera_icon(color=(1, 1, 0, 1)):
     # Simple pyramid for camera look
     glLineWidth(2.0); glColor4f(*color)

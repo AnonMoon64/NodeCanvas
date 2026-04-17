@@ -1,0 +1,23 @@
+{
+  "type": "particles",
+  "name": "WeatherControl",
+  "category": "Particles",
+  "inputs": {
+    "exec_in": "exec",
+    "weather_obj": "object",
+    "type": "enum:Auto,Clear,Rain,Snow,Storm,Fog,Sandstorm",
+    "intensity": "float",
+    "wind_x": "float",
+    "wind_z": "float"
+  },
+  "outputs": {
+    "exec_out": "exec"
+  },
+  "values": {
+    "type": "Auto",
+    "intensity": 0.8,
+    "wind_x": 8.0,
+    "wind_z": 0.0
+  },
+  "code": "name = \"WeatherControl\"\ninputs = {\"exec_in\":\"exec\",\"weather_obj\":\"object\",\"type\":\"enum:Auto,Clear,Rain,Snow,Storm,Fog,Sandstorm\",\"intensity\":\"float\",\"wind_x\":\"float\",\"wind_z\":\"float\"}\noutputs = {\"exec_out\":\"exec\"}\n"
+}

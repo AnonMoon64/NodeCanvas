@@ -856,140 +856,6 @@ class IRBackend:
                 traceback.print_exc()
         return None
     
-    def _execute_message_node(self, node, kind, widget_vals, ctx):
-        """
-        Execute an external graph as a function call.
-        
-        This is the core of graph composability - a graph can call another
-        graph as if it were a function, with explicit entry and exit.
-        
-        Args:
-            node: The Message node
-            kind: Node kind (Custom)
-            widget_vals: Widget values including graphPath, event
-            ctx: Execution context
-            
-        Returns:
-            The result from the subgraph's InterfaceOutput nodes or Return node
-        """
-        import json
-        import traceback
-        from pathlib import Path as PathLib
-        
-        # 1. Resolve Target and Event
-        # Input order: exec(0), target(1), payload(2)
-        input_values = []
-        for idx in range(3):
-            if idx < len(kind.inputs) and kind.inputs[idx]:
-                val = ctx.get_value(kind.inputs[idx])
-                input_values.append(val)
-            else:
-                input_values.append(None)
-        
-        target = input_values[1]
-        event_name = widget_vals.get('event', 'MyEvent')
-        payload = input_values[2]
-        
-        # 2. Determine Graph Path
-        graph_path = None
-        is_self = False
-        
-        if target is None or target == '' or (isinstance(target, str) and target.lower() == 'self'):
-            # Self invocation - use current graph
-            graph_path = ctx.variables.get('__current_graph_path__')
-            is_self = True
-        elif isinstance(target, dict) and 'graphPath' in target:
-            # External reference handle
-            graph_path = target['graphPath']
-        elif isinstance(target, str):
-            # Direct path string
-            graph_path = target
-        
-        if not graph_path:
-            if is_self:
-                print(f"Message: Self invocation but no __current_graph_path__ set")
-            else:
-                print(f"Message: No graph path or target specified (target={target})")
-            return None
-        
-        # 3. Resolve Path Robustly
-        current_graph_path = getattr(self.module, 'source_path', ctx.variables.get('__current_graph_path__', ''))
-        resolved_path = self._resolve_graph_path(graph_path, current_graph_path)
-        
-        if not resolved_path or not PathLib(resolved_path).exists():
-            print(f"Message: Graph file not found: {resolved_path} (original: {graph_path})")
-            return None
-        
-        path = PathLib(resolved_path)
-        # print(f"Message: Loading and executing '{path.name}' -> Event '{event_name}'")
-        
-        try:
-            # 4. Load the External Graph
-            with open(path, 'r', encoding='utf-8') as f:
-                subgraph_data = json.load(f)
-            
-            # 5. Build Subgraph Context and Variables
-            sub_ctx = ExecutionContext()
-            
-            # Inherit parent variables
-            sub_ctx.variables = dict(ctx.variables)
-            
-            # Merge target graph's own variables (high priority)
-            target_vars = subgraph_data.get('variables', {})
-            for var_name, var_info in target_vars.items():
-                if isinstance(var_info, dict):
-                    sub_ctx.variables[var_name] = var_info.get('value')
-                else:
-                    sub_ctx.variables[var_name] = var_info
-            
-            # Set runtime context
-            sub_ctx.variables['__current_graph_path__'] = str(path)
-            sub_ctx.variables['__event__'] = event_name
-            sub_ctx.variables['__payload__'] = payload
-            sub_ctx.prints = ctx.prints # Share print log
-            sub_ctx.logger_callback = ctx.logger_callback # Share logger
-            
-            # 6. Initialize Subgraph Interface
-            from py_editor.core.graph_interface import GraphInterface
-            interface = GraphInterface.extract_from_graph(subgraph_data, str(path))
-            
-            # 7. Convert and Execute Sub-IR
-            sub_backend = IRBackend()
-            try:
-                from py_editor.core import node_templates
-                templates = node_templates.get_all_templates()
-            except:
-                templates = {}
-                
-            sub_ir = sub_backend.canvas_to_ir(subgraph_data, templates)
-            sub_ir.source_path = str(path)
-            
-            # Inject EVENT context into the IR module for node-level checks
-            sub_ir.event_context = {
-                'triggered_event': event_name,
-                'payload': payload
-            }
-            
-            # Execute
-            results = sub_backend.execute_ir(sub_ir, ctx=sub_ctx)
-            
-            # 8. Extract Result
-            # Priority: Return node value > InterfaceOutput nodes
-            if 'return' in results and results['return'] != '__RETURN_DISABLED__':
-                return results['return']
-            
-            outputs = getattr(sub_ir, 'interface_outputs', {})
-            if len(outputs) == 1:
-                return list(outputs.values())[0]
-            elif outputs:
-                return outputs
-            
-            return None
-            
-        except Exception as e:
-            print(f"Message Error executing subgraph {path.name}: {e}")
-            traceback.print_exc()
-            return None
     
     def _find_sequence_branches(self, sequence_node, ir_module):
         """Find all nodes connected to each output pin of a Sequence node"""
@@ -1246,9 +1112,7 @@ class IRBackend:
             deps_map = {node.id.id: [d.id for d in self._get_dependencies(node)] for node in ir_module.nodes}
         except Exception:
             deps_map = None
-        print(f"TOPO_SORT: deps_map={deps_map}")
-        print(f"TOPO_SORT: adjacency={adjacency}")
-        print(f"TOPO_SORT: in_degree={in_degree}")
+        # TOPO_SORT diagnostics silenced
         
         # Start with nodes that have no dependencies
         queue = deque([node for node in ir_module.nodes if in_degree[node.id.id] == 0])
@@ -1324,7 +1188,9 @@ class IRBackend:
                     except:
                         from core import node_templates
                 source_template = node_templates.get_template(source_node.kind.name)
-                if source_template:
+                # ONLY extract if there are multiple output pins. 
+                # If there's only one pin, the tuple is just a single data item (like a Vector3).
+                if source_template and len(source_template.get('outputs', {})) > 1:
                     output_pins = list(source_template.get('outputs', {}).keys())
                     if from_pin_name in output_pins:
                         output_idx = output_pins.index(from_pin_name)
@@ -1351,22 +1217,48 @@ class IRBackend:
         
         # Custom nodes (including composites)
         elif isinstance(kind, Custom):
-            # Debug: report custom node execution entry
+            # Pre-collect input values (either connected or widget fallbacks)
+            input_values = []
             try:
-                composite_keys = list(getattr(self.module, 'composite_templates', {}).keys())
-            except Exception:
-                composite_keys = None
-            # print(f"Custom node execute ENTRY: name={kind.name} node.id={node.id.id} composite_templates_keys={composite_keys}")
-            
+                from py_editor.core import node_templates
+                template = node_templates.get_template(kind.name)
+                input_names = list(template.get('inputs', {}).keys()) if template else []
+            except:
+                input_names = []
+
+            if hasattr(kind, 'inputs') and kind.inputs:
+                for idx, input_id in enumerate(kind.inputs):
+                    val = None
+                    if input_id:
+                        val = self._get_value_with_pin_extraction(input_id, node.id.id, idx, ctx)
+                    elif idx < len(input_names):
+                        val = widget_vals.get(input_names[idx])
+                    input_values.append(val)
+
             # Handle LogicReference - execute external graph as function call
             if kind.name == 'Message':
-                return self._execute_message_node(node, kind, widget_vals, ctx)
+                return self._execute_message_node(node, kind, input_values, widget_vals, ctx)
             
             elif kind.name == 'Scene Reference':
                 # return just the handle (ID) as the single output
-                obj_id = widget_vals.get('object_id', '')
-                return obj_id
+                target = widget_vals.get('object_id', '')
+                scene_map = ctx.variables.get('__scene_objects__', {})
+                
+                # 1. Try direct ID match
+                if target in scene_map:
+                    return target
+                
+                # 2. Try Name match (case-insensitive)
+                for obj_id, obj in scene_map.items():
+                    if str(getattr(obj, 'name', '')).lower() == target.lower():
+                        return obj_id
+                
+                return target # Return as-is if no match found (might be assigned later)
 
+            elif kind.name == 'Get Camera Position':
+                pos = ctx.variables.get('camera_pos', (0.0, 0.0, 0.0))
+                return pos
+                
             # Handle InterfaceInput - get value from caller's input
             elif kind.name == 'InterfaceInput':
                 input_name = widget_vals.get('name', 'input1')
@@ -1396,6 +1288,12 @@ class IRBackend:
                     return None
                 ctx.triggered_nodes.add(node.id.id)
                 return ('exec_out',)
+            
+            if kind.name in ('Event_Tick', 'OnTick'):
+                # Fired every frame by SimulationController
+                dt = event_context.get('delta_time', 0.016)
+                # print(f"[INTERPRETER] Tick Event: dt={dt}")
+                return ('exec_out', dt)
             
             if kind.name == 'Custom Event':
                 triggered_event = event_context.get('triggered_event')
@@ -1733,6 +1631,192 @@ class IRBackend:
                         if x*x + y*y + z*z <= 1.0:
                             return (center[0] + x * d, center[1] + y * d, center[2] + z * d)
             
+            if kind.name == 'GetSelf':
+                return (ctx.variables.get('self'),)
+
+            if kind.name == 'GetParent':
+                # Use target pin if connected and not empty, otherwise default to self
+                target_id = input_values[0] if (len(input_values) > 0 and input_values[0]) else ctx.variables.get('self')
+                scene_map = ctx.variables.get('__scene_objects__')
+                if scene_map and target_id in scene_map:
+                    obj = scene_map[target_id]
+                    # SceneObject uses .parent_id for the hierarchy
+                    p_id = getattr(obj, 'parent_id', None)
+                    if not p_id:
+                        # Fallback for mock objects in tests that might use .parent attribute
+                        parent_obj = getattr(obj, 'parent', None)
+                        p_id = getattr(parent_obj, 'id', None) if parent_obj else None
+                    
+                    if p_id:
+                        return (p_id,)
+                return (None,)
+
+
+            if kind.name == 'Emitter':
+                preset_name = input_values[1] if len(input_values) > 1 else 'Custom'
+                spawn_pts   = input_values[2] if len(input_values) > 2 else None
+                target_obj  = input_values[3] if len(input_values) > 3 else None
+                rate        = input_values[4] if len(input_values) > 4 else None
+                life        = input_values[5] if len(input_values) > 5 else None
+                p_size      = input_values[6] if len(input_values) > 6 else None
+                grav        = input_values[7] if len(input_values) > 7 else None
+                s_min       = input_values[8] if len(input_values) > 8 else None
+                s_max       = input_values[9] if len(input_values) > 9 else None
+                cone        = input_values[10] if len(input_values) > 10 else None
+                
+                # FALLBACK to widget values if pins are unconnected
+                rate = rate if rate is not None else widget_vals.get('rate')
+                life = life if life is not None else widget_vals.get('life')
+                p_size = p_size if p_size is not None else widget_vals.get('size')
+                grav = grav if grav is not None else widget_vals.get('gravity')
+                s_min = s_min if s_min is not None else widget_vals.get('speed_min')
+                s_max = s_max if s_max is not None else widget_vals.get('speed_max')
+                cone = cone if cone is not None else widget_vals.get('cone')
+                preset_name = preset_name if preset_name is not None else widget_vals.get('preset')
+
+                # LOGGING (sampling once every 30 logic frames to avoid flooding)
+                ctx._em_log_counter = getattr(ctx, '_em_log_counter', 0) + 1
+                if ctx._em_log_counter % 30 == 0:
+                    pass # Log removed
+                # Resolve target (explicit pin or default to self)
+                owner_id = target_obj if target_obj else ctx.variables.get('self')
+                scene_map = ctx.variables.get('__scene_objects__')
+                
+                if scene_map and owner_id in scene_map:
+                    obj = scene_map[owner_id]
+                    try:
+                        from py_editor.core.particle_system import (
+                            get_particle_manager, ParticleSpec, spawn_from_list, PARTICLE_PRESETS
+                        )
+                        
+                        # 1. Base Spec (Start with defaults or Preset)
+                        base = PARTICLE_PRESETS.get(preset_name, {})
+                        
+                        # 2. Pin Overrides
+                        rate_val  = float(rate if rate is not None else base.get('rate', 200.0))
+                        life_val  = float(life if life is not None else base.get('life', 1.5))
+                        size_val  = float(p_size if p_size is not None else base.get('size_start', 0.5))
+                        
+                        forces = list(base.get('forces', []))
+                        g_scale = widget_vals.get('gravity_scale', 1.0)
+                        if grav is not None:
+                            # Replace or add gravity force
+                            forces = [f for f in forces if f.get('type') != 'gravity']
+                            forces.append({"type": "gravity", "magnitude": float(grav) * float(g_scale)})
+                        
+                        # MODULAR: Use passed-in points if available. No fallback to center.
+                        if spawn_pts and isinstance(spawn_pts, list) and len(spawn_pts) > 0:
+                            s_source = spawn_from_list(spawn_pts)
+                        else:
+                            # If no points, we don't spawn anything this tick
+                            return ('exec_out',)
+
+                        spec = ParticleSpec(
+                            rate=rate_val,
+                            max_count=8192 if preset_name == "Spray" else 2048,
+                            lifetime=life_val,
+                            size_start=size_val,
+                            size_end=base.get('size_end', size_val * 2.0 if preset_name == "Spray" else size_val * 1.5),
+                            color_start=base.get('color_start', [1, 1, 1, 0.8]),
+                            color_end=base.get('color_end', [1, 1, 1, 0.0]),
+                            forces=forces,
+                            velocity_dir=base.get('velocity_dir', [0, 1, 0]),
+                            velocity_cone=float(cone if cone is not None else base.get('velocity_cone', 0.8)),
+                            speed_min=float(s_min if s_min is not None else base.get('speed_min', 3.0)),
+                            speed_max=float(s_max if s_max is not None else base.get('speed_max', 6.0)),
+                            spawn_source=s_source
+                        )
+                        
+                        mgr = get_particle_manager()
+                        existing = mgr.emitters.get((obj.id, "primary"))
+                        if existing:
+                            # Update spec and ensure values are synced without resetting pool
+                            existing.spec = spec
+                            existing.pool.spec = spec
+                        else:
+                            mgr.register(obj, "primary", spec)
+                        
+                    except Exception as e:
+                        print(f"Emitter node error: {e}")
+                return ('exec_out',)
+
+            if kind.name == 'Burst':
+                target_obj    = input_values[1] if len(input_values) > 1 else None
+                emitter_name  = input_values[2] if len(input_values) > 2 else widget_vals.get('emitter_name', 'primary')
+                count         = input_values[3] if len(input_values) > 3 else widget_vals.get('count', 80)
+                owner_id = target_obj if target_obj else ctx.variables.get('self')
+                scene_map = ctx.variables.get('__scene_objects__')
+                if scene_map and owner_id in scene_map:
+                    obj = scene_map[owner_id]
+                    try:
+                        from py_editor.core.particle_system import get_particle_manager
+                        em = get_particle_manager().get(obj, emitter_name)
+                        if em:
+                            em.burst(int(count or 0))
+                    except Exception as e:
+                        print(f"Burst node error: {e}")
+                return ('exec_out',)
+
+            if kind.name == 'OceanImpact':
+                weather_obj = input_values[1] if len(input_values) > 1 else None
+                ocean_obj   = input_values[2] if len(input_values) > 2 else None
+                mult        = input_values[3] if len(input_values) > 3 else widget_vals.get('multiplier', 1.0)
+                
+                scene_map = ctx.variables.get('__scene_objects__')
+                if scene_map:
+                    # Resolve IDs if passed as strings/references
+                    if isinstance(weather_obj, str) and weather_obj in scene_map:
+                        weather_obj = scene_map[weather_obj]
+                    if isinstance(ocean_obj, str) and ocean_obj in scene_map:
+                        ocean_obj = scene_map[ocean_obj]
+                    
+                    if weather_obj and ocean_obj:
+                        intensity = getattr(weather_obj, '_current_intensity', 0.0)
+                        # Sync it into the ocean's custom property for the shader
+                        setattr(ocean_obj, 'u_rain_intensity', intensity * float(mult))
+                
+                return ('exec_out',)
+
+            if kind.name == 'ForceField':
+                target_obj   = input_values[1] if len(input_values) > 1 else None
+                emitter_name = input_values[2] if len(input_values) > 2 else widget_vals.get('emitter_name', 'primary')
+                kind_str     = input_values[3] if len(input_values) > 3 else widget_vals.get('kind', 'turbulence')
+                strength     = input_values[4] if len(input_values) > 4 else widget_vals.get('strength', 2.0)
+                frequency    = input_values[5] if len(input_values) > 5 else widget_vals.get('frequency', 0.3)
+                center       = input_values[6] if len(input_values) > 6 else [0.0, 0.0, 0.0]
+                owner_id = target_obj if target_obj else ctx.variables.get('self')
+                scene_map = ctx.variables.get('__scene_objects__')
+                if scene_map and owner_id in scene_map:
+                    obj = scene_map[owner_id]
+                    try:
+                        from py_editor.core.particle_system import get_particle_manager
+                        em = get_particle_manager().get(obj, emitter_name)
+                        if em:
+                            force = {"type": str(kind_str), "strength": float(strength),
+                                     "frequency": float(frequency), "center": list(center or [0, 0, 0])}
+                            if kind_str == 'wind':
+                                force["vector"] = [float(strength), 0.0, 0.0]
+                            # Replace any existing force of the same type
+                            em.spec.forces = [f for f in em.spec.forces if f.get('type') != kind_str] + [force]
+                    except Exception as e:
+                        print(f"ForceField node error: {e}")
+                return ('exec_out',)
+
+            if kind.name == 'WeatherControl':
+                weather_obj = input_values[1] if len(input_values) > 1 else None
+                wtype       = input_values[2] if len(input_values) > 2 else widget_vals.get('type', 'Auto')
+                intensity   = input_values[3] if len(input_values) > 3 else widget_vals.get('intensity', 0.8)
+                wx          = input_values[4] if len(input_values) > 4 else widget_vals.get('wind_x', 8.0)
+                wz          = input_values[5] if len(input_values) > 5 else widget_vals.get('wind_z', 0.0)
+                scene_map = ctx.variables.get('__scene_objects__')
+                owner_id = weather_obj if weather_obj else ctx.variables.get('self')
+                if scene_map and owner_id in scene_map:
+                    obj = scene_map[owner_id]
+                    obj.weather_type_override = str(wtype)
+                    obj.weather_intensity_override = float(intensity)
+                    obj.weather_wind = [float(wx), 0.0, float(wz)]
+                return ('exec_out',)
+
             # Check if this is a composite node
             composite_templates = getattr(self.module, 'composite_templates', {})
             template = composite_templates.get(node.id.id)
@@ -1905,18 +1989,7 @@ class IRBackend:
                 inputs_def = template.get('inputs', {}) if template else {}
                 input_names = list(inputs_def.keys())
 
-                # Collect input values (either connected values or widget values)
-                input_values = []
-                for idx, input_id in enumerate(kind.inputs):
-                    if input_id:
-                        value = self._get_value_with_pin_extraction(input_id, node.id.id, idx, ctx)
-                    elif idx < len(input_names):
-                        # Use widget value if available
-                        pin_name = input_names[idx]
-                        value = widget_vals.get(pin_name)
-                    else:
-                        value = None
-                    input_values.append(value)
+                # input_values are already pre-collected at the start of the Custom block.
 
                 # print(f"Custom node '{kind.name}' inputs_def={input_names} input_values={input_values} widget_vals={widget_vals}")
 
@@ -2167,8 +2240,140 @@ class IRBackend:
             # print(f"GetVariable: {var_name} -> {value}")
             return value
         
-        return None
+    def _execute_message_node(self, node, kind, input_values, widget_vals, ctx):
+        """Execute a Message node, routing data requests or event triggers."""
+        import json
+        import traceback
+        from pathlib import Path as PathLib
+        
+        # Custom input collection: [exec_in, target, payload]
+        # target is at index 1, payload at 2
+        target_id  = input_values[1] if len(input_values) > 1 else None
+        payload    = input_values[2] if len(input_values) > 2 else None
+        event_name = widget_vals.get('event', 'MyEvent')
+        
+        # --- PATH RESOLUTION FOR GRAPH REFERENCES ---
+        # If target_id is a dict with graphPath (Reference handle) or looks like a path string
+        graph_path = None
+        if target_id is None:
+            # Fallback to current graph if no target
+            graph_path = ctx.variables.get('__current_graph_path__')
+        elif isinstance(target_id, dict) and 'graphPath' in target_id:
+            graph_path = target_id['graphPath']
+        elif isinstance(target_id, str) and (target_id.endswith('.logic') or target_id.endswith('.json')):
+            graph_path = target_id
+            
+        if graph_path:
+            current_graph_path = getattr(self.module, 'source_path', ctx.variables.get('__current_graph_path__', ''))
+            resolved_path = self._resolve_graph_path(graph_path, current_graph_path)
+            
+            if resolved_path and PathLib(resolved_path).exists():
+                path = PathLib(resolved_path)
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        subgraph_data = json.load(f)
+                    
+                    sub_ctx = ExecutionContext()
+                    sub_ctx.variables = dict(ctx.variables)
+                    
+                    # Merge target graph's own variables
+                    target_vars = subgraph_data.get('variables', {})
+                    for var_name, var_info in target_vars.items():
+                        if isinstance(var_info, dict):
+                            sub_ctx.variables[var_name] = var_info.get('value')
+                        else:
+                            sub_ctx.variables[var_name] = var_info
+                    
+                    sub_ctx.variables['__current_graph_path__'] = str(path)
+                    sub_ctx.variables['__event__'] = event_name
+                    sub_ctx.variables['__payload__'] = payload
+                    sub_ctx.prints = ctx.prints
+                    sub_ctx.logger_callback = ctx.logger_callback
+                    
+                    sub_backend = IRBackend()
+                    try:
+                        from py_editor.core import node_templates
+                        templates = node_templates.get_all_templates()
+                    except:
+                        templates = {}
+                        
+                    sub_ir = sub_backend.canvas_to_ir(subgraph_data, templates)
+                    sub_ir.source_path = str(path)
+                    sub_ir.event_context = {
+                        'triggered_event': event_name,
+                        'payload': payload
+                    }
+                    
+                    results = sub_backend.execute_ir(sub_ir, ctx=sub_ctx)
+                    
+                    # Extract Result
+                    res_val = None
+                    if 'return' in results and results['return'] != '__RETURN_DISABLED__':
+                        res_val = results['return']
+                    else:
+                        outputs = getattr(sub_ir, 'interface_outputs', {})
+                        if len(outputs) == 1:
+                            res_val = list(outputs.values())[0]
+                        elif outputs:
+                            res_val = outputs
+                    
+                    # Use 'exec' as name to match Message.json template output pin
+                    return ('exec', res_val)
+                except Exception as e:
+                    print(f"Message Error executing subgraph {path.name}: {e}")
+                    # traceback.print_exc()
 
+        # --- SCENE OBJECT RESOLUTION ---
+        scene_map = ctx.variables.get('__scene_objects__')
+        if scene_map and target_id in scene_map:
+            obj = scene_map[target_id]
+            
+            # --- MODULAR RESPONDERS ---
+            if event_name == "GetFoamPoints":
+                try:
+                    from py_editor.core.particle_system import get_ocean_foam_points
+                    points = get_ocean_foam_points(obj, count=512, camera_pos=ctx.variables.get('camera_pos'))
+                    return ('exec', points)
+                except Exception:
+                    return ('exec', [])
+            
+            elif event_name == "AddRipple":
+                try:
+                    from py_editor.ui.procedural_ocean import add_ocean_ripple
+                    add_ocean_ripple(obj, payload, strength=1.0)
+                    return ('exec', None)
+                except Exception:
+                    return ('exec', None)
+            
+            elif event_name == "GetWaveHeight":
+                ocean_y = float(getattr(obj, 'landscape_ocean_level', 0.0))
+                return ('exec', ocean_y)
+            
+            # Generic Custom Event Triggering on Scene Object
+            res = self._trigger_custom_event_on_object(target_id, event_name, payload, ctx)
+            return ('exec', res)
+            
+        return ('exec', None)
+
+    def _trigger_custom_event_on_object(self, obj_id, event_name, payload, ctx):
+        """Triggers a logic event on a specific scene object."""
+        scene_map = ctx.variables.get('__scene_objects__')
+        if not scene_map or obj_id not in scene_map:
+            return None
+            
+        obj = scene_map[obj_id]
+        logic_list = getattr(obj, 'logic_list', [])
+        
+        last_result = None
+        for logic_path in logic_list:
+            # Execute each logic graph with the event
+            res = self._execute_message_node(None, None, [None, logic_path, payload], {'event': event_name}, ctx)
+            if isinstance(res, tuple) and len(res) > 1:
+                last_result = res[1]
+            else:
+                last_result = res
+        
+        return last_result
 
 def execute_canvas_graph(canvas_graph: dict, node_templates: dict, canvas_breakpoints: set = None, graph_variables: dict = None, source_path: str = None) -> Dict[str, Any]:
     """

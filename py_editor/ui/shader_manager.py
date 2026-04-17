@@ -238,6 +238,7 @@ def create_ocean_shader_fft():
     uniform float u_cascade1_weight;
     uniform float u_cascade2_weight;
     uniform float time;
+    uniform vec3  cam_pos;
 
     // Gerstner hero waves (up to 3 artist-controlled swell waves)
     uniform int   u_hero_count;
@@ -265,14 +266,27 @@ def create_ocean_shader_fft():
     void main() {
         vec3 world_p = (gl_Vertex.xyz * grid_chunk_size) + grid_origin;
 
-        // Cascade UV sets (different tiling scales derived from cascade-0 UV)
+        // Cascade UV sets. Each cascade is rotated so their tiling axes don't align —
+        // aligned tiling at cascade-2's ~50m period was showing as horizontal "strip" bands.
         v_uv     = (world_p.xz / 1000.0) * u_wave_scale;
-        vec2 uv1 = v_uv * 5.0;   // /200 equivalent
-        vec2 uv2 = v_uv * 20.0;  // /50  equivalent
+        // cascade-1: rotate ~37°, cascade-2: rotate ~-61°
+        mat2 rot1 = mat2( 0.7986, 0.6018, -0.6018, 0.7986);
+        mat2 rot2 = mat2( 0.4848,-0.8746,  0.8746, 0.4848);
+        vec2 uv1 = (rot1 * v_uv) * 5.0;   // /200 equivalent
+        vec2 uv2 = (rot2 * v_uv) * 20.0;  // /50  equivalent
 
         // --- Cascade displacements ---
-        // Large cascade: full XZ (drives main swell shape)
-        vec3 disp0 = texture(u_displacement_map, v_uv).rgb;
+        // Large cascade: full XZ (drives main swell shape).
+        // The mesh samples at ~7.8m spacing while the cascade-0 texture has 3.9m cells —
+        // that's a 2× Nyquist violation, which produces visible aliased "ribbon strip"
+        // artifacts that scale with intensity. A 5-tap box filter low-passes the texture
+        // to stay below the mesh Nyquist limit.
+        float td = 1.0 / 256.0;  // one texel in cascade-0 UV space
+        vec3 disp0 = texture(u_displacement_map, v_uv).rgb * 0.5
+                   + texture(u_displacement_map, v_uv + vec2( td, 0.0)).rgb * 0.125
+                   + texture(u_displacement_map, v_uv + vec2(-td, 0.0)).rgb * 0.125
+                   + texture(u_displacement_map, v_uv + vec2(0.0,  td)).rgb * 0.125
+                   + texture(u_displacement_map, v_uv + vec2(0.0, -td)).rgb * 0.125;
         vec3 disp1 = texture(u_displacement_c1,  uv1).rgb * u_cascade1_weight;
         vec3 disp2 = texture(u_displacement_c2,  uv2).rgb * u_cascade2_weight;
 
@@ -301,12 +315,13 @@ def create_ocean_shader_fft():
         displaced_v.xz  += hero.xz * inv_chunk;
         displaced_v.y   += fft_disp.y + hero.y;
 
-        // Clamp XZ so vertices can never cross their neighbours (prevents tearing)
-        // Max safe displacement ≈ 55% of vertex spacing (2.0/255 units in local space)
+        // Soft-limit XZ so vertices can never cross their neighbours (prevents tearing).
+        // Hard clamp() makes adjacent saturated verts collapse to identical positions, which
+        // shows up as flat ribbon/strip artifacts. tanh() gives smooth saturation instead.
         float max_disp = (2.0 / 255.0) * 0.55;
-        displaced_v.xz  = clamp(displaced_v.xz,
-                                 gl_Vertex.xz - max_disp,
-                                 gl_Vertex.xz + max_disp);
+        vec2 d_xz      = displaced_v.xz - gl_Vertex.xz;
+        d_xz           = max_disp * tanh(d_xz / max(max_disp, 1e-6));
+        displaced_v.xz = gl_Vertex.xz + d_xz;
 
         vec4 eye_pos = gl_ModelViewMatrix * vec4(displaced_v, 1.0);
         v_view_dir   = normalize(-eye_pos.xyz);
@@ -332,6 +347,9 @@ def create_ocean_shader_fft():
     uniform sampler2D u_jacobian_map;
     uniform sampler2D u_jacobian_c1;
     uniform sampler2D u_jacobian_c2;
+    uniform sampler2D u_velocity_map;
+    uniform sampler2D u_foam_advected;
+    uniform sampler2D u_ripple_map;
     uniform float u_wave_scale;
     uniform float u_cascade1_weight;
     uniform float u_cascade2_weight;
@@ -344,12 +362,17 @@ def create_ocean_shader_fft():
     uniform float u_peak_brightness;
     uniform float u_sss_strength;
 
+    // Rain splash / ripple controls
+    uniform float u_rain_intensity;       // 0..1 (from Weather primitive)
+    uniform float u_rain_time;            // seconds (drives ripple animation)
+
     // Foam layer controls
     uniform float u_foam_jacobian;        // jacobian break foam intensity
     uniform float u_foam_whitecap;        // height whitecap foam intensity
     uniform float u_foam_whitecap_thresh; // height threshold for whitecaps (0-1)
     uniform float u_foam_streak;          // streak trail intensity
     uniform float u_foam_streak_speed;    // how fast streak trails move
+    uniform float u_flow_scale;           // scale for converting displacement -> flow UV advection
     uniform float u_foam_sharpness;       // jacobian foam sharpness exponent
     uniform float u_detail_strength;      // 4th-pass micro-detail normal weight
 
@@ -358,10 +381,34 @@ def create_ocean_shader_fft():
     in vec3  v_view_dir;
     in vec2  v_uv;
 
+    // --- Foam Utilities ---
+    vec2 hash2(vec2 p) {
+        return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453);
+    }
+    
+    float bubble_noise(vec2 p, float t) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        float dist = 1.0;
+        for(int y=-1; y<=1; y++) {
+            for(int x=-1; x<=1; x++) {
+                vec2 g = vec2(float(x), float(y));
+                vec2 o = hash2(i + g);
+                o = 0.5 + 0.5 * sin(t + 6.28 * o);
+                vec2 r = g + o - f;
+                dist = min(dist, dot(r, r));
+            }
+        }
+        return sqrt(dist);
+    }
+
     void main() {
-        // Cascade UVs derived from cascade-0 UV
-        vec2 uv1 = v_uv * 5.0;
-        vec2 uv2 = v_uv * 20.0;
+        // Cascade UVs derived from cascade-0 UV — must match the rotations used in the
+        // vertex shader so per-pixel normals line up with the displaced geometry.
+        mat2 rot1 = mat2( 0.7986, 0.6018, -0.6018, 0.7986);
+        mat2 rot2 = mat2( 0.4848,-0.8746,  0.8746, 0.4848);
+        vec2 uv1 = (rot1 * v_uv) * 5.0;
+        vec2 uv2 = (rot2 * v_uv) * 20.0;
         vec2 uv3 = uv2 * 4.0;   // 4th micro-detail pass (×80 total scale)
 
         // --- Multi-cascade per-pixel normals ---
@@ -389,13 +436,71 @@ def create_ocean_shader_fft():
         float hD3 = texture(u_displacement_c2, uv3 - vec2(0.0, d1)).y * u_cascade2_weight * u_detail_strength;
         float hU3 = texture(u_displacement_c2, uv3 + vec2(0.0, d1)).y * u_cascade2_weight * u_detail_strength;
 
-        // --- Normals: 4-level cascade, Y=0.06 middle ground between smooth and crisp ---
+        // --- Normals: 4-level cascade. Y=0.12 (was 0.06) — the very-low Y was amplifying
+        // small finite-difference errors into harsh dark/bright strips at glancing angles.
         vec3 normal = normalize(vec3(
             (hL - hR) + (hL1 - hR1) * 4.0 + (hL2 - hR2) * 12.0 + (hL3 - hR3) * 23.0,
-            0.06,
+            0.12,
             (hD - hU) + (hD1 - hU1) * 4.0 + (hD2 - hU2) * 12.0 + (hD3 - hU3) * 23.0
         ));
         vec3 view_dir = normalize(v_view_dir);
+        
+        // --- Modular Ripples (Impacts from logic) ---
+        float dyn_rip = texture(u_ripple_map, v_uv).r;
+        if (dyn_rip > 0.005) {
+            // Sample neighbors for normal perturbation
+            float d2 = 0.5/128.0;
+            float rL = texture(u_ripple_map, v_uv - vec2(d2, 0.0)).r;
+            float rR = texture(u_ripple_map, v_uv + vec2(d2, 0.0)).r;
+            float rD = texture(u_ripple_map, v_uv - vec2(0.0, d2)).r;
+            float rU = texture(u_ripple_map, v_uv + vec2(0.0, d2)).r;
+            
+            // Sharpened normal for clearer ripple highlights
+            vec3 ripple_n = normalize(vec3(rL - rR, 0.05, rD - rU));
+            // Mix the normal using a safe lerp-like approach
+            normal = normalize(mix(normal, ripple_n, dyn_rip * 0.7));
+        }
+
+        // --- Rain Ripples (procedural, driven by u_rain_intensity) ----
+        // Sum a few scales of expanding ring cells. Each cell spawns a ripple at a
+        // random phase; the ring radius grows with phase and fades as it ages.
+        float _splash_foam = dyn_rip * 0.5;
+        if (u_rain_intensity > 0.001) {
+            vec2 ruv = v_uv * 180.0;
+            float rain_h = 0.0;
+            float rain_dx = 0.0;
+            float rain_dz = 0.0;
+            for (int i = 0; i < 3; i++) {
+                vec2 cell = floor(ruv);
+                vec2 f    = fract(ruv) - 0.5;
+                // Hash per-cell seed & random jitter inside the cell
+                float s  = fract(sin(dot(cell, vec2(127.1, 311.7)) + float(i)*7.3) * 43758.5453);
+                vec2 jitter = vec2(
+                    fract(sin(s * 91.13) * 47453.0) - 0.5,
+                    fract(sin(s * 17.77) * 51331.0) - 0.5
+                ) * 0.6;
+                vec2 p = f - jitter;
+                float phase = fract(u_rain_time * 1.6 + s);
+                float d = length(p);
+                // Gate on rain intensity — sparse rings at low intensity
+                float density_gate = step(1.0 - clamp(u_rain_intensity, 0.0, 1.0), s);
+                float ring_r = phase * 0.45;
+                float ring = exp(-pow((d - ring_r) * 22.0, 2.0)) * (1.0 - phase) * density_gate;
+                rain_h += ring;
+                // finite-diff along axes for normal perturbation
+                float pl = length(p - vec2(0.02, 0.0));
+                float pr = length(p + vec2(0.02, 0.0));
+                float pd = length(p - vec2(0.0, 0.02));
+                float pu = length(p + vec2(0.0, 0.02));
+                rain_dx += (exp(-pow((pl - ring_r)*22.0,2.0)) - exp(-pow((pr - ring_r)*22.0,2.0))) * (1.0 - phase) * density_gate;
+                rain_dz += (exp(-pow((pd - ring_r)*22.0,2.0)) - exp(-pow((pu - ring_r)*22.0,2.0))) * (1.0 - phase) * density_gate;
+                ruv = ruv * 1.7 + 5.3;
+            }
+            float amp = clamp(u_rain_intensity, 0.0, 2.0);
+            vec3 rain_n = normalize(vec3(rain_dx, 0.06, rain_dz));
+            normal = normalize(mix(normal, rain_n, clamp(abs(rain_h) * amp * 1.2, 0.0, 0.75)));
+            _splash_foam += clamp(rain_h * amp, 0.0, 1.0) * 0.35;
+        }
 
         // --- Day/Night Lighting ---
         vec3  sun_dir   = normalize(vec3(sin(time_of_day * 6.28), cos(time_of_day * 6.28), 0.2));
@@ -439,29 +544,61 @@ def create_ocean_shader_fft():
         float churn = sin(v_pos.x * 0.018 + time * 0.4) * cos(v_pos.z * 0.014 - time * 0.3);
         crest_foam  *= smoothstep(-0.2, 0.6, churn);
 
-        // 3. Animated streak foam — trails dragging behind crests along wind direction
-        vec2 wind_dir  = normalize(vec2(0.83, 0.56));
-        float s_speed  = u_foam_streak_speed * 0.04;  // slider [0..3] → [0..0.12]
-        float streak0  = clamp(1.0 - texture(u_jacobian_map, v_uv - wind_dir * time * s_speed).r,            0.0, 1.0);
-        float streak1  = clamp(1.0 - texture(u_jacobian_map, v_uv - wind_dir * time * s_speed * 1.7 + 0.13).r, 0.0, 1.0);
-        float streaks  = pow(streak0, 6.0) * 0.5 + pow(streak1, 8.0) * 0.3;
+        // 3. Animated streak foam — panned using flowmap technique based on velocity
+        float s_speed  = u_foam_streak_speed * 0.1;
+        vec2 local_flow = texture(u_velocity_map, v_uv).rg * u_flow_scale;
+        
+        float phase0 = fract(time * 0.5);
+        float phase1 = fract(time * 0.5 + 0.5);
+        float f_weight = abs(0.5 - phase0) * 2.0;
 
-        // 4. Fine bubble detail (stays driven by jacobian)
-        float bubbles = sin(v_pos.x * 4.0 + time) * cos(v_pos.z * 4.0 - time * 0.5) * 0.5 + 0.5;
-        bubbles      *= sin(v_pos.x * 20.0 - time * 2.0) * 0.3 + 0.7;
-        bubbles       = smoothstep(0.5, 0.9, bubbles * jac_mask);
+        vec2 uv_adv0 = v_uv - local_flow * phase0 * s_speed;
+        vec2 uv_adv1 = v_uv - local_flow * phase1 * s_speed;
+        
+        float streak0_a = clamp(1.0 - texture(u_jacobian_map, uv_adv0).r, 0.0, 1.0);
+        float streak0_b = clamp(1.0 - texture(u_jacobian_map, uv_adv0 * 1.7 + 0.13).r, 0.0, 1.0);
+        float streak1_a = clamp(1.0 - texture(u_jacobian_map, uv_adv1).r, 0.0, 1.0);
+        float streak1_b = clamp(1.0 - texture(u_jacobian_map, uv_adv1 * 1.7 + 0.13).r, 0.0, 1.0);
+        
+        float streaks = mix(pow(streak0_a, 8.0) * 0.30 + pow(streak0_b, 10.0) * 0.18,
+                            pow(streak1_a, 8.0) * 0.30 + pow(streak1_b, 10.0) * 0.18,
+                            f_weight);
+
+        // 4. Cellular Bubble Detail + Persistent Advected Foam Buffer (Flowmap)
+        // Secondary GPU-side flowmap advection on top of the CPU-side persistent advection.
+        float foam_p0 = fract(time * 0.4);
+        float foam_p1 = fract(time * 0.4 + 0.5);
+        float foam_w  = abs(0.5 - foam_p0) * 2.0;
+        
+        float foam_samp0 = texture(u_foam_advected, v_uv - local_flow * foam_p0).r;
+        float foam_samp1 = texture(u_foam_advected, v_uv - local_flow * foam_p1).r;
+        float foam_adv   = mix(foam_samp0, foam_samp1, foam_w);
+        
+        // Tighter tiling for bubbles, also panned slightly by flow
+        vec2 uv_bubbles = v_pos.xz * 35.0 - local_flow * time * 50.0;
+        float b_dist = bubble_noise(uv_bubbles, time * 0.6);
+        float bubble_rims = smoothstep(0.04, 0.12, b_dist); // The "walls" (1.0 = wall)
+        float bubbles = (1.0 - smoothstep(0.0, 0.08, b_dist)) * jac_mask; // Interior seeds
 
         // Per-layer foam mask driven by individual sliders
         float jac_sharp = max(u_foam_sharpness, 0.5);
         float foam_mask = clamp(
             pow(jac_mask, jac_sharp)  * foam_amount * u_foam_jacobian  * 4.5 +
-            crest_foam                * foam_amount * u_foam_whitecap   * 3.0 +
-            streaks                   * foam_amount * u_foam_streak      * 1.5 +
-            bubbles                   * foam_amount * u_foam_jacobian   * 1.5,
+            crest_foam                * foam_amount * u_foam_whitecap   * 3.5 +
+            streaks                   * foam_amount * u_foam_streak      * 2.5 +
+            bubbles                   * foam_amount * u_foam_jacobian    * 1.5 +
+            foam_adv                  * foam_amount * 2.0,
             0.0, 1.0);
+            
+        // Reduce solidness: bubble centers are more transparent than rims
+        foam_mask *= mix(0.4, 1.0, bubble_rims);
 
-        // Foam is always bright white (SoT foam is vivid, not grey)
-        vec3 foam_lit = vec3(0.96, 0.98, 0.97) * mix(0.80, 1.0, diffuse);
+        // Foam color is modulated by bubble rims — interiors are more transparent/teal
+        // This stops it from looking like a "white layer"
+        vec3 foam_base = vec3(0.96, 0.98, 0.97);
+        vec3 bubble_color = mix(vec3(0.02, 0.38, 0.35), foam_base, bubble_rims); 
+        vec3 foam_lit = bubble_color * mix(0.80, 1.0, diffuse);
+        
         water_rgb = mix(water_rgb, foam_lit, foam_mask);
 
         // --- SoT Sub-Surface Scattering ---
@@ -496,8 +633,13 @@ def create_ocean_shader_fft():
         fresnel = max(fresnel, pow(1.0 - NdotV, 1.2) * 0.06);
 
         // --- Sky Reflection Tint ---
-        float day_t   = clamp(1.0 - abs(sin(time_of_day * 3.14159)), 0.0, 1.0);
-        vec3  sky_ref = mix(u_reflection_tint, vec3(1.0, 0.60, 0.28), day_t);
+        // The orange sunrise/sunset reflection was bleeding into all glancing-angle
+        // reflections at any non-noon time-of-day. Fresnel is strongest at the horizon
+        // and on wave back-slopes, so that orange showed as brown "claws" and "plates"
+        // wrapping every wave. Narrow the orange band so it only kicks in within ~10%
+        // of true sunrise/sunset (time_of_day ~0/1) and stays subtle even then.
+        float sunset_t = pow(clamp(1.0 - abs(sin(time_of_day * 3.14159)) * 1.4, 0.0, 1.0), 2.0);
+        vec3  sky_ref = mix(u_reflection_tint, vec3(1.0, 0.60, 0.28), sunset_t * 0.5);
         // Night sky: middle ground blue-black reflection
         sky_ref = mix(vec3(0.04, 0.075, 0.16), sky_ref, day_ratio);
         water_rgb = mix(water_rgb, sky_ref, fresnel);
@@ -600,7 +742,10 @@ def create_ocean_shader_gerstner():
         base_water *= day_ratio; // Darken at night
         
         float fresnel = pow(1.0 - ndotv, 4.0);
-        vec3 sky_ref = mix(vec3(0.7, 0.8, 1.0), vec3(1.0, 0.5, 0.2), clamp(1.0 - day_ratio, 0.0, 1.0));
+        // Same fix as the FFT shader — narrow the orange contribution so dawn/dusk
+        // doesn't paint every fresnel reflection brown.
+        float sunset_t = pow(clamp(1.0 - abs(sin(time_of_day * 3.14159)) * 1.4, 0.0, 1.0), 2.0);
+        vec3 sky_ref = mix(vec3(0.7, 0.8, 1.0), vec3(1.0, 0.5, 0.2), sunset_t * 0.5);
         sky_ref *= day_ratio;
         
         vec3 rgb = mix(base_water, sky_ref, fresnel*0.5);

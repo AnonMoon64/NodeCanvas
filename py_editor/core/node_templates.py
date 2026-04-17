@@ -12,7 +12,9 @@ COMPOSITE_DIR = NODES_DIR / "composite"
 GRAPHS_DIR = NODES_DIR / "graphs"
 PLUGINS_DIR = ROOT / "plugins"  # Plugin directory for user extensions
 
-for d in (NODES_DIR, BASE_DIR, CORE_DIR, ANIMATION_DIR, COMPOSITE_DIR, GRAPHS_DIR, PLUGINS_DIR):
+PARTICLES_DIR = NODES_DIR / "particles"
+
+for d in (NODES_DIR, BASE_DIR, CORE_DIR, ANIMATION_DIR, COMPOSITE_DIR, GRAPHS_DIR, PLUGINS_DIR, PARTICLES_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # in-memory registry: name -> data (includes 'type' key and '__path')
@@ -197,6 +199,7 @@ def load_templates():
     _load_from_dir(CORE_DIR, 'core')  # Load core system nodes first
     _load_from_dir(ANIMATION_DIR, 'animation')  # Load animation nodes
     _load_from_dir(BASE_DIR, 'base')
+    _load_from_dir(PARTICLES_DIR, 'particles')
     _load_from_dir(COMPOSITE_DIR, 'composite')
     
     # Load plugins from plugins directory (both .json packages and .ncpkg archives)

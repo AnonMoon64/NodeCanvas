@@ -18,7 +18,7 @@ class PrimitiveTree(QTreeWidget):
         categories = {
             "Shapes": ["Cube", "Sphere", "Cylinder", "Plane"],
             "Environment": ["Landscape", "Ocean", "Ocean World", "Cloud Layer",
-                            "Atmosphere", "Universe", "Voxel World"],
+                            "Atmosphere", "Weather", "Universe", "Voxel World"],
             "Lights": ["Point Light", "Directional Light"],
             "Camera": ["Camera"]
         }

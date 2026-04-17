@@ -33,7 +33,7 @@ from py_editor.core import load_templates
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("NodeCanvas — Procedural Engine")
+        self.setWindowTitle("Pulse Engine — Procedural Systems")
         self.resize(1600, 1000)
         self.project_root = str(Path.cwd())
         
@@ -99,19 +99,43 @@ class MainWindow(QMainWindow):
         self.toolbar.addAction(settings_act)
 
     def _on_play_standalone(self):
-        """Save current state to temp and launch standalone runtime as a separate process."""
-        data = self.scene_editor.export_scene_data()
-        temp_path = Path.cwd() / "temp_play.scene"
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4)
-        
-        import subprocess
-        python_exe = sys.executable
-        standalone_script = Path(__file__).parent / "runtime" / "standalone.py"
-        
-        print(f"[MAIN] Launching standalone process: {python_exe} {standalone_script}")
-        subprocess.Popen([python_exe, str(standalone_script), str(temp_path)], 
-                         creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+        """Export current scene and launch standalone runtime as a separate process."""
+        try:
+            # 1. Export scene data to a temporary file in the project root
+            scene_data = {
+                "objects": [obj.to_dict() for obj in self.scene_editor.viewport.scene_objects],
+                "camera_3d": {
+                    "pos": self.scene_editor.viewport._cam3d.pos,
+                    "yaw": self.scene_editor.viewport._cam3d.yaw,
+                    "pitch": self.scene_editor.viewport._cam3d.pitch
+                }
+            }
+            temp_path = os.path.join(self.project_root, "temp_play.scene")
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(scene_data, f, indent=4)
+            
+            # 2. Identify the standalone script
+            standalone_script = os.path.join(self.project_root, "py_editor", "runtime", "standalone.py")
+            if not os.path.exists(standalone_script):
+                QMessageBox.critical(self, "Error", f"Standalone script not found at: {standalone_script}")
+                return
+
+            # 3. Launch as a separate process with its own console and PYTHONPATH
+            env = os.environ.copy()
+            env["PYTHONPATH"] = self.project_root
+            
+            # Use sys.executable to ensure we use the same Python environment
+            subprocess.Popen(
+                [sys.executable, standalone_script, temp_path],
+                cwd=self.project_root,
+                env=env,
+                # creationflags ensures it pops up in a separate process window on Windows
+                creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
+            )
+            print(f"[MAIN] Launched standalone window from {temp_path}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to launch standalone: {e}")
         
     def _save_project(self):
         # Save logic or scene depending on tab
@@ -241,6 +265,9 @@ class MainWindow(QMainWindow):
         self.hierarchy.outliner.object_renamed.connect(self._on_object_renamed)
         self.hierarchy.outliner.object_duplicated.connect(self._duplicate_object)
         
+        # Connect viewport selection to the same handler
+        self.scene_editor.object_selected.connect(self._on_object_selected)
+        
         # Connect variables to logic updates
         self.logic_editor._scene.changed.connect(self.variables.refresh)
         self.logic_editor._scene.selectionChanged.connect(self._on_node_selection_changed)
@@ -261,10 +288,17 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_selection_updating') and self._selection_updating: return
         self._selection_updating = True
         
+        # Update selection state on all objects
+        for obj in self.scene_editor.viewport.scene_objects:
+            obj.selected = (obj in objs)
+            
         self.properties.set_objects(objs)
         # Show or hide the properties dock depending on selection
         try:
-            self.properties_dock.setVisible(True if objs else False)
+            show = len(objs) > 0
+            self.properties_dock.setVisible(show)
+            if show:
+                 self.properties_dock.raise_()
         except Exception:
             pass
         self.hierarchy.outliner.set_objects(self.scene_editor.viewport.scene_objects)
@@ -297,45 +331,6 @@ class MainWindow(QMainWindow):
 
     def _on_explorer_file_opened(self, path, type):
         self._load_file_path(path)
-
-    def _on_play_standalone(self):
-        """Export current scene and launch standalone runtime."""
-        try:
-            # 1. Export scene to temp file
-            scene_data = {
-                "objects": [obj.to_dict() for obj in self.scene_editor.viewport.scene_objects],
-                "camera_3d": {
-                    "pos": self.scene_editor.viewport._cam3d.pos,
-                    "yaw": self.scene_editor.viewport._cam3d.yaw,
-                    "pitch": self.scene_editor.viewport._cam3d.pitch
-                }
-            }
-            
-            # Use project root for temp file
-            temp_path = os.path.join(self.project_root, "temp_play.scene")
-            with open(temp_path, 'w') as f:
-                json.dump(scene_data, f, indent=4)
-            
-            # 2. Launch Standalone
-            # We assume py_editor/runtime/standalone.py exists
-            standalone_script = os.path.join(self.project_root, "py_editor", "runtime", "standalone.py")
-            if not os.path.exists(standalone_script):
-                QMessageBox.critical(self, "Error", f"Standalone script not found at: {standalone_script}")
-                return
-            
-            # Launch as separate process with correct environment
-            env = os.environ.copy()
-            env["PYTHONPATH"] = self.project_root
-            
-            subprocess.Popen(
-                [sys.executable, standalone_script, temp_path],
-                cwd=self.project_root,
-                env=env
-            )
-            print(f"[MAIN] Launched standalone with {temp_path}")
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to launch standalone: {e}")
 
     def on_tab_changed(self, index):
         if index == 1: # Viewport

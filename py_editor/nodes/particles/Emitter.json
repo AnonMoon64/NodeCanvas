@@ -1,0 +1,33 @@
+{
+  "type": "particles",
+  "name": "Emitter",
+  "category": "Particles",
+  "inputs": {
+    "exec_in": "exec",
+    "preset": "enum:Custom,Spray,Fire,Mist,Blood",
+    "spawn_positions": "list",
+    "target": "object",
+    "rate": "float",
+    "life": "float",
+    "size": "float",
+    "gravity": "float",
+    "gravity_scale": "float",
+    "speed_min": "float",
+    "speed_max": "float",
+    "cone": "float"
+  },
+  "outputs": {
+    "exec_out": "exec"
+  },
+  "values": {
+    "preset": "Spray",
+    "rate": 2000.0,
+    "life": 0.7,
+    "size": 0.45,
+    "gravity": 15.0,
+    "speed_min": 8.0,
+    "speed_max": 20.0,
+    "cone": 1.2
+  },
+  "code": "name = \"Emitter\"\ninputs = {\"exec_in\":\"exec\",\"preset\":\"enum:Custom,Spray,Fire,Mist,Blood\",\"spawn_positions\":\"list\",\"target\":\"object\",\"rate\":\"float\",\"life\":\"float\",\"size\":\"float\",\"gravity\":\"float\",\"speed_min\":\"float\",\"speed_max\":\"float\",\"cone\":\"float\"}\noutputs = {\"exec_out\":\"exec\"}\n"
+}

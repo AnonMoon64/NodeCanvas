@@ -1,5 +1,57 @@
 # NodeCanvas: Visual Logic & Procedural World-Building
 
+## 🌅 What's New — Dynamic Sky, Weather & Particle Overhaul
+
+- **Volumetric 3D Clouds** (raymarched): fBm+worley density, wind-advected, with
+  self-shadowing, HG phase (forward + back scatter), anvil bias near tops, and
+  a tunable [bottom, top] slab. Looks correct from below, inside, and above.
+- **Spherical-Planet Atmosphere**: the Atmosphere primitive can now wrap onto
+  a sphere. Fly up past `atmosphere_thickness` and the sky fades to space
+  with a glowing **atmospheric rim**. Rayleigh + Mie scattering, soft sunset
+  reddening, **god rays**, a **moon and stars** that appear at night, and an
+  **exposure/tonemap** stage. A live `time_speed` property auto-advances
+  time of day; crossing midnight increments `date_day_index`.
+- **Weather Primitive**: a *global controller* — not a local emitter — that
+  drives the particle system to render rain / snow / storm / fog / sandstorm
+  *only where the camera is*. Two world modes:
+  - **Flat infinite**: weather tiles over an XZ grid that drifts with the
+    wind vector.
+  - **Spherical**: cells derived from lat/lon on the planet.
+  Weather is **procedural**: a `(cell, day, time-bucket, world_seed)` hash
+  deterministically picks the weather type and intensity. Manual override is
+  available. Weather auto-reads time/date from the Atmosphere primitive (or
+  falls back to its internal clock if none exists).
+- **Particle System 2.0** — richer, streaming-aware, and flexible enough to
+  back every weather effect:
+  - New forces: `wind`, `turbulence`, `vortex`, `attractor`, `curl` noise
+    (divergence-free eddies), plus gravity/drag.
+  - Animated **size/alpha curves** (piecewise-linear LUTs) and per-particle
+    velocity stretch (rain strands, sparks).
+  - **Distance LOD / streaming**: `stream_radius` gates spawning and
+    `cull_radius` kills far particles, making global weather cheap.
+  - **Camera-follow spawn discs** so weather emitters trail the player
+    automatically — the weather controller only re-registers a new emitter
+    when the weather *type* changes.
+  - Extra presets: **Rain**, **Snow**, **Fire**, **Smoke**, **Sparks**,
+    **Dust**, **Mist**, **Spray** (plus the originals).
+- **New Particle Graph Nodes**: `Burst`, `ForceField`, `WeatherControl` — in
+  addition to the existing `Emitter`. Drive effects live from logic graphs.
+- **Directional Light — Fixed**: the old sun direction was inverted at noon
+  and the GL light was never synced to time-of-day. The viewport now drives
+  `GL_LIGHT0` from the Atmosphere's live sun direction + color, so meshes and
+  primitives darken at night and warm up at sunset. Explicit
+  `light_directional` objects override the sun.
+- **Ocean Spray Polish**: new preset blends gravity + drag + turbulence with
+  a softer droplet curve and stretch option for heavy foam days.
+- **Stability & Scale Fixes**:
+  - **Metric Scale Standard**: Adopted a strict **1.0 unit = 1.0 meter** standard across all primitives, ensuring logical proportions between human-scale actors (1.8m), ocean waves (1-5m), and hills (60m).
+  - **Hardened Viewport UI**: Reinforced the XYZ orientation widget with insulated 2D/3D state management; it remains visible even during complex 3D rendering passes.
+  - **Weather Tracking**: Fixed the 'outrun' effect — rain, snow, and storm particles are now physically linked to the camera's world-position reference, ensuring you are always at the heart of the storm.
+  - **Dynamic Ocean Ripples**: Optimized ripple dissipation and logic search radii (180m) to provide persistent, trailing impact effects behind the camera.
+  - **UI Contextual Power**: Added professional context menus to the File Explorer (New Folder, New Logic) and Variable Panel (Add, Duplicate, Delete) for a faster workspace experience.
+
+---
+
 - **GPU-Accelerated Boids System**: Implemented a high-performance flocking simulation using **Compute Shaders** and **Spatial Partitioning (Uniform Grid)**. Supports up to 30,000 agents (fish and birds) with real-time autonomous schooling behavior.
 - **Advanced 4-Layer Procedural Motion**: Integrated sophisticated vertex displacement for aquatic and avian life:
   - **Fish**: Primary Yaw, Side-translation, Roll, and Secondary Yaw (Flag motion).
@@ -8,11 +60,11 @@
 - **Unified Shader Architecture**: Added a global `SHADER_REGISTRY` with selectable presets including **Fish Swimming** and **Flag Waving** procedural effects.
 - **Batch Editing & Multi-Selection**: Fully implemented Ctrl+Click selection in the viewport with synchronized property inspector updates for simultaneous multi-object transformation.
 - **Controller Inheritance Hierarchy**: Established a formal `BaseController` → `AI/PlayerController` inheritance structure in `py_editor/core/controller.py` for structured autonomous behavior development.
-- **Modular Refactor (Stable)**: Codebase fully transitioned to a modular orchestrator model.
-- **Stable Logic Engine**: Established a deterministic, one-shot execution model for visual scripting with support for cross-graph `Message` nodes and `Custom Events`.
+- **Stable Logic Engine**: Established a deterministic, one-shot execution model for visual scripting with support for cross-graph `Message` nodes, recursive `CallLogic` sub-graph execution, and reliable template-aware pin mapping for complex data flows.
 - **Logic Validation Pipeline**: Added a headless testing suite (`tests/test_logic_run.py`) for validating complex logic flows without UI overhead.
+- **Robust Multi-Selection**: Synchronized selection system that resolves object IDs to instances, maintaining stable multi-selection state between the Hierarchy Outliner, Viewport, and Properties Inspector.
 - **Ultra Dynamic Atmosphere**: Implemented a high-fidelity scattering model with **Zenith-based Sky Grading**, **Mie halos**, and seamless **Land-to-Space** transitions (sky blue → black starfield).
-- **Professional UX**: Implemented a **UE5-style Dockable Workspace**, **Global Settings Dialog**, and **On-Screen Viewport Logging** for real-time debugging feedback.
+- **Professional UX**: Implemented a **UE5-style Dockable Workspace**, **Global Settings Dialog**, **Real-time FPS Counter**, and **On-Screen Viewport Logging** for real-time debugging feedback.
 - **Plugin & Template Management**: Integrated a comprehensive **Settings** suite for:
   - **Dynamic Node Templates**: Create, edit, and delete custom node definitions in real-time.
   - **Plugin Package Orchestration**: Install `.ncpkg` archives or `.json` packages to expand the node ecosystem.
@@ -49,11 +101,13 @@ NodeCanvas is built on a modular "Separated Pipeline" architecture:
 - **Modernized Node UI**: Title labels now **float elegantly above** node bodies, reducing visual clutter and improving graph readability.
 - **Node Properties Inspector**: Highly interactive variadic nodes like **SelectInt** and **StringAppend** feature a dedicated Properties panel for dynamic pin management (+/- pins).
 - **Inter-Graph Calls**: Use the `CallGraph` node to run sub-logic as functional routines.
+- **Node UX Fixes**: Staggered Z-ordering for input widgets prevents dropdowns (Presets/Sources) from being obscured by adjacent sliders or fields.
 - **Performance Optimized**: A hardware-accelerated canvas designed to handle hundreds of nodes with zero lag.
 
 ### 2. The 3D Scene Compositor
 
-* **PBR Workflow**: Industry-standard Metallic-Roughness workflow for realistic surface properties.
+- **PBR Workflow**: Industry-standard Metallic-Roughness workflow for realistic surface properties.
+
 - **Hierarchical Outliner**: Manage complex scenes with deep object nesting and bulk property editing.
 - **Integrated Rendering**: Support for Point Lights, Directional Lights, and a **Global Shared OpenGL Context** with **Context-Aware Display List Caching** to ensure seamless material persistence between the Editor and Play Mode.
 - **Custom Shader Pipeline**: A flexible shader system with a selectable **Shader Registry**. Includes specialized vertex displacement shaders for **Fish Swimming** (sine-wave wiggling) and **Flag Waving** (cloth-sim approximation) with dynamic, UI-controllable parameters and **Multi-Axis Support** (X, Y, or Z forward).
@@ -63,7 +117,8 @@ NodeCanvas is built on a modular "Separated Pipeline" architecture:
 
 ### 3. Advanced Procedural Landscapes
 
-* **Seamless Discovery Pipeline**: Features a **Dual-Stage Rendering** system that eliminates visual "flashing." New terrain areas appear instantly as **Cached Draft Meshes** (low-poly VRAM previews) and progressively "sharpen" into high-detail geometry.
+- **Seamless Discovery Pipeline**: Features a **Dual-Stage Rendering** system that eliminates visual "flashing." New terrain areas appear instantly as **Cached Draft Meshes** (low-poly VRAM previews) and progressively "sharpen" into high-detail geometry.
+
 - **Liquid-Smooth Performance**: Integrated **Dithered Spawning** logic throttles heavy vegetation and object generation to ensure a consistent 60FPS even when flying at high speeds through infinite worlds.
 - **GPU-Cached Rendering**: Uses **OpenGL Display Lists** to cache both high-res and draft terrain chunks directly in VRAM, enabling 60FPS+ performance.
 - **Vectorized Production**: A high-performance **NumPy-based noise engine** for lightning-fast terrain calculation.
@@ -98,6 +153,8 @@ As and Alpha-stage development environment, the following areas are currently id
   - **Jacobian Fold Foam**: Simulates foam at wave breaking points.
   - **Height Whitecaps**: Artist-controlled crest density.
   - **Animated Streaks**: Wind-aligned trails that drag behind moving crests.
+  - **Persistent Advection**: CPU-side foam density buffer that advects using water velocity.
+  - **Flowmap Panning**: Shader-integrated flowmap technique for high-quality foam and bubble motion.
 
 ---
 
@@ -150,10 +207,9 @@ The current focus is on creating a photorealistic, physically-based world enviro
 
 ### 🌊 The Ocean Roadmap
 
-* **Layer 1: Motion (Done)** – Multi-cascade FFT displacement and artist-driven Gerstner hero waves.
-- **Layer 2: Surface (Done)** – Triple-specular "wet" look, SSS rim lighting, and balanced day/night sky reflections.
-- **Layer 3: Details (Done)** – 3-layer foam system (Jacobian, Whitecap, Streaks) with micro-detail normal sharpening.
-- **Layer 4: Integration (In Progress)** – Shoreline depth-blending and vertical bias stabilization.
+- **Layer 5: Integration (Done)** – Shoreline depth-blending and vertical bias stabilization.
+- **Layer 6: VFX (Done)** – Modular, logic-driven ocean spray using high-fidelity instanced particles and refractive droplets.
+- **Layer 7: Simulation (Done)** – Does this FFT ocean use Tessendorf simulation? - Future goal to integrate full spectral wave simulation (Spectral FFT).
 
 ### 💡 High-Impact Features Pipeline
 
@@ -162,7 +218,10 @@ The current focus is on creating a photorealistic, physically-based world enviro
 | **Ocean** | Underwater Mode, Buoyancy Integration, Wake Trails, Storm/Tide Sliders |
 | **World** | Foliage Scatter (Trees/Grass), Road/Path Gen, Dynamic Weather, NPC Pathing |
 | **Editor** | Material Node Editor, Terrain Paint-Brushes, Save-able Camera Bookmarks |
-| **Atmosphere** | Skybox/Day-Night Cycle, Volumetric Clouds, Rayleigh Scattering |
+| **Atmosphere** | Skybox/Day-Night Cycle (✓), Volumetric Clouds (✓), Rayleigh Scattering (✓), Planet Rim from space (✓) |
+| **Weather** | Rain (✓), Snow (✓), Storm (✓), Fog (✓), Sandstorm (✓), Procedural seed-driven selection (✓), Spherical + Flat-Infinite modes (✓), Per-biome bias (planned), Lightning + thunder timing (planned), Soaked-surface wetness buffer (planned) |
+| **Particles** | Curl/Vortex/Attractor forces (✓), Velocity-aligned stretch (✓), Streaming LOD (✓), Size/Alpha curves (✓), GPU-backed pool (planned), Collision with landscape/voxel SDF (planned), Decal spawning on hit (planned) |
+| **Future Ultra-Dynamic-Sky targets** | Aerial-perspective LUT (in-scattering for distant terrain), Cirrus layer above cumulus, Lightning-lit clouds, Rainbows from sun+rain coincidence, Moon phases driven by `date_day_index`, Seasonal color grading, Auroras at high latitudes in spherical mode |
 | **Security** | Sandboxed Execution, Malicious Project Detection, Secure Plugin API |
 
 ---

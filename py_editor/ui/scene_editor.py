@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QToolButton, QFrame
 )
 from pathlib import Path
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer
 
 # Local imports from the scene submodule
 from .scene.scene_view import SceneViewport
@@ -36,27 +36,30 @@ class SceneEditorWidget(QWidget):
         self.sim = SimulationController(self)
         self.sim.logger = self.viewport.add_screen_log
         
-        # Viewport HUD (Floating Overlay)
+        # Start Simulation automatically (Live mode)
+        QTimer.singleShot(500, self.start_live_simulation)
+        
         # Signal forwarding
         self.object_selected = self.viewport.object_selected
         self.viewport.object_dropped.connect(self._on_object_dropped)
 
-    def toggle_simulation(self):
+    def start_live_simulation(self):
+        """Initializes the live simulation state."""
         if not self.sim.is_running:
-            # Start
             graph_data = self.main_window.logic_editor.export_graph()
             vars = self.main_window.logic_editor.graph_variables
             templates = get_all_templates()
             self.sim.start(graph_data, templates, vars)
-            self.btn_play.setText("⏸ PAUSE")
             self.viewport.is_play_mode = True
-        else:
-            self.sim.pause(not self.sim.is_paused)
-            self.btn_play.setText("▶ RESUME" if self.sim.is_paused else "⏸ PAUSE")
+
+    def toggle_simulation(self):
+        """Legacy support - Toggles pause state in live mode."""
+        self.sim.pause(not self.sim.is_paused)
+        self.viewport.is_play_mode = not self.sim.is_paused
 
     def stop_simulation(self):
+        """Only used for developer reset."""
         self.sim.stop()
-        self.btn_play.setText("▶ PLAY")
         self.viewport.is_play_mode = False
 
     def _set_left_tab(self, index):
@@ -116,6 +119,10 @@ class SceneEditorWidget(QWidget):
         
         # Add to scene
         self.viewport.scene_objects.append(obj)
+        
+        # Live refresh Simulation
+        if self.sim.is_running:
+            self.sim.refresh()
         
         # Selection logic is now handled via signals connected to MainWindow
         # We just inform the viewport to update and select the new object

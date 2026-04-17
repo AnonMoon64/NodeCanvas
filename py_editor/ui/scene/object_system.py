@@ -38,6 +38,8 @@ class SceneObject:
         if self.obj_type == 'ocean':
             self.material = dict(MATERIAL_PRESETS['Water'])
             self.material['preset'] = 'Water'
+            # Auto-attach base volumetric spray logic
+            self.logic_list = ["py_editor/nodes/graphs/OceanSpray.logic"]
         else:
             self.material = dict(DEFAULT_MATERIAL)
         self.active = True
@@ -55,6 +57,36 @@ class SceneObject:
         self.time_of_day = 0.25 # 0.0 is midnight, 0.5 is noon
         self.sky_density = 1.0
         self.cloud_density = 0.5
+        self.time_speed = 0.0           # auto-advance time_of_day per second (0 = manual)
+        self.date_day_index = 0          # integer day counter for procedural weather seeding
+        # Planet / spherical-atmosphere support
+        self.planet_mode = False         # Atmosphere: wrap onto a sphere (planet)
+        self.planet_radius = 637100.0   # 1/10th scale for better viewport visibility
+        self.atmosphere_thickness = 12000.0
+        self.planet_center = [0.0, -637100.0, 0.0]
+        self.ground_albedo = [0.25, 0.3, 0.2]
+        self.rayleigh_strength = 1.0
+        self.mie_strength = 1.0
+        self.god_rays_strength = 0.6
+        self.exposure = 1.0
+        # 3D volumetric cloud properties
+        self.cloud_coverage = 0.5
+        self.cloud_absorption = 0.8
+        self.cloud_anvil = 0.3
+        self.cloud_wind = [6.0, 0.0, 2.0]
+        self.cloud_steps = 48
+        self.cloud_layer_bottom = 900.0
+        self.cloud_layer_top = 2200.0
+        # Weather primitive properties
+        self.weather_mode = 'flat'          # 'flat' | 'spherical'
+        self.weather_type_override = 'Auto' # 'Auto'|'Clear'|'Rain'|'Snow'|'Storm'|'Fog'|'Sandstorm'
+        self.weather_intensity_override = 0.8
+        self.weather_seed = 1234
+        self.weather_cell_size = 800.0
+        self.weather_wind = [8.0, 0.0, 0.0]
+        self.weather_time_rate = 0.005
+        self._current_weather = 'Clear'
+        self._current_intensity = 0.0
         
         # Sun & Universe
         self.sun_size = 1.0            # 1.0 is "Standard"
@@ -71,9 +103,9 @@ class SceneObject:
         self.landscape_resolution = 32
         self.landscape_render_bias = -0.02
         self.landscape_seed = 123
-        self.landscape_height_scale = 30.0
+        self.landscape_height_scale = 150.0
         self.landscape_ocean_level = 0.08
-        self.landscape_ocean_flattening = 0.3
+        self.landscape_ocean_flattening = 0.4
         self.landscape_tip_smoothing = 0.1
         self.landscape_noise_layers = [
             {'type': 'perlin', 'mode': 'fbm', 'amp': 1.0, 'freq': 0.007, 'octaves': 4, 'persistence': 0.45, 'lacunarity': 2.0, 'weight': 1.2, 'exponent': 1.0},
@@ -94,10 +126,11 @@ class SceneObject:
         self.landscape_spawn_cols = 1
         self.landscape_spawn_spacing = [10.0, 10.0] 
         self.visualize_climate = False
+        self.landscape_features = [] # List of strings: ["caves", "ores", etc.]
         # Ocean properties
-        self.ocean_wave_speed = 5.0
+        self.ocean_wave_speed = 3.5
         self.ocean_wave_scale = 1.0
-        self.ocean_wave_steepness = 0.15
+        self.ocean_wave_steepness = 0.3
         self.ocean_foam_amount = 0.1
         self.ocean_fft_resolution = 256
         self.ocean_wave_choppiness = 1.5
@@ -110,11 +143,12 @@ class SceneObject:
         self.ocean_reflection_tint = [0.5, 0.7, 1.0, 1.0] # Sky blue tint
         
         # Logic assignment (Array/List of scripts)
-        self.logic_list = [] # List of paths to .logic files
+        if not hasattr(self, 'logic_list'):
+            self.logic_list = [] # List of paths to .logic files
         
         # Voxel World Specifics
         self.voxel_type = "Round"    # "Round" or "Flat"
-        self.voxel_radius = 5.0      # Radius in world units
+        self.voxel_radius = 200.0    # 200m radius planet
         self.voxel_block_size = 1.0
         self.voxel_seed = 123
         # voxel_lod_enabled kept for backwards compatibility with saved scenes;
@@ -127,6 +161,7 @@ class SceneObject:
         self.voxel_infinite_flat = True
         self.voxel_layers = []
         self.voxel_biomes = []
+        self.voxel_features = [] # ["caves"]
 
         # Ocean World (spherical ocean on round planets)
         self.ocean_world_radius = 0.48      # Slightly inside planet radius
@@ -164,6 +199,12 @@ class SceneObject:
         for k, v in d.items():
             if k == 'logic_path' and 'logic_list' not in d:
                 obj.logic_list = [v] if v else []
-            if hasattr(obj, k):
+            elif k == 'logic_list':
+                # Special migration: If it's an ocean and we have a new default logic, 
+                # don't overwrite with an empty saved list.
+                if obj.obj_type == 'ocean' and not v:
+                    continue # Keep the default ["...OceanSpray.logic"] set in __init__
+                obj.logic_list = list(v)
+            elif hasattr(obj, k):
                 setattr(obj, k, v)
         return obj

@@ -38,20 +38,47 @@ class FFTOceanWaveGenerator:
         # GL Textures
         self.tex_displacement = glGenTextures(1)
         self.tex_jacobian = glGenTextures(1)
+        self.tex_velocity = glGenTextures(1)
         self._init_textures()
+
+        # Persistent foam buffer for advection
+        self.foam_buffer = np.zeros((self.N, self.N), dtype=np.float32)
+        self.tex_foam_advected = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self.tex_foam_advected)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+        glBindTexture(GL_TEXTURE_2D, 0)
+        
+        # Ripple buffer (dynamic impacts from logic)
+        self.ripple_buffer = np.zeros((self.N, self.N), dtype=np.float32)
+        self.ripple_queue = [] # List of (u, v, strength)
+        self.tex_ripple = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self.tex_ripple)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+        glBindTexture(GL_TEXTURE_2D, 0)
+        
+        self.last_t = time.time()
 
     def _init_spectrum(self):
         # Multi-scale spectrum for variety (Large swells + tiny ripples)
         A = 1.0 
         
-        # Wind alignment dot product
+        # Wind alignment dot product. The original 0.5 + 0.5*dot² bias was strong enough
+        # that waves stayed visibly coherent along the wind axis, producing parallel ridge
+        # strips from one direction. 0.75 + 0.25*dot² gives a much more isotropic field
+        # while still favouring the wind direction.
         dot = (self.kx * self.wind_dir[0] + self.kz * self.wind_dir[1]) / (self.k_mag + 0.001)
-        wind_factor = 0.5 + 0.5 * (dot**2)
+        wind_factor = 0.75 + 0.25 * (dot**2)
         
-        # Swell component (low freq)
-        ph_swell = A / (self.k_mag**3.2 + 0.0001)
-        # Ripple component (high freq) - Restored for sharpness/drama
-        ph_ripple = (A * 3.0) / (self.k_mag**1.5 + 0.1)
+        # Swell component (Significant reduction for metric coherence)
+        ph_swell = (A * 0.08) / (self.k_mag**2.5 + 0.0001)
+        # Ripple component (high freq)
+        ph_ripple = (A * 0.4) / (self.k_mag**1.5 + 0.1)
         
         ph = (ph_swell + ph_ripple) * wind_factor
         
@@ -61,7 +88,7 @@ class FFTOceanWaveGenerator:
         return (1.0 / np.sqrt(2.0)) * (xi_r + 1j * xi_i) * np.sqrt(ph)
 
     def _init_textures(self):
-        for tex in [self.tex_displacement, self.tex_jacobian]:
+        for tex in [self.tex_displacement, self.tex_jacobian, self.tex_velocity]:
             glBindTexture(GL_TEXTURE_2D, tex)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
@@ -69,10 +96,10 @@ class FFTOceanWaveGenerator:
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
         glBindTexture(GL_TEXTURE_2D, 0)
 
-    def update(self, t, choppiness=1.5, intensity=1.0):
+    def update(self, wave_time, choppiness=1.5, intensity=1.0):
         # 1. Omega & Phase
         w = np.sqrt(9.81 * self.k_mag)
-        ex = np.exp(1j * w * t)
+        ex = np.exp(1j * w * wave_time)
         h = self.h0 * ex + self.h0_conj * np.conj(ex)
         
         # Synthesis scale: Recalibrated for 'Storm' headroom
@@ -84,21 +111,71 @@ class FFTOceanWaveGenerator:
         dx = np.real(np.fft.ifft2(1j * (self.kx / (self.k_mag + 0.01)) * h)) * s
         dz = np.real(np.fft.ifft2(1j * (self.kz / (self.k_mag + 0.01)) * h)) * s
         
+        # 4. Velocity calculation (dh/dt)
+        # h_dot = i*w * (h0 * exp(iwt) - h0_conj * exp(-iwt))
+        h_dot = 1j * w * (self.h0 * ex - self.h0_conj * np.conj(ex))
+        vx = np.real(np.fft.ifft2(1j * (self.kx / (self.k_mag + 0.01)) * h_dot)) * s
+        vz = np.real(np.fft.ifft2(1j * (self.kz / (self.k_mag + 0.01)) * h_dot)) * s
+        
         # 5. Jacobian proxy
         dgx = np.real(np.fft.ifft2(- (self.kx**2 / (self.k_mag + 0.01)) * h)) * s
         dgz = np.real(np.fft.ifft2(- (self.kz**2 / (self.k_mag + 0.01)) * h)) * s
         jacobian = 1.0 + choppiness * (dgx + dgz)
         
-        # Dashboard Height Range
-        if not hasattr(self, '_last_print') or time.time() - self._last_print > 1.0:
-            print(f"[FFT OPTIMIZED] Res: {self.N} Height: {np.min(dy):.2f}m to {np.max(dy):.2f}m (Scale: {s:.1f})")
-            self._last_print = time.time()
+        # 6. Persistent Foam Advection (CPU-side)
+        dt = time.time() - self.last_t
+        self.last_t = time.time()
+        dt = min(dt, 0.1) # Clamp for stability
+        
+        # 6.5 Process Dynamic Ripples (Impacts from logic nodes)
+        # Dissipate existing ripples (lower decay for better visibility)
+        self.ripple_buffer *= np.exp(-1.8 * dt)
+        
+        # Add new impacts from queue
+        while self.ripple_queue:
+            u, v, strength = self.ripple_queue.pop(0)
+            # Draw a small spot into the buffer
+            ix, iz = int(u * self.N) % self.N, int(v * self.N) % self.N
+            r = max(1, int(self.N * 0.02))
+            for dx_ in range(-r, r+1):
+                for dz_ in range(-r, r+1):
+                    d2 = dx_*dx_ + dz_*dz_
+                    if d2 <= r*r:
+                        falloff = 1.0 - math.sqrt(d2)/r
+                        self.ripple_buffer[(iz + dz_) % self.N, (ix + dx_) % self.N] += strength * falloff * 5.0
+        
+        self.ripple_buffer = np.clip(self.ripple_buffer, 0.0, 1.0)
 
-        # 6. Optimized Upload
+        # Simple velocity-based advection (grid shift)
+        # To avoid scipy dependency, we use a simple roll-based approximation or 
+        # just accept memoryless foam if we can't find a fast way.
+        # But let's try a simple vectorized shift.
+        avg_vx = np.mean(vx)
+        avg_vz = np.mean(vz)
+        shift_x = int(avg_vx * dt * self.N / self.L)
+        shift_z = int(avg_vz * dt * self.N / self.L)
+        self.foam_buffer = np.roll(np.roll(self.foam_buffer, shift_x, axis=1), shift_z, axis=0)
+        self.ripple_buffer = np.roll(np.roll(self.ripple_buffer, shift_x, axis=1), shift_z, axis=0)
+        
+        # Add new foam where waves break (low jacobian)
+        new_foam = np.clip((1.0 - jacobian) - 0.5, 0.0, 1.0) * 25.0 * dt
+        self.foam_buffer += new_foam
+        self.foam_buffer *= np.exp(-0.5 * dt) # Dissipation
+        self.foam_buffer = np.clip(self.foam_buffer, 0.0, 1.0)
+
+        # 7. Optimized Upload
         self.disp_data[..., 0] = dx
         self.disp_data[..., 1] = dy
         self.disp_data[..., 2] = dz
         self.disp_data[..., 3] = 1.0
+        
+        # Upload Foam
+        glBindTexture(GL_TEXTURE_2D, self.tex_foam_advected)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, self.N, self.N, 0, GL_RED, GL_FLOAT, self.foam_buffer.astype(np.float32))
+        
+        # Upload Ripples
+        glBindTexture(GL_TEXTURE_2D, self.tex_ripple)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, self.N, self.N, 0, GL_RED, GL_FLOAT, self.ripple_buffer.astype(np.float32))
         
         glBindTexture(GL_TEXTURE_2D, self.tex_displacement)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, self.N, self.N, 0, GL_RGBA, GL_FLOAT, self.disp_data)
@@ -106,7 +183,15 @@ class FFTOceanWaveGenerator:
         jac_data = jacobian.astype(np.float32)
         glBindTexture(GL_TEXTURE_2D, self.tex_jacobian)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, self.N, self.N, 0, GL_RED, GL_FLOAT, jac_data)
+        
+        vel_data = np.stack([vx, vz], axis=-1).astype(np.float32)
+        glBindTexture(GL_TEXTURE_2D, self.tex_velocity)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RG32F, self.N, self.N, 0, GL_RG, GL_FLOAT, vel_data)
+        
         glBindTexture(GL_TEXTURE_2D, 0)
+
+        # Keep CPU copy so spawn sources (e.g. ocean foam particles) can sample it
+        self.last_jacobian_cpu = jac_data
 
 def init_ocean_gpu():
     global _ocean_vbo, _ocean_ibo, _ocean_index_count, _ocean_shader_fft, _ocean_shader_gerstner
@@ -171,7 +256,21 @@ def _init_geometry():
     glBindBuffer(GL_ARRAY_BUFFER, 0)
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0)
 
-def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
+def add_ocean_ripple(obj, world_pos, strength=1.0):
+    """Adds a physical ripple impact to the ocean at world_pos."""
+    if world_pos is None or not hasattr(world_pos, '__getitem__') or len(world_pos) < 3:
+        return
+    gen = getattr(obj, '_fft_gen_cascade0', None)
+    if gen is None: return
+    
+    print(f"DEBUG: add_ocean_ripple internal received {world_pos}")
+    # Map world to 0..1 UV — matching the shader v_uv = world_p.xz / 1000.0
+    # No chunk offset needed as v_uv is global/tiling.
+    u = (world_pos[0] / gen.L) % 1.0
+    v = (world_pos[2] / gen.L) % 1.0
+    gen.ripple_queue.append((u, v, strength))
+
+def render_ocean_gpu(camera_pos, obj, sim_time=0.0, weather_obj=None):
     """Render the ocean surface following the camera, choosing between FFT or Gerstner."""
     global _ocean_vbo, _ocean_shader_fft, _ocean_shader_gerstner, _fft_generators
     use_fft = getattr(obj, 'ocean_use_fft', True)
@@ -179,7 +278,10 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
     # Parameters
     level = getattr(obj, 'landscape_ocean_level', 0.0)
     color = obj.material.get('base_color', [0.0, 0.2, 0.5, 1.0])
-    opacity = obj.material.get('opacity', 0.8)
+    # Default opaque. With opacity<1 the scene grid (and anything else behind the ocean)
+    # alpha-blends through every pixel, which shows up as flat translucent "panels"
+    # wherever the depth complexity changes — the artifacts the user has been chasing.
+    opacity = obj.material.get('opacity', 1.0)
     foam = getattr(obj, 'ocean_foam_amount', 0.5)
     chunk_size = 2000.0
 
@@ -201,6 +303,7 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
             _fft_generators[key0] = FFTOceanWaveGenerator(resolution=res, size=1000.0, wind_speed=30.0, wind_dir=(1.0, 0.2))
         gen = _fft_generators[key0]
         gen.update(adjusted_time, choppiness=choppiness, intensity=intensity)
+        obj._fft_gen_cascade0 = gen
 
         # Cascade 1 — medium chop (diagonal wind breaks up the banding)
         key1 = (64, 200.0)
@@ -229,19 +332,31 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
     follow_x = (camera_pos[0] // grid_snap) * grid_snap
     follow_z = (camera_pos[2] // grid_snap) * grid_snap
 
+    # Stash references on the object so attached particle systems / .logic nodes can
+    # access the live cascade-0 jacobian buffer and the camera-snapped grid origin.
+    obj._last_grid_origin = (follow_x, level, follow_z)
+
     # Rendering Setup
     glEnable(GL_DEPTH_TEST)
     glDepthFunc(GL_LESS)
     glDepthMask(GL_TRUE)
 
-    # Ocean surface should be visible from below as well
-    glDisable(GL_CULL_FACE)
+    # Cull back faces. With culling off and opacity<1, back-faces of close wave crests
+    # alpha-blend over distant geometry as flat translucent panels / claws — the artifacts
+    # the user has been chasing. If underwater rendering is needed later, swap the cull
+    # face based on whether the camera is above/below ocean level.
+    glEnable(GL_CULL_FACE)
+    glCullFace(GL_BACK)
 
-    # Conditional Blending
+    # Conditional Blending.
+    # Keep depth-writes ON even when blending — turning them off causes back-facing wave
+    # crests behind front-facing ones to alpha-blend in arbitrary order, which shows up as
+    # large flat translucent "panels" sticking through the surface. The ocean is a single
+    # mesh that should always occlude itself; we only want the alpha for fade-to-distance.
     if opacity < 0.99:
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        glDepthMask(GL_FALSE)
+        glDepthMask(GL_TRUE)
     else:
         glDisable(GL_BLEND)
 
@@ -274,9 +389,22 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
             glBindTexture(GL_TEXTURE_2D, gen2.tex_jacobian if gen2 else gen.tex_jacobian)
             shader.set_uniform_i("u_jacobian_c2", 5)
 
+            # New: Velocity and Advected Foam
+            glActiveTexture(GL_TEXTURE6)
+            glBindTexture(GL_TEXTURE_2D, gen.tex_velocity)
+            shader.set_uniform_i("u_velocity_map", 6)
+
+            glActiveTexture(GL_TEXTURE6)
+            glBindTexture(GL_TEXTURE_2D, gen.tex_foam_advected)
+            shader.set_uniform_i("u_foam_map_advected", 6)
+            
+            glActiveTexture(GL_TEXTURE7)
+            glBindTexture(GL_TEXTURE_2D, gen.tex_ripple)
+            shader.set_uniform_i("u_ripple_map", 7)
+
             # Cascade blend weights
             shader.set_uniform_f("u_cascade1_weight", getattr(obj, 'ocean_cascade1_weight', 0.5))
-            shader.set_uniform_f("u_cascade2_weight", getattr(obj, 'ocean_cascade2_weight', 0.3))
+            shader.set_uniform_f("u_cascade2_weight", getattr(obj, 'ocean_cascade2_weight', 0.7))
 
             total_choppiness = getattr(obj, 'ocean_wave_choppiness', 1.5) + getattr(obj, 'ocean_wave_steepness', 0.0)
             shader.set_uniform_f("u_choppiness", total_choppiness)
@@ -325,11 +453,27 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
         shader.set_uniform_f("u_foam_whitecap_thresh", getattr(obj, 'ocean_foam_whitecap_thresh', 0.5))
         shader.set_uniform_f("u_foam_streak",          getattr(obj, 'ocean_foam_streak',          1.0))
         shader.set_uniform_f("u_foam_streak_speed",    getattr(obj, 'ocean_foam_streak_speed',    1.5))
+        # Flow advection scale (tunes how much horizontal displacement advects foam UVs)
+        shader.set_uniform_f("u_flow_scale",           getattr(obj, 'ocean_flow_scale',          0.02))
         shader.set_uniform_f("u_foam_sharpness",       getattr(obj, 'ocean_foam_sharpness',       2.5))
         shader.set_uniform_f("u_detail_strength",      getattr(obj, 'ocean_detail_strength',      0.7))
 
+        # Rain ripple controls
+        ri = 0.0
+        if weather_obj:
+            # Use the live intensity from the weather driver
+            ri = float(getattr(weather_obj, '_current_intensity', 0.0))
+        else:
+            # Fallback to manual slider on the ocean object itself
+            ri = float(getattr(obj, 'u_rain_intensity', 0.0))
+            
+        shader.set_uniform_f("u_rain_intensity",       ri)
+        shader.set_uniform_f("u_rain_time",            float(sim_time))
+
     except Exception as e:
+        import traceback
         print(f"[OCEAN SHADER ERROR] {e}")
+        traceback.print_exc()
         glUseProgram(0)
     
     glEnable(GL_DEPTH_TEST)
@@ -355,5 +499,4 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
     
     shader.stop()
     glDepthMask(GL_TRUE)
-    glDisable(GL_BLEND)
     glActiveTexture(GL_TEXTURE0)

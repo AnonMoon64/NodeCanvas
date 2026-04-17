@@ -140,6 +140,15 @@ class VoxelEngine:
         else:                   val = VoxelEngine._perlin_3d(lx, ly, lz, seed=seed)
         return (val * amp).astype(np.float32)
 
+    @staticmethod
+    def _cellular_caves(x, y, z, seed=123):
+        """Cellular noise based caves - produces connected empty pockets."""
+        # Multi-scale voronoi for organic 'tunnel' networks
+        v1 = VoxelEngine._voronoi(x, y, z, seed=seed)
+        v2 = VoxelEngine._voronoi(x * 1.5, y * 1.5, z * 1.5, seed=seed + 101)
+        # Intersection of two fields creates tubular structures
+        return (np.minimum(v1, v2) + 0.35).astype(np.float32)
+
     # ------------------------------------------------------------------ #
     #  Smoothing                                                           #
     # ------------------------------------------------------------------ #
@@ -175,7 +184,7 @@ class VoxelEngine:
 
     @staticmethod
     def generate_density_grid(resolution=64, seed=123, mode="Round", radius=0.5,
-                              layers=None, center=(0, 0, 0),
+                              layers=None, features=None, center=(0, 0, 0),
                               min_p=None, max_p=None):
         """Generate a float32 density grid. Positive = inside surface."""
         res = int(resolution)
@@ -234,6 +243,27 @@ class VoxelEngine:
                 density = height - LY
             else:
                 density = -LY   # Pure flat at Y = 0
+
+        # --- Features pass (e.g. Caves) ---
+        if features and "caves" in features:
+            # Sample features in world space for infinite tiling
+            f_scale = 15.0 # Cave scale in world units
+            f_amp   = 0.6  # Cave size / intensity
+            
+            c_noise = VoxelEngine._cellular_caves(LX / f_scale, LY / f_scale, LZ / f_scale, seed=seed + 500)
+            
+            # Apply domain constraints
+            if mode == "Round":
+                dist = np.sqrt(LX**2 + LY**2 + LZ**2, dtype=np.float32)
+                # Planet caves go half-way to center as requested
+                mask = (dist > radius * 0.51) & (dist < radius * 0.98)
+                density[mask] -= c_noise[mask] * radius * f_amp
+            else:
+                # Flat world caves are infinite
+                # Use a soft vertical mask to avoid cutting through the surface abruptly
+                # 'density' already contains (height - LY), so we can use it to fade near the surface.
+                surface_mask = np.clip(density / 5.0, 0.0, 1.0)
+                density -= c_noise * 10.0 * f_amp * surface_mask
 
         return density.astype(np.float32)
 

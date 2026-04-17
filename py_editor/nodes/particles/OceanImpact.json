@@ -1,0 +1,18 @@
+{
+  "type": "particles",
+  "name": "OceanImpact",
+  "category": "Particles",
+  "inputs": {
+    "exec_in": "exec",
+    "weather_obj": "object",
+    "ocean_obj": "object",
+    "multiplier": "float"
+  },
+  "outputs": {
+    "exec_out": "exec"
+  },
+  "values": {
+    "multiplier": 1.0
+  },
+  "code": "name = \"OceanImpact\"\ninputs = {\"exec_in\":\"exec\",\"weather_obj\":\"object\",\"ocean_obj\":\"object\",\"multiplier\":\"float\"}\noutputs = {\"exec_out\":\"exec\"}\n"
+}

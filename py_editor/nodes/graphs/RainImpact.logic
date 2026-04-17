@@ -1,0 +1,44 @@
+{
+    "nodes": [
+        {
+            "id": 1,
+            "template": "Event_Tick",
+            "pos": [-400, -100]
+        },
+        {
+          "id": 5,
+          "template": "Get Camera Position",
+          "pos": [-400, 50]
+        },
+        {
+            "id": 2,
+            "template": "GetRandomPointInDistance",
+            "pos": [-150, 0],
+            "values": {
+                "distance": 180.0
+            }
+        },
+        {
+            "id": 3,
+            "template": "Message",
+            "pos": [150, 0],
+            "values": {
+                "event": "AddRipple"
+            }
+        },
+        {
+          "id": 4,
+          "template": "Scene Reference",
+          "pos": [-150, 150],
+          "values": {
+            "object_id": "Ocean"
+          }
+        }
+    ],
+    "connections": [
+        { "from": 1, "from_pin": "exec_out", "to": 3, "to_pin": "exec" },
+        { "from": 5, "from_pin": "value", "to": 2, "to_pin": "center" },
+        { "from": 2, "from_pin": "point", "to": 3, "to_pin": "payload" },
+        { "from": 4, "from_pin": "instance", "to": 3, "to_pin": "target" }
+    ]
+}

@@ -46,17 +46,25 @@ class SceneOutliner(QWidget):
         if self._updating: return
         self._updating = True
         
-        # Determine if we actually need a full clear
-        # Simplified: always clear for now but block signals
         self.tree.blockSignals(True)
-        self.tree.clear()
-        self._objects = objects
-        for obj in objects:
-            item = QTreeWidgetItem([f"{self._get_icon(obj.obj_type)} {obj.name}"])
-            item.setData(0, Qt.ItemDataRole.UserRole, obj)
-            self.tree.addTopLevelItem(item)
-            if obj.selected:
-                item.setSelected(True)
+        # Differential update: only clear if count or identity changed
+        if len(objects) != self.tree.topLevelItemCount():
+            self.tree.clear()
+            for obj in objects:
+                item = QTreeWidgetItem([f"{self._get_icon(obj.obj_type)} {obj.name}"])
+                item.setData(0, Qt.ItemDataRole.UserRole, obj)
+                self.tree.addTopLevelItem(item)
+                item.setSelected(obj.selected)
+        else:
+            # Sync selection state without clearing
+            for i in range(self.tree.topLevelItemCount()):
+                item = self.tree.topLevelItem(i)
+                obj = item.data(0, Qt.ItemDataRole.UserRole)
+                # Ensure name matches (in case it changed)
+                item.setText(0, f"{self._get_icon(obj.obj_type)} {obj.name}")
+                if item.isSelected() != obj.selected:
+                    item.setSelected(obj.selected)
+        
         self.tree.blockSignals(False)
         self._updating = False
 

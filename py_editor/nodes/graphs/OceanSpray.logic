@@ -1,0 +1,76 @@
+{
+    "nodes": [
+        {
+            "id": 1,
+            "template": "Event_Tick",
+            "pos": [
+                -408.0,
+                -96.0
+            ]
+        },
+        {
+            "id": 2,
+            "template": "Emitter",
+            "pos": [
+                300.0,
+                48.0
+            ],
+            "values": {
+                "preset": "Spray",
+                "rate": 2000.0,
+                "life": 0.7,
+                "size": 0.45,
+                "gravity": 15.0,
+                "speed_min": 8.0,
+                "speed_max": 20.0,
+                "cone": 1.2
+            }
+        },
+        {
+            "id": 5,
+            "template": "Message",
+            "pos": [
+                -50.0,
+                72.0
+            ],
+            "values": {
+                "event": "GetFoamPoints"
+            }
+        },
+        {
+            "id": 6,
+            "template": "GetParent",
+            "pos": [
+                -300.0,
+                150.0
+            ]
+        }
+    ],
+    "connections": [
+        {
+            "from": 1,
+            "from_pin": "exec_out",
+            "to": 5,
+            "to_pin": "exec"
+        },
+        {
+            "from": 5,
+            "from_pin": "exec",
+            "to": 2,
+            "to_pin": "exec_in"
+        },
+        {
+            "from": 5,
+            "from_pin": "result",
+            "to": 2,
+            "to_pin": "spawn_positions"
+        },
+        {
+            "from": 6,
+            "from_pin": "parent",
+            "to": 5,
+            "to_pin": "target"
+        }
+    ],
+    "variables": {}
+}

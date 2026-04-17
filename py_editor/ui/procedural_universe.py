@@ -49,49 +49,31 @@ def create_universe_shader():
     void main() {
         vec3 dir = normalize(v_pos);
         
-        // --- 1. Round SDF Starfield ---
-        // Cellular noise with higher frequency for distant stars
-        vec3 static_dir = dir * 400.0;
-        vec3 cell = floor(static_dir);
-        vec3 frac = fract(static_dir);
+        // --- 1. Starfield (Using the optimized hash-cell method) ---
+        vec3 g = floor(dir * 450.0);
+        float h = hash(g);
+        float star_v = 0.0;
         
-        float star_val = 0.0;
-        vec3 star_rgb = vec3(0.0);
-        
-        for(float x=-1.; x<=1.; x++) {
-            for(float y=-1.; y<=1.; y++) {
-                for(float z=-1.; z<=1.; z++) {
-                    vec3 neighbor = vec3(x, y, z);
-                    vec3 p = cell + neighbor;
-                    float h = hash(p);
-                    
-                    // Reduced base density for a more realistic feel
-                    if (h > 1.0 - (0.0015 * star_density)) {
-                        vec3 offset = vec3(hash(p+1.0), hash(p+2.0), hash(p+3.0));
-                        vec3 pos = neighbor + offset;
-                        float d = length(frac - pos);
-                        
-                        // Smaller, sharper stars for a vast look
-                        float size = 0.02 + h * 0.06;
-                        float s = smoothstep(size, size-0.02, d);
-                        
-                        vec3 col = vec3(1.0);
-                        if (h > 0.9995) col = vec3(0.7, 0.8, 1.0);
-                        else if (h < 0.9985) col = vec3(1.0, 0.9, 0.7);
-                        
-                        star_rgb += col * s * (h * 4.0);
-                    }
-                }
-            }
+        // Sharper, varied stars
+        if (h > 0.994) {
+            float size = 0.6 + 0.4 * hash(g + 13.0);
+            float twinkle = 0.7 + 0.3 * sin(hash(g) * 100.0);
+            star_v = size * twinkle * star_density;
         }
         
+        vec3 star_rgb = vec3(star_v);
+        // Add some subtle color variation to stars
+        float c_h = hash(g + 71.0);
+        if (c_h > 0.7) star_rgb *= vec3(0.8, 0.9, 1.1);
+        else if (c_h < 0.3) star_rgb *= vec3(1.1, 0.9, 0.7);
+
         // --- 2. Advanced Nebulae ---
-        float n1 = noise(dir * 3.0);
-        float n2 = noise(dir * 6.0 + n1);
-        float neb_v = smoothstep(0.4, 0.8, n2 * 1.3) * nebula_intensity;
+        float n1 = noise(dir * 2.5);
+        float n2 = noise(dir * 5.0 + n1 * 0.5);
+        float neb_v = pow(smoothstep(0.35, 0.85, n2 * 1.25), 2.0) * nebula_intensity;
         
-        vec3 neb_color_1 = vec3(0.05, 0.02, 0.1);
-        vec3 neb_color_2 = vec3(0.01, 0.05, 0.04);
+        vec3 neb_color_1 = vec3(0.06, 0.02, 0.12); // Deep Purple
+        vec3 neb_color_2 = vec3(0.01, 0.06, 0.05); // Cosmic Teal
         vec3 nebula = mix(neb_color_1, neb_color_2, n1) * neb_v;
         
         vec3 final_rgb = star_rgb + nebula;

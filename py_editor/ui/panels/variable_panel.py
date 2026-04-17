@@ -328,26 +328,32 @@ class VariablePanel(QWidget):
 
     def show_context_menu(self, pos):
         item = self.tree.itemAt(pos)
-        if not item: return
-        name = item.data(0, Qt.ItemDataRole.UserRole)
+        name = item.data(0, Qt.ItemDataRole.UserRole) if item else None
         
         menu = QMenu()
         menu.setStyleSheet("QMenu { background-color: #252526; color: #ccc; border: 1px solid #3c3c3c; } QMenu::item:selected { background-color: #37373d; }")
         
-        edit_act = menu.addAction("Edit...")
-        rename_act = menu.addAction("Rename")
-        dup_act = menu.addAction("Duplicate")
+        add_act = menu.addAction("Add Variable")
         menu.addSeparator()
-        del_act = menu.addAction("Delete")
+        
+        # Only show object actions if we right-clicked an item
+        rename_act = None
+        dup_act = None
+        del_act = None
+        if item:
+            rename_act = menu.addAction("Rename")
+            dup_act = menu.addAction("Duplicate")
+            menu.addSeparator()
+            del_act = menu.addAction("Delete")
         
         action = menu.exec(self.tree.mapToGlobal(pos))
-        if action == del_act:
+        if action == add_act:
+            self.add_variable()
+        elif del_act and action == del_act:
             self.delete_variable(name)
-        elif action == rename_act:
+        elif rename_act and action == rename_act:
             self.tree.editItem(item, 0)
-        elif action == edit_act:
-            self.on_item_double_clicked(item, 0)
-        elif action == dup_act:
+        elif dup_act and action == dup_act:
              import copy
              info = copy.deepcopy(self.canvas.graph_variables[name])
              base_name = f"{name}_Copy"

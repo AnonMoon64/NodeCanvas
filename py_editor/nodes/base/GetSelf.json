@@ -1,0 +1,10 @@
+{
+  "type": "base",
+  "name": "GetSelf",
+  "category": "Scene",
+  "inputs": {},
+  "outputs": {
+    "self": "object"
+  },
+  "code": "name = \"GetSelf\"\ninputs = {}\noutputs = {\"self\":\"object\"}\ndef process():\n    # The interpreter injects 'self' into variables\n    return ctx.variables.get('self')\n"
+}

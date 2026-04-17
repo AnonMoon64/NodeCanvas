@@ -1,0 +1,11 @@
+{
+    "name": "Get Camera Position",
+    "category": "World",
+    "description": "Returns the world-space position of the main viewport camera.",
+    "color": "#66BB6A",
+    "inputs": {},
+    "outputs": {
+        "value": "vector3"
+    },
+    "code": "def process():\n    # Handled by interpreter\n    return (0,0,0)"
+}

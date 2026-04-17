@@ -2912,6 +2912,10 @@ class LogicEditor(QGraphicsView):
         if from_type == 'int' and to_type == 'float':
             return True
         
+        # Object compatibility: string/ID can connect to object input
+        if (from_type == 'string' and to_type == 'object') or (from_type == 'object' and to_type == 'string'):
+            return True
+        
         # Otherwise, types don't match - offer to insert converter
         converter = self._get_converter_for_types(from_type, to_type)
         if converter:

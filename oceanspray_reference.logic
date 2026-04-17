@@ -1,0 +1,65 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "template": "OnUpdate",
+      "pos": [-400, 0],
+      "values": {}
+    },
+    {
+      "id": 2,
+      "template": "Emitter",
+      "pos": [200, 0],
+      "values": {
+        "preset": "Spray",
+        "rate": 2000.0,
+        "life": 0.7,
+        "size": 0.45,
+        "gravity": 15.0,
+        "speed_min": 8.0,
+        "speed_max": 20.0,
+        "cone": 1.2
+      }
+    },
+    {
+      "id": 5,
+      "template": "Message",
+      "pos": [-150, 100],
+      "values": {
+        "event": "GetFoamPoints"
+      }
+    },
+    {
+      "id": 6,
+      "template": "Self",
+      "pos": [-350, 150],
+      "values": {}
+    }
+  ],
+  "connections": [
+    {
+      "from_node": 1,
+      "from_pin": "exec_out",
+      "to_node": 5,
+      "to_pin": "exec"
+    },
+    {
+      "from_node": 5,
+      "from_pin": "exec_out",
+      "to_node": 2,
+      "to_pin": "exec_in"
+    },
+    {
+      "from_node": 5,
+      "from_pin": "result",
+      "to_node": 2,
+      "to_pin": "spawn_positions"
+    },
+    {
+      "from_node": 6,
+      "from_pin": "self",
+      "to_node": 5,
+      "to_pin": "target"
+    }
+  ]
+}

@@ -5,7 +5,7 @@
     "target": "string"
   },
   "outputs": {
-    "parent": "string"
+    "parent": "object"
   },
-  "code": "name = \"GetParent\"\ninputs = {\"target\":\"string\"}\noutputs = {\"parent\":\"string\"}\ndef process(target):\n    # Runtime will resolve scene object parent via __scene_objects__ mapping if present\n    return None\n"
+  "code": "name = \"GetParent\"\ninputs = {\"target\":\"object\"}\noutputs = {\"parent\":\"object\"}\ndef process(target):\n    # Runtime will resolve scene object parent via __scene_objects__ mapping if present\n    return None\n"
 }

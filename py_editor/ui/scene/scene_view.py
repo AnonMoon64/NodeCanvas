@@ -96,7 +96,7 @@ class SceneViewport(QOpenGLWidget):
         self._view_combo.setStyleSheet(self._mode_combo.styleSheet())
         self._view_combo.currentIndexChanged.connect(self._on_view_combo_changed)
         self._view_combo.setFixedWidth(120)
-        self._update_view_combo_pos()
+        # self._update_view_combo_pos() # MOVED TO END
 
         # Transformation HUD
         from PyQt6.QtWidgets import QFrame, QPushButton, QButtonGroup
@@ -122,6 +122,20 @@ class SceneViewport(QOpenGLWidget):
             hud_lay.addWidget(btn)
             self._btns.addButton(btn)
 
+        # Snap toggle
+        self._snap_enabled = True
+        self._snap_btn = QPushButton("Snap")
+        self._snap_btn.setCheckable(True)
+        self._snap_btn.setChecked(True)
+        self._snap_btn.setFixedSize(50, 22)
+        self._snap_btn.setStyleSheet("""
+            QPushButton { background: none; border: none; color: #aaa; font-size: 10px; font-weight: bold; }
+            QPushButton:checked { background: #4fc3f7; color: #000; border-radius: 3px; }
+            QPushButton:hover { color: #fff; }
+        """)
+        self._snap_btn.clicked.connect(lambda c: setattr(self, '_snap_enabled', bool(c)))
+        hud_lay.addWidget(self._snap_btn)
+
         # Speed Slider HUD (Top Right)
         from PyQt6.QtWidgets import QSlider, QLabel
         self._speed_hud = QFrame(self)
@@ -143,6 +157,31 @@ class SceneViewport(QOpenGLWidget):
         """)
         self._speed_slider.valueChanged.connect(self._on_speed_slider_changed)
         speed_lay.addWidget(self._speed_slider)
+        
+        # FPS Counter UI (Top Right)
+        from PyQt6.QtWidgets import QLabel
+        self._fps_label = QLabel("0 FPS", self)
+        self._fps_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._fps_label.setStyleSheet("""
+            QLabel {
+                background: rgba(40, 40, 45, 180); 
+                color: #4fc3f7; 
+                border: 1px solid #444; 
+                border-radius: 6px;
+                font-size: 10px;
+                font-weight: bold;
+                padding: 0px 4px;
+            }
+        """)
+        self._fps_label.setFixedHeight(30)
+        self._fps_label.setFixedWidth(60)
+        
+        self._fps_counter = 0
+        self._fps_accumulator = 0.0
+        self._current_fps = 0
+        
+        # Finally position all HUD elements
+        self._update_view_combo_pos()
 
         self._frame_timer = QTimer(self)
         self._frame_timer.timeout.connect(self._tick)
@@ -173,7 +212,7 @@ class SceneViewport(QOpenGLWidget):
 
     def start_render_loop(self):
         self._last_time = time.perf_counter()
-        self._frame_timer.start(16)
+        self._frame_timer.start(0)
 
     def stop_render_loop(self):
         self._frame_timer.stop()
@@ -252,6 +291,17 @@ class SceneViewport(QOpenGLWidget):
         cur_time = time.time()
         self._screen_logs = [log for log in self._screen_logs if cur_time - log.get('timestamp', 0) < 5.0]
         
+        # Update FPS
+        self._fps_counter += 1
+        self._fps_accumulator += dt
+        if self._fps_accumulator >= 1.0:
+            fps = int(self._fps_counter / self._fps_accumulator)
+            self._current_fps = fps
+            self._fps_label.setText(f"{fps} FPS")
+            self.fps_updated.emit(fps)
+            self._fps_counter = 0
+            self._fps_accumulator = 0.0
+            
         self.update()
         
         # Update Editor-time Controllers
@@ -448,6 +498,10 @@ class SceneViewport(QOpenGLWidget):
                             sel.position[1] = start_pos[1] - dy * factor
                         elif self._gizmo_axis == 'z':
                             sel.position[2] = start_pos[2] + dx * factor * r[2] - dy * factor * u[2]
+                        if getattr(self, '_snap_enabled', False) and self.grid_size > 0:
+                            gs = self.grid_size
+                            ai = {'x': 0, 'y': 1, 'z': 2}[self._gizmo_axis]
+                            sel.position[ai] = round(sel.position[ai] / gs) * gs
                     
                     elif self._gizmo_mode == "rotate":
                         delta = dx - dy
@@ -482,10 +536,14 @@ class SceneViewport(QOpenGLWidget):
         self._view_combo.move(w - 130, 10)
         if hasattr(self, '_speed_hud'):
             self._speed_hud.move(w - 290, 10)
+        if hasattr(self, '_fps_label'):
+            self._fps_label.move(w - 360, 10)
 
     def paintGL(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glEnable(GL_DEPTH_TEST)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         glEnable(GL_CULL_FACE)
         glCullFace(GL_BACK)
         w, h = self.width(), self.height()
@@ -520,7 +578,8 @@ class SceneViewport(QOpenGLWidget):
                 from py_editor.ui.procedural_clouds import render_clouds
                 render_clouds(self._cam3d.pos, cloud_obj, time_val)
             
-            if not self.is_play_mode: self._draw_grid_3d()
+            # Always draw grid in editor – help spatial awareness
+            self._draw_grid_3d()
             
             # 3. Landscape
             for obj in self.scene_objects:
@@ -529,25 +588,56 @@ class SceneViewport(QOpenGLWidget):
                     draw_landscape_3d(obj, self)
             
             # 4. Ocean (flat) + Ocean World (spherical)
+            # 4. Ocean (flat) + Ocean World (spherical)
+            weather_obj = next((o for o in self.scene_objects
+                                if o.obj_type == 'weather' and o.active), None)
+            
             for obj in self.scene_objects:
                 if obj.obj_type == 'ocean' and obj.active:
                     from py_editor.ui.procedural_ocean import render_ocean_gpu
-                    render_ocean_gpu(self._cam3d.pos, obj, self._elapsed_time)
+                    render_ocean_gpu(self._cam3d.pos, obj, self._elapsed_time, weather_obj)
                 elif obj.obj_type == 'ocean_world' and obj.active:
                     from py_editor.ui.procedural_ocean_world import render_ocean_world
-                    render_ocean_world(self._cam3d.pos, obj, self._elapsed_time)
+                    render_ocean_world(self._cam3d.pos, obj, self._elapsed_time, weather_obj)
             
             # 5. Primitives
             self._draw_scene_objects_3d()
             
             # 5.5 GPU Boids (Instanced)
             self._draw_gpu_boids()
+
+            # 5.55 Weather primitives (global, procedural) — drive particles
+            try:
+                weather_obj = next((o for o in self.scene_objects
+                                    if o.obj_type == 'weather' and o.active), None)
+                if weather_obj:
+                    from py_editor.core.weather_system import update_weather
+                    # dt derived from the particle manager clock is inside update_weather
+                    update_weather(weather_obj, self.scene_objects, self._cam3d.pos, 0.0)
+            except Exception:
+                pass
+
+            # 5.6 Particles (CPU sim + instanced billboard sprites)
+            try:
+                from py_editor.core.particle_system import get_particle_manager
+                glPushMatrix()
+                try:
+                    # Particles are world-space, so we only want the camera view transform
+                    get_particle_manager().update_and_draw(self._cam3d.pos, None, None)
+                finally:
+                    glPopMatrix()
+            except Exception as e:
+                if getattr(self, '_last_render_err', None) != str(e):
+                    print(f"[RENDER ERROR] Particles: {e}")
+                    self._last_render_err = str(e)
+                pass # Silencing log bloat but keeping one-time report
             
             # 6. Gizmos (Restored)
             from py_editor.ui.scene.render_manager import _draw_gizmo
             selected_obj = next((o for o in self.scene_objects if o.selected), None)
             if selected_obj:
-                _draw_gizmo(selected_obj.position, selected_axis=self._gizmo_axis)
+                _draw_gizmo(selected_obj.position, selected_axis=self._gizmo_axis,
+                            mode=self._gizmo_mode, camera=self._cam3d)
             
             # --- Viewport Overlay ---
             self._draw_viewport_overlay(w, h)
@@ -557,6 +647,11 @@ class SceneViewport(QOpenGLWidget):
             self._draw_scene_objects_2d()
 
     def _draw_viewport_overlay(self, w, h):
+        # Ensure 2D overlay isn't culled or depth-tested against 3D scene
+        glDisable(GL_DEPTH_TEST)
+        glDisable(GL_CULL_FACE)
+        glUseProgram(0)
+        
         # Draw Orientation Widget and Logs
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -566,6 +661,8 @@ class SceneViewport(QOpenGLWidget):
         
         # 2. UE5 Style On-Screen Logs (Top Left)
         self._draw_onscreen_logs(painter, w, h)
+
+        # 3. FPS overlay was removed (moved to HUD)
         
         painter.end()
 
@@ -608,6 +705,7 @@ class SceneViewport(QOpenGLWidget):
                     obj.camera_speed = new_speed
 
     def _draw_orientation_widget(self, painter, w, h):
+        painter.save()
         # Draw small XYZ axes in corner
         cx, cy = 60, h - 60
         
@@ -622,19 +720,31 @@ class SceneViewport(QOpenGLWidget):
             y2d = vec[1] * math.cos(pitch_rad) - z_rot * math.sin(pitch_rad)
             return QPointF(cx + x2d * 30, cy - y2d * 30)
 
+        # Origin hub (Fully opaque for maximum visibility)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(120, 120, 120, 255))
+        painter.drawEllipse(QPointF(cx, cy), 5, 5)
+        
         # Draw Axes
         axes = [
-            ((1, 0, 0), QColor(255, 60, 60), "X"),
-            ((0, 1, 0), QColor(60, 255, 60), "Y"),
-            ((0, 0, 1), QColor(60, 60, 255), "Z")
+            ((1, 0, 0), QColor(255, 60, 60, 255), "X"),
+            ((0, 1, 0), QColor(60, 255, 60, 255), "Y"),
+            ((0, 0, 1), QColor(60, 60, 255, 255), "Z")
         ]
         
         for vec, color, label in axes:
             end_pt = project(vec)
-            painter.setPen(QPen(color, 2))
+            # Thicker, solid color pen for visibility. 
+            # Disable AA for the line itself to avoid 'thinning' artifacts on some drivers
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            painter.setPen(QPen(color, 3, Qt.PenStyle.SolidLine))
             painter.drawLine(QPointF(cx, cy), end_pt)
-            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
             painter.drawText(int(end_pt.x() - 4), int(end_pt.y() + 4), label)
+            
+        painter.restore()
 
     def _draw_grid_3d(self):
         if not self.show_grid: return
@@ -667,15 +777,48 @@ class SceneViewport(QOpenGLWidget):
         from py_editor.ui.shader_manager import get_shader
         import math
         
-        # 1. Calculate Sun Direction from Atmosphere
+        # 1. Calculate Sun Direction from Atmosphere.
+        # Use the same formula as the atmosphere shader so lighting matches the sky.
         atmo = next((o for o in self.scene_objects if o.obj_type == 'atmosphere' and o.active), None)
-        time_tod = getattr(atmo, 'time_of_day', 0.25)
-        sol_angle = (time_tod - 0.5) * 6.28318
-        sun_dir = (math.sin(sol_angle), math.cos(sol_angle), 0.2)
+        from py_editor.ui.procedural_atmosphere import get_sun_direction, get_sun_color
+        sun_dir = get_sun_direction(atmo)
+        sun_color = get_sun_color(atmo)
+        time_tod = getattr(atmo, 'time_of_day', 0.25) if atmo else 0.25
+
+        # Drive the fixed-function directional light so legacy primitives & meshes
+        # actually respond to time-of-day (it was previously broken: light pointed
+        # wrong direction and color never updated).
+        try:
+            day = max(0.0, min(1.0, sun_dir[1] * 2.0 + 0.3))
+            ambient = (0.18 * day + 0.05, 0.20 * day + 0.05, 0.25 * day + 0.08, 1.0)
+            glEnable(GL_LIGHT0)
+            # GL light direction is -dir pointing from the surface toward the sun.
+            glLightfv(GL_POSITION, (sun_dir[0], sun_dir[1], sun_dir[2], 0.0)) if False else None
+            # The above one-liner uses glLight[0]; do it explicitly:
+            from OpenGL.GL import glLightfv, GL_LIGHT0, GL_POSITION, GL_DIFFUSE, GL_AMBIENT, GL_SPECULAR
+            glLightfv(GL_LIGHT0, GL_POSITION, (sun_dir[0], sun_dir[1], sun_dir[2], 0.0))
+            glLightfv(GL_LIGHT0, GL_DIFFUSE,  (sun_color[0] * day, sun_color[1] * day, sun_color[2] * day, 1.0))
+            glLightfv(GL_LIGHT0, GL_SPECULAR, (sun_color[0] * day, sun_color[1] * day, sun_color[2] * day, 1.0))
+            glLightfv(GL_LIGHT0, GL_AMBIENT,  ambient)
+        except Exception:
+            pass
+
+        # Honor explicit Directional Light objects: first found overrides the sun for direction.
+        for _l in self.scene_objects:
+            if _l.obj_type == 'light_directional' and _l.active:
+                # Rotation defines direction: default (0,0,0) points down -Y (down light)
+                rx, ry, rz = [math.radians(a) for a in _l.rotation]
+                # Base vector down
+                dx = math.sin(ry) * math.cos(rx)
+                dy = -math.cos(ry) * math.cos(rx)
+                dz = math.sin(rx)
+                m = math.sqrt(dx*dx + dy*dy + dz*dz) or 1.0
+                sun_dir = (-dx/m, -dy/m, -dz/m)
+                break
         
         for obj in self.scene_objects:
             # Skip procedural large scale primitives (handled elsewhere)
-            if obj.obj_type in ('atmosphere', 'ocean', 'landscape', 'universe', 'clouds', 'cloud_layer'):
+            if obj.obj_type in ('atmosphere', 'ocean', 'landscape', 'universe', 'clouds', 'cloud_layer', 'weather'):
                 continue
             
             glPushMatrix()
@@ -820,8 +963,14 @@ class SceneViewport(QOpenGLWidget):
         s_pos = self._cam3d.world_to_screen(pos, w, h)
         if not s_pos: return None
         s_pos = QPointF(*s_pos)
-        
-        axes = {'x': [pos[0]+2, pos[1], pos[2]], 'y': [pos[0], pos[1]+2, pos[2]], 'z': [pos[0], pos[1], pos[2]+2]}
+
+        # Match the scale used in _draw_gizmo so picking lines up with what's drawn.
+        from py_editor.ui.scene.render_manager import _gizmo_screen_scale
+        gs = _gizmo_screen_scale(pos, self._cam3d) * 2.0  # axes are 2 units long pre-scale
+
+        axes = {'x': [pos[0]+gs, pos[1], pos[2]],
+                'y': [pos[0], pos[1]+gs, pos[2]],
+                'z': [pos[0], pos[1], pos[2]+gs]}
         best_axis, min_dist = None, 20.0 # Tolerance in pixels
         
         for name, end_world in axes.items():
@@ -1071,6 +1220,7 @@ class SceneViewport(QOpenGLWidget):
         self.texture_cache[path] = tex
         print(f"[VIEWPORT] Loaded texture: {Path(path).name}")
 
+
     def _draw_gpu_boids(self):
         """Draw GPU-simulated boids using indirect drawing."""
         if not hasattr(self, 'boid_mgr') or self.boid_mgr.num_boids == 0: return
@@ -1159,6 +1309,7 @@ class SceneViewport(QOpenGLWidget):
         block_size   = float(getattr(obj, 'voxel_block_size', 1.0))
         render_style = str(getattr(obj, 'voxel_render_style', 'Smooth'))
         layers       = getattr(obj, 'voxel_layers', [])
+        features     = getattr(obj, 'voxel_features', [])
         obj_pos      = np.array(obj.position, dtype=np.float32)
 
         # Enforce minimum voxel size per style
@@ -1205,8 +1356,9 @@ class SceneViewport(QOpenGLWidget):
             chunk_vox_size = float(max(block_size * 32.0, 64.0))
 
         layers_hash = hash(str(layers))
+        features_hash = hash(str(features))
         cache_key = (f"voxel_{obj.id}_{seed}_{v_type}_{v_radius}"
-                     f"_{block_size}_{smooth}_{render_style}_{layers_hash}")
+                     f"_{block_size}_{smooth}_{render_style}_{layers_hash}_{features_hash}")
 
         world_grid_min = np.floor(world_min / chunk_vox_size).astype(int)
         world_grid_max = np.ceil(world_max  / chunk_vox_size).astype(int)
@@ -1269,6 +1421,7 @@ class SceneViewport(QOpenGLWidget):
         # Snapshot layers NOW so threads always use the state at scheduling time,
         # not a mutated version that may arrive after the thread starts.
         layers_snap = list(layers)
+        features_snap = list(features)
 
         # ── Schedule generation & collect active chunk keys ──
         chunk_keys = []
@@ -1301,10 +1454,15 @@ class SceneViewport(QOpenGLWidget):
                             cmin_loc = np.array([ix, iy, iz], dtype=np.float32) * chunk_vox_size
                             cmax_loc = cmin_loc + chunk_vox_size
 
-                            def _gen_chunk(cmin, cmax, per_res, cck, vs, lsnap):
+                            def _gen_chunk(cmin, cmax, per_res, cck, vs, lsnap, fsnap):
                                 produced = False
                                 try:
-                                    margin = 3
+                                    # Each smoothing iteration pulls from one more neighbor
+                                    # cell per axis. Margin must cover ALL iterations plus a
+                                    # cell for surface-nets gradient sampling, otherwise the
+                                    # outer cells fall back to edge-padding and their density
+                                    # diverges from what the neighboring chunk sees → seams.
+                                    margin = max(3, int(smooth) + 2)
                                     p_min  = cmin - margin * vs
                                     p_max  = cmax + margin * vs
                                     # per_res + 2*margin + 1 samples → linspace step == vs
@@ -1313,7 +1471,7 @@ class SceneViewport(QOpenGLWidget):
 
                                     grid = VoxelEngine.generate_density_grid(
                                         resolution=total_samples, seed=seed, mode=v_type,
-                                        radius=v_radius, layers=lsnap,
+                                        radius=v_radius, layers=lsnap, features=fsnap,
                                         center=obj_pos, min_p=p_min, max_p=p_max)
                                     if smooth > 0:
                                         grid = VoxelEngine.smooth_grid(grid, iterations=smooth)
@@ -1361,12 +1519,49 @@ class SceneViewport(QOpenGLWidget):
                             threading.Thread(
                                 target=_gen_chunk,
                                 args=(cmin_loc, cmax_loc, per_res,
-                                      chunk_cache_key, vox_step, layers_snap),
+                                      chunk_cache_key, vox_step, layers_snap, features_snap),
                                 daemon=True).start()
 
             chunk_keys.append(chunk_cache_key)
 
         self.mesh_cache[cache_key] = chunk_keys
+
+        # ── Inner filler shell ──
+        # Cross-LOD chunk boundaries produce small cracks that reveal the
+        # background. Draw a plain, slightly-smaller solid shell first so those
+        # cracks show a neutral rock/water tone instead of the skybox. The
+        # chunk mesh draws on top, fully covering the filler everywhere except
+        # at the seams.
+        try:
+            glUseProgram(0)
+            glEnable(GL_DEPTH_TEST)
+            glEnable(GL_CULL_FACE)
+            glCullFace(GL_BACK)
+            if v_type.lower() == "round":
+                # Dark neutral; overridden at seams with whatever is closest
+                glColor4f(0.32, 0.30, 0.27, 1.0)
+                glPushMatrix()
+                glTranslatef(float(obj_pos[0]), float(obj_pos[1]), float(obj_pos[2]))
+                glScalef(v_radius * 0.985, v_radius * 0.985, v_radius * 0.985)
+                q = gluNewQuadric()
+                gluSphere(q, 1.0, 64, 64)
+                gluDeleteQuadric(q)
+                glPopMatrix()
+            else:
+                # Flat filler plane at y≈obj_pos.y-0.05 covering the streamed window
+                glColor4f(0.3, 0.28, 0.24, 1.0)
+                fy = float(obj_pos[1]) - 0.05
+                fxmin, fzmin = float(world_min[0]), float(world_min[2])
+                fxmax, fzmax = float(world_max[0]), float(world_max[2])
+                glBegin(GL_QUADS)
+                glNormal3f(0.0, 1.0, 0.0)
+                glVertex3f(fxmin, fy, fzmin)
+                glVertex3f(fxmax, fy, fzmin)
+                glVertex3f(fxmax, fy, fzmax)
+                glVertex3f(fxmin, fy, fzmax)
+                glEnd()
+        except Exception:
+            pass
 
         # ── Render all chunks with a ready VAO ──
         glDisable(GL_CULL_FACE)

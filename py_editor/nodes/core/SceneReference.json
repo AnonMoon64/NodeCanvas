@@ -1,0 +1,18 @@
+{
+    "name": "Scene Reference",
+    "category": "Core",
+    "description": "Returns a handle to a scene object by ID or name.",
+    "color": "#AB47BC",
+    "inputs": {},
+    "outputs": {
+        "instance": "instance"
+    },
+    "widgets": {
+        "object_id": {
+            "type": "string",
+            "default": ""
+        }
+    },
+    "isSceneReferenceNode": true,
+    "code": "def process():\n    # Handled by interpreter\n    return None"
+}

@@ -2,7 +2,7 @@
     "name": "Return",
     "category": "Core/Flow",
     "description": "Return a value from this logic graph (defines output signature)",
-    "color": "#FF5722",
+    "color": "#2196F3",
     "inputs": {
         "exec": "exec",
         "value": "any"

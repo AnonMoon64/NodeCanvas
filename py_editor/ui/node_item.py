@@ -246,8 +246,18 @@ class NodeItem(QGraphicsRectItem):
 
         # 2. Main Body Gradient
         grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-        grad.setColorAt(0, QColor(28, 33, 43, 230))
-        grad.setColorAt(1, QColor(20, 24, 32, 230))
+        if self.category == "Events":
+            grad.setColorAt(0, QColor(220, 30, 30, 240))  # Vivid Red
+            grad.setColorAt(1, QColor(140, 20, 20, 240))
+        elif getattr(self, "template_name", None) == "Return":
+            grad.setColorAt(0, QColor(40, 120, 220, 240))  # Professional Blue
+            grad.setColorAt(1, QColor(20, 80, 160, 240))
+        elif getattr(self, "template_name", None) == "Custom Event":
+            grad.setColorAt(0, QColor(81, 45, 168, 240))  # True Deep Purple
+            grad.setColorAt(1, QColor(49, 27, 146, 240))
+        else:
+            grad.setColorAt(0, QColor(28, 33, 43, 230))
+            grad.setColorAt(1, QColor(20, 24, 32, 230))
         painter.setBrush(QBrush(grad))
         
         # 3. Border Color
@@ -259,6 +269,12 @@ class NodeItem(QGraphicsRectItem):
             painter.setPen(QPen(QColor(255, 200, 50), 2))
         elif self.execution_state == "completed":
             painter.setPen(QPen(QColor(50, 220, 120), 2))
+        elif self.category == "Events":
+            painter.setPen(QPen(QColor(220, 60, 60, 240), 1)) # Red border for events
+        elif getattr(self, "template_name", None) == "Return":
+            painter.setPen(QPen(QColor(80, 160, 255, 240), 1)) # Blue border for return
+        elif getattr(self, "template_name", None) == "Custom Event":
+            painter.setPen(QPen(QColor(126, 87, 194, 240), 1)) # Deep purple border
         else:
             painter.setPen(QPen(QColor(45, 55, 65, 255), 1))
             
@@ -318,7 +334,7 @@ class NodeItem(QGraphicsRectItem):
                     has_exec = True
     
         self.is_compact = not has_exec
-        self.node_width = 180 if self.is_compact else 240
+        self.node_width = 200 if self.is_compact else 300
         spacing = 20 if self.is_compact else 24
         header_height = 0 if self.is_compact else 26
         
@@ -381,7 +397,7 @@ class NodeItem(QGraphicsRectItem):
                 self._add_type_selector_widget(name, pin_type or 'any', y)
             # For all other nodes (including composite nodes), create widgets for typed inputs
             # But NOT for exec pins
-            if pin_type and pin_type in ('int', 'float', 'string', 'bool'):
+            if pin_type and (pin_type in ('int', 'float', 'string', 'bool') or pin_type.startswith('enum:')):
                 self._create_value_widget(name, pin_type, y)
     
         for idx, name in enumerate(output_defs):
@@ -433,6 +449,23 @@ class NodeItem(QGraphicsRectItem):
             if hasattr(self, 'canvas') and self.canvas:
                 widget.currentTextChanged.connect(lambda: self.canvas.value_changed.emit())
             self.pin_values[pin_name] = False
+        elif pin_type.startswith('enum:'):
+            # Parse enum:Option1,Option2,Option3
+            parts = pin_type.split(':')
+            options = []
+            if len(parts) > 1:
+                options = parts[1].split(',')
+            
+            widget = QComboBox()
+            widget.addItems(options)
+            widget.setCurrentIndex(0)
+            widget.setFixedWidth(85)
+            # Default to the first option
+            self.pin_values[pin_name] = options[0] if options else ""
+            
+            widget.currentTextChanged.connect(lambda v: self._on_value_changed(pin_name, v))
+            if hasattr(self, 'canvas') and self.canvas:
+                widget.currentTextChanged.connect(lambda: self.canvas.value_changed.emit())
         elif pin_type in ('int', 'float'):
             widget = QLineEdit()
             widget.setText('0' if pin_type == 'int' else '0.0')
@@ -529,12 +562,17 @@ class NodeItem(QGraphicsRectItem):
             # Create proxy widget and position it
             proxy = QGraphicsProxyWidget(self)
             proxy.setWidget(widget)
+            # Ensure widgets (especially dropdowns) are ALWAYS on top of everything else.
+            # Stagger so that widgets higher up the node (lower y_pos) have HIGHER Z than
+            # those below them, allowing dropdowns that open downwards to cover lower widgets.
+            proxy.setZValue(10000.0 - (y_pos * 0.1)) 
             
             # Position safely inside the box
+            # Position safely on the right side - adjusted right (40) to avoid overlap with labels
             if getattr(self, 'is_compact', False):
-                proxy.setPos(-15, y_pos - 12)
+                proxy.setPos(20, y_pos - 12)
             else:
-                proxy.setPos(0, y_pos - 12)
+                proxy.setPos(60, y_pos - 12)
             self.value_widgets[pin_name] = proxy
     
     def _on_value_changed(self, pin_name, value):
@@ -693,6 +731,7 @@ class NodeItem(QGraphicsRectItem):
         
         proxy = QGraphicsProxyWidget(self)
         proxy.setWidget(type_combo)
+        proxy.setZValue(1001)  # Ensure type selector is above value widgets
         # Position based on whether it's input or output
         tname = getattr(self, 'template_name', None)
         if tname == '__composite_input__':
@@ -734,6 +773,7 @@ class NodeItem(QGraphicsRectItem):
         
         name_proxy = QGraphicsProxyWidget(self)
         name_proxy.setWidget(name_edit)
+        name_proxy.setZValue(1001)  # Ensure name editor is above value widgets
         if tname == '__composite_input__':
             name_proxy.setPos(-100, y_pos + 15)  # Below type selector
         else:

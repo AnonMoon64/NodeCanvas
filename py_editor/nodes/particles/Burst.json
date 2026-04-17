@@ -1,0 +1,19 @@
+{
+  "type": "particles",
+  "name": "Burst",
+  "category": "Particles",
+  "inputs": {
+    "exec_in": "exec",
+    "target": "object",
+    "emitter_name": "string",
+    "count": "int"
+  },
+  "outputs": {
+    "exec_out": "exec"
+  },
+  "values": {
+    "emitter_name": "primary",
+    "count": 80
+  },
+  "code": "name = \"Burst\"\ninputs = {\"exec_in\":\"exec\",\"target\":\"object\",\"emitter_name\":\"string\",\"count\":\"int\"}\noutputs = {\"exec_out\":\"exec\"}\n"
+}

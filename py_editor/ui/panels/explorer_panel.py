@@ -164,29 +164,81 @@ class FileExplorerWidget(QWidget):
 
         convert_mesh = None
 
-        # If a file is selected, show file operations
-        if selected_path and selected_path.exists() and not selected_path.is_dir():
-            open_action = menu.addAction("Open")
+        is_dir = selected_path.is_dir()
+        is_root = (selected_path == self.root_path)
+
+        open_action = None
+        rename_action = None
+        duplicate_action = None
+        copy_path_action = None
+        delete_action = None
+        new_folder = None
+        new_logic = None
+        new_mat = None
+        new_prefab = None
+        refresh_action = None
+
+        if not is_root:
+            if not is_dir:
+                open_action = menu.addAction("Open")
             rename_action = menu.addAction("Rename")
-            duplicate_action = menu.addAction("Duplicate")
+            if not is_dir:
+                duplicate_action = menu.addAction("Duplicate")
             copy_path_action = menu.addAction("Copy Path")
             delete_action = menu.addAction("Delete")
             menu.addSeparator()
-            if selected_path.suffix.lower() in ('.obj', '.fbx'):
-                convert_mesh = menu.addAction("Create .mesh")
-        else:
-            # Directory selected — allow creating materials and prefabs
-            target_dir = Path(selected_path) if selected_path and selected_path.is_dir() else Path(self.root_path)
+
+        if is_dir:
+            new_folder = menu.addAction("New Folder")
+            new_logic = menu.addAction("New Logic")
             new_mat = menu.addAction("Create Material")
             new_prefab = menu.addAction("Create Prefab")
             menu.addSeparator()
+
+        if is_dir:
+            if is_root or not any([open_action, rename_action]):
+                 # if nothing else was added, add at least refresh
+                 pass
             refresh_action = menu.addAction("Refresh")
+
+        if not is_dir and selected_path.suffix.lower() in ('.obj', '.fbx'):
+            convert_mesh = menu.addAction("Create .mesh")
 
         action = menu.exec(self.file_tree.mapToGlobal(pos))
         if not action: return
 
         # File actions
-        if selected_path and selected_path.exists() and not selected_path.is_dir():
+        # Actions that apply to both files AND folders
+        if action == rename_action:
+            new_name, ok = QInputDialog.getText(self, "Rename", "New name:", text=selected_path.name)
+            if ok and new_name:
+                try:
+                    target = selected_path.with_name(new_name)
+                    selected_path.rename(target)
+                    self.refresh()
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to rename: {e}")
+            return
+
+        if action == delete_action:
+            ans = QMessageBox.question(self, "Delete", f"Delete {selected_path.name} (and all contents)?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if ans == QMessageBox.StandardButton.Yes:
+                try:
+                    if selected_path.is_dir():
+                        shutil.rmtree(selected_path)
+                    else:
+                        selected_path.unlink()
+                    self.refresh()
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Delete failed: {e}")
+            return
+
+        if action == copy_path_action:
+            QApplication.clipboard().setText(str(selected_path))
+            return
+
+        # File-only actions
+        if not is_dir:
             if action == open_action:
                 if selected_path.suffix == ".prefab":
                     self.file_opened.emit(str(selected_path), "prefab")
@@ -195,7 +247,6 @@ class FileExplorerWidget(QWidget):
                 elif selected_path.suffix == ".logic":
                     self.file_opened.emit(str(selected_path), "logic")
                 elif selected_path.suffix == ".scene":
-                    # Open scenes inside the editor
                     self.file_opened.emit(str(selected_path), "scene")
                 else:
                     try:
@@ -207,17 +258,6 @@ class FileExplorerWidget(QWidget):
                             subprocess.Popen(['xdg-open', str(selected_path)])
                     except Exception:
                         QMessageBox.information(self, "Open", f"Cannot open: {selected_path}")
-                return
-
-            if action == rename_action:
-                new_name, ok = QInputDialog.getText(self, "Rename", "New name:")
-                if ok and new_name:
-                    try:
-                        target = selected_path.with_name(new_name)
-                        selected_path.rename(target)
-                        self.refresh()
-                    except Exception as e:
-                        QMessageBox.critical(self, "Error", f"Failed to rename: {e}")
                 return
 
             if action == duplicate_action:
@@ -237,30 +277,35 @@ class FileExplorerWidget(QWidget):
                     QMessageBox.critical(self, "Error", f"Duplicate failed: {e}")
                 return
 
-            if action == copy_path_action:
-                QApplication.clipboard().setText(str(selected_path))
-                return
-
-            if action == delete_action:
-                ans = QMessageBox.question(self, "Delete", f"Delete {selected_path.name}?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                if ans == QMessageBox.StandardButton.Yes:
-                    try:
-                        if selected_path.is_dir():
-                            shutil.rmtree(selected_path)
-                        else:
-                            selected_path.unlink()
-                        self.refresh()
-                    except Exception as e:
-                        QMessageBox.critical(self, "Error", f"Delete failed: {e}")
-                return
-
             if action == convert_mesh:
                 self._handle_mesh_conversion(selected_path)
                 return
 
-        # Directory actions (create material/prefab, refresh)
+        # Directory-only actions
         else:
-            dir_path = Path(selected_path) if selected_path and selected_path.is_dir() else Path(self.root_path)
+            dir_path = selected_path
+            if action == new_folder:
+                name, ok = QInputDialog.getText(self, "New Folder", "Folder name:")
+                if ok and name:
+                    try:
+                        (dir_path / name).mkdir(parents=True, exist_ok=True)
+                        self.refresh()
+                    except Exception as e:
+                        QMessageBox.warning(self, "Error", f"Failed to create folder: {e}")
+                return
+
+            if action == new_logic:
+                name, ok = QInputDialog.getText(self, "New Logic", "File name:")
+                if ok and name:
+                    try:
+                        file_path = dir_path / (f"{name}.logic" if not name.endswith(".logic") else name)
+                        with open(file_path, 'w') as f:
+                            json.dump({"nodes": [], "connections": []}, f, indent=4)
+                        self.refresh()
+                    except Exception as e:
+                        QMessageBox.warning(self, "Error", f"Failed to create logic: {e}")
+                return
+
             if action == new_mat:
                 name, ok = QInputDialog.getText(self, "Create Material", "Name:")
                 if not ok or not name: return

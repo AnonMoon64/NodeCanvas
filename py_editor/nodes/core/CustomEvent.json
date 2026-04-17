@@ -2,7 +2,7 @@
     "name": "Custom Event",
     "category": "Core/Events",
     "description": "Define a custom event that can be invoked via Message. Public events are callable from outside.",
-    "color": "#66BB6A",
+    "color": "#512DA8",
     "inputs": {},
     "outputs": {
         "exec": "exec",
