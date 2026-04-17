@@ -47,7 +47,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.scene_editor, "Viewport")
         
         self.ui_builder = UIBuilderWidget(self)
-        self.tabs.addTab(self.ui_builder, "UI Builder")
+        self.tabs.addTab(self.ui_builder, "UI")
         
         self._setup_toolbar()
         self._setup_docks()

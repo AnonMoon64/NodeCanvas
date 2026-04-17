@@ -319,6 +319,15 @@ def render_ocean_gpu(camera_pos, obj, sim_time=0.0):
         tint = getattr(obj, 'ocean_reflection_tint', [0.5, 0.7, 1.0, 1.0])
         shader.set_uniform_v3("u_reflection_tint", tint[0], tint[1], tint[2])
 
+        # Foam layer controls
+        shader.set_uniform_f("u_foam_jacobian",        getattr(obj, 'ocean_foam_jacobian',        1.0))
+        shader.set_uniform_f("u_foam_whitecap",        getattr(obj, 'ocean_foam_whitecap',        1.0))
+        shader.set_uniform_f("u_foam_whitecap_thresh", getattr(obj, 'ocean_foam_whitecap_thresh', 0.5))
+        shader.set_uniform_f("u_foam_streak",          getattr(obj, 'ocean_foam_streak',          1.0))
+        shader.set_uniform_f("u_foam_streak_speed",    getattr(obj, 'ocean_foam_streak_speed',    1.5))
+        shader.set_uniform_f("u_foam_sharpness",       getattr(obj, 'ocean_foam_sharpness',       2.5))
+        shader.set_uniform_f("u_detail_strength",      getattr(obj, 'ocean_detail_strength',      0.7))
+
     except Exception as e:
         print(f"[OCEAN SHADER ERROR] {e}")
         glUseProgram(0)

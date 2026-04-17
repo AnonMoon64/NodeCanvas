@@ -70,7 +70,7 @@ NodeCanvas is built on a modular "Separated Pipeline" architecture:
 - **Infinite Streaming**: Real-time terrain loading/unloading around the camera with configurable **Loading Radii**.
 - **Dynamic Resolution (Detail Level)**: Fine-tune detail from **Low (16x16)** to **Very High (128x128)** per chunk.
 - **Smooth Shading**: Integrated per-vertex normal sampling for organic, shaded terrain.
-- **GPU-Accelerated Ocean**: A full real-time water system powered by **Gerstner Wave Shaders** and static GPU VBO grids for infinite, fluid-animated seas. Includes **Double-Sided Rendering** for seamless underwater viewing.
+- **GPU-Accelerated Ocean**: A high-fidelity water system powered by **Multi-Cascade FFT Displacement** (1000m, 200m, 50m cascades) and Gerstner "Hero" waves. Includes hardware-accelerated VBO grids and synchronized displacement/normal mapping.
 - **Planetary Voxel Engine**: A fully overhauled voxel system for rendering procedural planets from pebble to Earth scale.
   - **Corrected Surface Nets**: Fixed float32/float64 GL upload bug and Perlin lattice truncation bug that caused vertex spikes and screen-filling corruption.
   - **Exposed Resolution Control**: Per-object grid resolution (16–256) lets you trade generation speed for surface detail.
@@ -93,7 +93,11 @@ As and Alpha-stage development environment, the following areas are currently id
 
 - **Visual Polish**: The current lighting model uses a dual-pass fixed-function approach. While atmospheric, it lacks advanced shadows and Screen-Space Ambient Occlusion (SSAO).
 - **Materials**: Materials are currently vertex-colored per biome; full PBR texture support is in the pipeline.
-- **Ocean Foam**: The current foam system is a visual placeholder. It effectively simulates surface brightness/crests but lacks the "bubbly" volumetric detail and physically-based bubble noise required for production-grade realism. A complete overhaul is planned.
+- **Ocean Surface Fidelity**: Balanced Physically-Based shading system with **Triple-Layer Specular** (Broad Sheen, Tight Glint, Sub-pixel Sparkle) and **Always-on SSS Rim lighting**.
+- **Advanced Foam System**: Implemented a 3-layer responsive foam engine:
+  - **Jacobian Fold Foam**: Simulates foam at wave breaking points.
+  - **Height Whitecaps**: Artist-controlled crest density.
+  - **Animated Streaks**: Wind-aligned trails that drag behind moving crests.
 
 ---
 
@@ -146,9 +150,10 @@ The current focus is on creating a photorealistic, physically-based world enviro
 
 ### 🌊 The Ocean Roadmap
 
-* **Layer 1: Motion (Done)** – Wave speed, height, and Gerstner-based direction blending.
-- **Layer 2: Surface (Done)** – Shorter-crested Gerstner peaks, reflection tints, and animated foam.
-- **Layer 3: Integration (In Progress)** – Shoreline depth-blending and vertical bias stabilization.
+* **Layer 1: Motion (Done)** – Multi-cascade FFT displacement and artist-driven Gerstner hero waves.
+- **Layer 2: Surface (Done)** – Triple-specular "wet" look, SSS rim lighting, and balanced day/night sky reflections.
+- **Layer 3: Details (Done)** – 3-layer foam system (Jacobian, Whitecap, Streaks) with micro-detail normal sharpening.
+- **Layer 4: Integration (In Progress)** – Shoreline depth-blending and vertical bias stabilization.
 
 ### 💡 High-Impact Features Pipeline
 

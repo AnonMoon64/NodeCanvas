@@ -583,6 +583,15 @@ class ObjectPropertiesPanel(QWidget):
             self.ocean_specular.setValue(getattr(obj, 'ocean_specular_intensity', 1.0))
             self.ocean_peak_bright.setValue(getattr(obj, 'ocean_peak_brightness', 1.0))
             self.ocean_sss_str.setValue(getattr(obj, 'ocean_sss_strength', 1.0))
+            # Foam settings
+            self.ocean_foam_jacobian.setValue(getattr(obj, 'ocean_foam_jacobian', 1.0))
+            self.ocean_foam_sharpness.setValue(getattr(obj, 'ocean_foam_sharpness', 2.5))
+            self.ocean_foam_whitecap.setValue(getattr(obj, 'ocean_foam_whitecap', 1.0))
+            self.ocean_foam_whitecap_thresh.setValue(getattr(obj, 'ocean_foam_whitecap_thresh', 0.5))
+            self.ocean_foam_streak.setValue(getattr(obj, 'ocean_foam_streak', 1.0))
+            self.ocean_foam_streak_speed.setValue(getattr(obj, 'ocean_foam_streak_speed', 1.5))
+            # Surface detail
+            self.ocean_detail_strength.setValue(getattr(obj, 'ocean_detail_strength', 0.4))
         elif obj.obj_type == 'voxel_world':
             # Radius: choose closest preset and apply
             radius_val = float(getattr(obj, 'voxel_radius', 0.5))
@@ -823,6 +832,46 @@ class ObjectPropertiesPanel(QWidget):
         tint_btn.setStyleSheet(BTN_SS)
         tint_btn.clicked.connect(self._on_tint_clicked)
         self._add_property_row(og, "Reflection Tint", tint_btn)
+
+        # ---- FOAM SETTINGS ----
+        og.addSpacing(8)
+        lbl_foam = QLabel("FOAM SETTINGS")
+        lbl_foam.setStyleSheet("color: #4fc3f7; font-size: 10px; font-weight: bold;")
+        og.addWidget(lbl_foam)
+
+        self.ocean_foam_jacobian = PropertySlider(1.0, 0.0, 3.0)
+        self.ocean_foam_jacobian.valueChanged.connect(lambda v: self.update_obj_prop('ocean_foam_jacobian', v))
+        self._add_property_row(og, "Break Foam", self.ocean_foam_jacobian)
+
+        self.ocean_foam_sharpness = PropertySlider(2.5, 0.5, 8.0)
+        self.ocean_foam_sharpness.valueChanged.connect(lambda v: self.update_obj_prop('ocean_foam_sharpness', v))
+        self._add_property_row(og, "Foam Sharpness", self.ocean_foam_sharpness)
+
+        self.ocean_foam_whitecap = PropertySlider(1.0, 0.0, 3.0)
+        self.ocean_foam_whitecap.valueChanged.connect(lambda v: self.update_obj_prop('ocean_foam_whitecap', v))
+        self._add_property_row(og, "Whitecap", self.ocean_foam_whitecap)
+
+        self.ocean_foam_whitecap_thresh = PropertySlider(0.5, 0.0, 1.0)
+        self.ocean_foam_whitecap_thresh.valueChanged.connect(lambda v: self.update_obj_prop('ocean_foam_whitecap_thresh', v))
+        self._add_property_row(og, "Whitecap Height", self.ocean_foam_whitecap_thresh)
+
+        self.ocean_foam_streak = PropertySlider(1.0, 0.0, 3.0)
+        self.ocean_foam_streak.valueChanged.connect(lambda v: self.update_obj_prop('ocean_foam_streak', v))
+        self._add_property_row(og, "Streak Foam", self.ocean_foam_streak)
+
+        self.ocean_foam_streak_speed = PropertySlider(1.5, 0.0, 3.0)
+        self.ocean_foam_streak_speed.valueChanged.connect(lambda v: self.update_obj_prop('ocean_foam_streak_speed', v))
+        self._add_property_row(og, "Streak Speed", self.ocean_foam_streak_speed)
+
+        # ---- SURFACE DETAIL ----
+        og.addSpacing(8)
+        lbl_det = QLabel("SURFACE DETAIL")
+        lbl_det.setStyleSheet("color: #4fc3f7; font-size: 10px; font-weight: bold;")
+        og.addWidget(lbl_det)
+
+        self.ocean_detail_strength = PropertySlider(0.4, 0.0, 4.0)
+        self.ocean_detail_strength.valueChanged.connect(lambda v: self.update_obj_prop('ocean_detail_strength', v))
+        self._add_property_row(og, "Micro Detail", self.ocean_detail_strength)
 
         layout.addWidget(self.ocean_group)
         

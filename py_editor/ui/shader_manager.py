@@ -344,6 +344,15 @@ def create_ocean_shader_fft():
     uniform float u_peak_brightness;
     uniform float u_sss_strength;
 
+    // Foam layer controls
+    uniform float u_foam_jacobian;        // jacobian break foam intensity
+    uniform float u_foam_whitecap;        // height whitecap foam intensity
+    uniform float u_foam_whitecap_thresh; // height threshold for whitecaps (0-1)
+    uniform float u_foam_streak;          // streak trail intensity
+    uniform float u_foam_streak_speed;    // how fast streak trails move
+    uniform float u_foam_sharpness;       // jacobian foam sharpness exponent
+    uniform float u_detail_strength;      // 4th-pass micro-detail normal weight
+
     in vec3  v_pos;
     in float v_height;
     in vec3  v_view_dir;
@@ -353,6 +362,7 @@ def create_ocean_shader_fft():
         // Cascade UVs derived from cascade-0 UV
         vec2 uv1 = v_uv * 5.0;
         vec2 uv2 = v_uv * 20.0;
+        vec2 uv3 = uv2 * 4.0;   // 4th micro-detail pass (×80 total scale)
 
         // --- Multi-cascade per-pixel normals ---
         // Smaller cascades contribute proportionally more to surface detail
@@ -373,11 +383,17 @@ def create_ocean_shader_fft():
         float hD2 = texture(u_displacement_c2, uv2 - vec2(0.0, d1)).y * u_cascade2_weight;
         float hU2 = texture(u_displacement_c2, uv2 + vec2(0.0, d1)).y * u_cascade2_weight;
 
-        // --- Sharper normals: lower Y flatness, stronger small-cascade weight ---
+        // 4th pass: reuse cascade-2 texture at ×4 UV — adds fine surface crispness (not bumps)
+        float hL3 = texture(u_displacement_c2, uv3 - vec2(d1, 0.0)).y * u_cascade2_weight * u_detail_strength;
+        float hR3 = texture(u_displacement_c2, uv3 + vec2(d1, 0.0)).y * u_cascade2_weight * u_detail_strength;
+        float hD3 = texture(u_displacement_c2, uv3 - vec2(0.0, d1)).y * u_cascade2_weight * u_detail_strength;
+        float hU3 = texture(u_displacement_c2, uv3 + vec2(0.0, d1)).y * u_cascade2_weight * u_detail_strength;
+
+        // --- Normals: 4-level cascade, Y=0.06 middle ground between smooth and crisp ---
         vec3 normal = normalize(vec3(
-            (hL - hR) + (hL1 - hR1) * 4.0 + (hL2 - hR2) * 14.0,
-            0.055,
-            (hD - hU) + (hD1 - hU1) * 4.0 + (hD2 - hU2) * 14.0
+            (hL - hR) + (hL1 - hR1) * 4.0 + (hL2 - hR2) * 12.0 + (hL3 - hR3) * 23.0,
+            0.06,
+            (hD - hU) + (hD1 - hU1) * 4.0 + (hD2 - hU2) * 12.0 + (hD3 - hU3) * 23.0
         ));
         vec3 view_dir = normalize(v_view_dir);
 
@@ -386,17 +402,25 @@ def create_ocean_shader_fft():
         vec3  light_dir = sun_dir;
         float day_ratio = max(sin(time_of_day * 3.14159), 0.0);
 
-        // --- Base Water Color ---
+        // --- Base Water Color (SoT: rich teal-inky blue, not flat navy) ---
         float h_norm    = clamp(v_height * 0.04 + 0.55, 0.0, 1.0);
-        vec3 color_deep = ocean_color.rgb * 0.22;
-        vec3 color_shal = ocean_color.rgb * 0.80;
-        vec3 water_rgb  = mix(color_deep, color_shal, h_norm);
+        // Deep = dark teal-black (middle ground between rich teal and flat navy)
+        vec3 color_deep = mix(vec3(0.005, 0.04, 0.08), ocean_color.rgb * 0.38, 0.45);
+        // Shallow = bright teal-cyan (SoT's glowing crest color)
+        vec3 color_shal = mix(vec3(0.04, 0.30, 0.42), ocean_color.rgb, 0.55) * 1.15;
+        vec3 water_rgb  = mix(color_deep, color_shal, pow(h_norm, 1.3));
+
+        // --- Ambient sky bounce — the key to "wet" look ---
+        // Even in shadow, ocean always reflects some sky. SoT water is NEVER flat matte.
+        vec3 sky_amb_day   = mix(vec3(0.07, 0.18, 0.32), vec3(0.18, 0.35, 0.52), h_norm);
+        vec3 sky_amb_night = vec3(0.03, 0.07, 0.16);
+        water_rgb += mix(sky_amb_night, sky_amb_day, day_ratio) * 0.25;
 
         // --- Directional Diffuse ---
-        // Raised minimum 0.18 → 0.32 so shadowed faces are dark but NOT black artifacts
+        // Min 0.38 middle ground — keeps shadows from going pure black
         float NdotL   = dot(normal, light_dir);
-        float diffuse  = mix(0.32, 1.0, clamp(NdotL * 0.5 + 0.5, 0.0, 1.0));
-        diffuse = mix(0.22, diffuse, day_ratio);
+        float diffuse  = mix(0.38, 1.0, clamp(NdotL * 0.5 + 0.5, 0.0, 1.0));
+        diffuse = mix(0.47, diffuse, day_ratio);
         water_rgb *= diffuse;
 
         // --- SoT Foam System (three layers) ---
@@ -410,69 +434,85 @@ def create_ocean_shader_fft():
         float jac_mask = clamp(jmask0 * 0.6 + jmask1 * 0.25 + jmask2 * 0.15, 0.0, 1.0);
 
         // 2. Height whitecap foam — thick caps on tall crests (SoT hallmark)
-        float crest_foam = smoothstep(0.70, 1.0, h_norm);
+        float wc_thresh  = mix(0.60, 0.90, u_foam_whitecap_thresh);
+        float crest_foam = smoothstep(wc_thresh, 1.0, h_norm);
         float churn = sin(v_pos.x * 0.018 + time * 0.4) * cos(v_pos.z * 0.014 - time * 0.3);
         crest_foam  *= smoothstep(-0.2, 0.6, churn);
 
         // 3. Animated streak foam — trails dragging behind crests along wind direction
-        vec2 wind_dir = normalize(vec2(0.83, 0.56));
-        float streak0 = clamp(1.0 - texture(u_jacobian_map, v_uv - wind_dir * time * 0.06).r,       0.0, 1.0);
-        float streak1 = clamp(1.0 - texture(u_jacobian_map, v_uv - wind_dir * time * 0.10 + 0.13).r, 0.0, 1.0);
-        float streaks = pow(streak0, 6.0) * 0.5 + pow(streak1, 8.0) * 0.3;
+        vec2 wind_dir  = normalize(vec2(0.83, 0.56));
+        float s_speed  = u_foam_streak_speed * 0.04;  // slider [0..3] → [0..0.12]
+        float streak0  = clamp(1.0 - texture(u_jacobian_map, v_uv - wind_dir * time * s_speed).r,            0.0, 1.0);
+        float streak1  = clamp(1.0 - texture(u_jacobian_map, v_uv - wind_dir * time * s_speed * 1.7 + 0.13).r, 0.0, 1.0);
+        float streaks  = pow(streak0, 6.0) * 0.5 + pow(streak1, 8.0) * 0.3;
 
-        // 4. Fine bubble detail
+        // 4. Fine bubble detail (stays driven by jacobian)
         float bubbles = sin(v_pos.x * 4.0 + time) * cos(v_pos.z * 4.0 - time * 0.5) * 0.5 + 0.5;
         bubbles      *= sin(v_pos.x * 20.0 - time * 2.0) * 0.3 + 0.7;
         bubbles       = smoothstep(0.5, 0.9, bubbles * jac_mask);
 
+        // Per-layer foam mask driven by individual sliders
+        float jac_sharp = max(u_foam_sharpness, 0.5);
         float foam_mask = clamp(
-            pow(jac_mask, 2.5) * foam_amount * 4.5 +
-            crest_foam         * foam_amount * 3.0 +
-            streaks            * foam_amount * 1.5 +
-            bubbles            * foam_amount * 1.5,
+            pow(jac_mask, jac_sharp)  * foam_amount * u_foam_jacobian  * 4.5 +
+            crest_foam                * foam_amount * u_foam_whitecap   * 3.0 +
+            streaks                   * foam_amount * u_foam_streak      * 1.5 +
+            bubbles                   * foam_amount * u_foam_jacobian   * 1.5,
             0.0, 1.0);
 
-        // Foam is lit by diffuse — bright on sun-facing faces, dimmer in shadow
-        vec3 foam_lit = vec3(0.90, 0.94, 0.92) * mix(0.55, 1.0, diffuse);
+        // Foam is always bright white (SoT foam is vivid, not grey)
+        vec3 foam_lit = vec3(0.96, 0.98, 0.97) * mix(0.80, 1.0, diffuse);
         water_rgb = mix(water_rgb, foam_lit, foam_mask);
 
         // --- SoT Sub-Surface Scattering ---
+        float sss_h    = clamp(v_height * 0.12, 0.0, 1.0);
+        // Always-on teal rim SSS: wave faces glow cyan even without direct sun
+        float sss_rim  = pow(max(1.0 - dot(view_dir, normal), 0.0), 2.5) * sss_h;
+        water_rgb += vec3(0.01, 0.36, 0.30) * sss_rim * 0.15 * u_sss_strength;
+        // Directional back-lit SSS (sun shining through wave tips)
         float sss_back = max(-NdotL, 0.0);
         float sss_view = pow(max(dot(view_dir, light_dir), 0.0), 2.0);
-        float sss_h    = clamp(v_height * 0.12, 0.0, 1.0);
         float sss      = sss_back * sss_view * sss_h;
-        water_rgb += vec3(0.0, 0.50, 0.42) * sss * u_sss_strength * day_ratio;
+        water_rgb += vec3(0.0, 0.65, 0.55) * sss * u_sss_strength * 1.4 * day_ratio;
 
         // --- Wave Crest Peak Brightness ---
-        float crest = smoothstep(0.74, 1.0, h_norm) * clamp(NdotL, 0.0, 1.0) * day_ratio;
-        water_rgb  += vec3(0.75, 0.87, 0.83) * crest * u_peak_brightness * 0.30;
+        float crest = smoothstep(0.72, 1.0, h_norm) * clamp(NdotL * 0.5 + 0.5, 0.0, 1.0);
+        water_rgb  += vec3(0.55, 0.85, 0.80) * crest * u_peak_brightness * 0.45;
 
-        // --- Dual-Layer Specular ---
-        vec3  half_v     = normalize(light_dir + view_dir + vec3(1e-5));
-        float spec_broad   = pow(max(dot(normal, half_v), 0.0),  96.0) * 0.5  * u_specular_intensity * day_ratio;
-        float spec_sparkle = pow(max(dot(normal, half_v), 0.0), 3000.0) * 12.0 * u_specular_intensity * day_ratio;
+        // --- Triple-Layer Specular (wet glass look) ---
+        vec3  half_v       = normalize(light_dir + view_dir + vec3(1e-5));
+        float NdotH        = max(dot(normal, half_v), 0.0);
+        // Broad wet sheen covers most of the wave face
+        float spec_broad   = pow(NdotH,   62.0) * 1.4  * u_specular_intensity * day_ratio;
+        // Tight glint — smaller bright highlight
+        float spec_tight   = pow(NdotH,  350.0) * 7.0  * u_specular_intensity * day_ratio;
+        // Sub-pixel sparkle — ocean glitter
+        float spec_sparkle = pow(NdotH, 3000.0) * 18.0 * u_specular_intensity * day_ratio;
 
-        // --- Fresnel Reflection ---
-        float fresnel = pow(1.0 - max(dot(normal, view_dir), 0.0), 4.0) * u_fresnel_strength;
+        // --- Fresnel Reflection (stronger = wetter) ---
+        float NdotV   = max(dot(normal, view_dir), 0.0);
+        float fresnel = pow(1.0 - NdotV, 3.5) * u_fresnel_strength;
+        // Minimum fresnel so glancing water always shows sky (key "wet" cue)
+        fresnel = max(fresnel, pow(1.0 - NdotV, 1.2) * 0.06);
 
         // --- Sky Reflection Tint ---
         float day_t   = clamp(1.0 - abs(sin(time_of_day * 3.14159)), 0.0, 1.0);
-        vec3  sky_ref = mix(u_reflection_tint, vec3(1.0, 0.55, 0.25), day_t);
-        // At night, reflect a faint dark sky colour
-        sky_ref = mix(vec3(0.02, 0.04, 0.10), sky_ref, day_ratio);
+        vec3  sky_ref = mix(u_reflection_tint, vec3(1.0, 0.60, 0.28), day_t);
+        // Night sky: middle ground blue-black reflection
+        sky_ref = mix(vec3(0.04, 0.075, 0.16), sky_ref, day_ratio);
         water_rgb = mix(water_rgb, sky_ref, fresnel);
 
-        vec3 final_rgb = water_rgb + spec_broad + spec_sparkle;
+        vec3 final_rgb = water_rgb + spec_broad + spec_tight + spec_sparkle;
 
-        // --- Atmospheric Horizon Haze (rich blue, NOT dark) ---
-        // SoT starts haze much closer and uses a rich mid-blue, not near-black
+        // --- Atmospheric Horizon Haze (SoT: rich blue-teal at all times) ---
         float hdist     = length(v_pos.xz - cam_pos.xz);
-        float haze      = clamp((hdist - 350.0) / 700.0, 0.0, 1.0);
-        haze            = pow(haze, 1.4);
-        vec3 haze_day   = mix(ocean_color.rgb * 0.5, vec3(0.40, 0.58, 0.80), 0.55);
-        vec3 haze_night = vec3(0.02, 0.03, 0.07);
+        float haze      = clamp((hdist - 300.0) / 650.0, 0.0, 1.0);
+        haze            = pow(haze, 1.2);
+        vec3 haze_day   = mix(ocean_color.rgb * 0.55, vec3(0.38, 0.58, 0.82), 0.55);
+        // Night haze: visible dark blue, not near-black
+        vec3 haze_night = mix(vec3(0.04, 0.09, 0.20), ocean_color.rgb * 0.25, 0.5);
         vec3 haze_color = mix(haze_night, haze_day, day_ratio);
-        final_rgb = mix(final_rgb, haze_color, haze * 0.88);
+        final_rgb = mix(final_rgb, haze_color, haze * 0.85);
 
         gl_FragColor = vec4(final_rgb, ocean_opacity);
     }
