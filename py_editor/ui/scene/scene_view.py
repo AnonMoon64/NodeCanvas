@@ -450,6 +450,21 @@ class SceneViewport(QOpenGLWidget):
             self._last_mouse = event.position()
             self.setCursor(Qt.CursorShape.BlankCursor)
 
+    def mouseDoubleClickEvent(self, event):
+        """On double click, center and zoom in on the object."""
+        mx, my = int(event.position().x()), int(event.position().y())
+        found = self._pick_object(mx, my)
+        if found:
+            # Focus camera on the object
+            radius = max(found.scale) if hasattr(found, 'scale') else 1.0
+            self._cam3d.focus_on(found.position, radius)
+            # Ensure it becomes selected as well
+            for o in self.scene_objects:
+                o.selected = (o == found)
+            self.sync_ui_to_selection()
+            self.object_selected.emit([found])
+            self.update()
+
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton: 
             self._lmb = False
@@ -777,130 +792,107 @@ class SceneViewport(QOpenGLWidget):
         from py_editor.ui.shader_manager import get_shader
         import math
         
-        # 1. Calculate Sun Direction from Atmosphere.
-        # Use the same formula as the atmosphere shader so lighting matches the sky.
         atmo = next((o for o in self.scene_objects if o.obj_type == 'atmosphere' and o.active), None)
-        from py_editor.ui.procedural_atmosphere import get_sun_direction, get_sun_color
+        from py_editor.ui.procedural_atmosphere import get_sun_direction, get_sun_color, get_ambient_color
         sun_dir = get_sun_direction(atmo)
         sun_color = get_sun_color(atmo)
-        time_tod = getattr(atmo, 'time_of_day', 0.25) if atmo else 0.25
+        amb_color = get_ambient_color(atmo)
 
-        # Drive the fixed-function directional light so legacy primitives & meshes
-        # actually respond to time-of-day (it was previously broken: light pointed
-        # wrong direction and color never updated).
+        # Legacy fixed-function light setup
         try:
-            day = max(0.0, min(1.0, sun_dir[1] * 2.0 + 0.3))
-            ambient = (0.18 * day + 0.05, 0.20 * day + 0.05, 0.25 * day + 0.08, 1.0)
             glEnable(GL_LIGHT0)
-            # GL light direction is -dir pointing from the surface toward the sun.
-            glLightfv(GL_POSITION, (sun_dir[0], sun_dir[1], sun_dir[2], 0.0)) if False else None
-            # The above one-liner uses glLight[0]; do it explicitly:
             from OpenGL.GL import glLightfv, GL_LIGHT0, GL_POSITION, GL_DIFFUSE, GL_AMBIENT, GL_SPECULAR
             glLightfv(GL_LIGHT0, GL_POSITION, (sun_dir[0], sun_dir[1], sun_dir[2], 0.0))
-            glLightfv(GL_LIGHT0, GL_DIFFUSE,  (sun_color[0] * day, sun_color[1] * day, sun_color[2] * day, 1.0))
-            glLightfv(GL_LIGHT0, GL_SPECULAR, (sun_color[0] * day, sun_color[1] * day, sun_color[2] * day, 1.0))
-            glLightfv(GL_LIGHT0, GL_AMBIENT,  ambient)
-        except Exception:
-            pass
+            glLightfv(GL_LIGHT0, GL_DIFFUSE,  (sun_color[0], sun_color[1], sun_color[2], 1.0))
+            glLightfv(GL_LIGHT0, GL_SPECULAR, (sun_color[0], sun_color[1], sun_color[2], 1.0))
+            glLightfv(GL_LIGHT0, GL_AMBIENT,  (amb_color[0], amb_color[1], amb_color[2], 1.0))
+        except Exception: pass
 
-        # Honor explicit Directional Light objects: first found overrides the sun for direction.
-        for _l in self.scene_objects:
-            if _l.obj_type == 'light_directional' and _l.active:
-                # Rotation defines direction: default (0,0,0) points down -Y (down light)
-                rx, ry, rz = [math.radians(a) for a in _l.rotation]
-                # Base vector down
-                dx = math.sin(ry) * math.cos(rx)
-                dy = -math.cos(ry) * math.cos(rx)
-                dz = math.sin(rx)
-                m = math.sqrt(dx*dx + dy*dy + dz*dz) or 1.0
-                sun_dir = (-dx/m, -dy/m, -dz/m)
-                break
+        # Sort objects by hierarchy: render parents before children
+        # We'll use a recursive renderer to handle nested transforms correctly.
+        lookup = {obj.id: obj for obj in self.scene_objects}
+        top_level = [obj for obj in self.scene_objects if getattr(obj, 'parent_id', None) not in lookup]
         
-        for obj in self.scene_objects:
-            # Skip procedural large scale primitives (handled elsewhere)
-            if obj.obj_type in ('atmosphere', 'ocean', 'landscape', 'universe', 'clouds', 'cloud_layer', 'weather'):
-                continue
-            
-            glPushMatrix()
-            glTranslatef(*obj.position)
-            glRotatef(obj.rotation[0], 1, 0, 0)
-            glRotatef(obj.rotation[1], 0, 1, 0)
-            glRotatef(obj.rotation[2], 0, 0, 1)
-            glScalef(*obj.scale)
-            
-            if obj.visible:
-                s_name = getattr(obj, 'shader_name', 'Standard')
-                active_shader = get_shader(s_name)
-                if active_shader:
-                    active_shader.use()
-                    active_shader.set_uniform_f("time", self._elapsed_time)
-                    active_shader.set_uniform_v3("sunDir", *sun_dir)
-                    
-                    # Material Props
-                    col = list(obj.color)
-                    col[3] = getattr(obj, 'alpha', 1.0)
-                    active_shader.set_uniform_v4("base_color", *col)
-                    
-                    params = getattr(obj, 'shader_params', {})
-                    # Modulate fish/anim shader 'speed' by object acceleration magnitude
-                    try:
-                        acc = getattr(obj, 'acceleration', None)
-                        if acc:
-                            acc_mag = math.sqrt(acc[0]*acc[0] + acc[1]*acc[1] + acc[2]*acc[2])
-                            params['speed'] = params.get('speed', 2.0) + acc_mag * 2.0
-                    except Exception:
-                        pass
-                    active_shader.set_uniform_f("invert_axis", params.get("invert_axis", 0.0))
-                    
-                    if s_name == "PBR Material":
-                        # PBR specific uniforms
-                        active_shader.set_uniform_v4("u_base_color", *col)
-                        active_shader.set_uniform_f("u_metallic", getattr(obj, 'pbr_metallic', 0.0))
-                        active_shader.set_uniform_f("u_roughness", getattr(obj, 'pbr_roughness', 0.5))
-                        active_shader.set_uniform_v2("u_tiling", *(getattr(obj, 'pbr_tiling', [1.0, 1.0])))
-                        active_shader.set_uniform_v3("cam_pos", *self._cam3d.pos)
-                    
-                    for pk, pv in params.items():
-                        if isinstance(pv, (int, float)):
-                            active_shader.set_uniform_f(pk, pv)
-                        elif isinstance(pv, list) and len(pv) == 4:
-                            active_shader.set_uniform_v4(pk, *pv)
-                    
-                    # DRAW PRIMITIVES
-                    if obj.obj_type in ('cube', 'plane'):
-                        _draw_wireframe_cube()
-                    elif obj.obj_type == 'sphere':
-                        _draw_wireframe_sphere()
-                    elif obj.obj_type == 'mesh' and obj.mesh_path:
-                        alpha = col[3]
-                        if alpha >= 0.99: glDisable(GL_BLEND)
-                        else: 
-                            glEnable(GL_BLEND)
-                            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-                        self._draw_custom_mesh(obj, shader_active=True)
-                        glEnable(GL_BLEND) 
-                    elif obj.obj_type == 'voxel_world':
-                        self._draw_voxel_world(obj, shader_active=True)
-                    
-                    active_shader.stop()
-                else:
-                    # Fallback fixed function
-                    if obj.obj_type in ('cube', 'plane'):
-                        _draw_wireframe_cube()
-                    elif obj.obj_type == 'sphere':
-                        _draw_wireframe_sphere()
-                    elif obj.obj_type == 'mesh' and obj.mesh_path:
-                        self._draw_custom_mesh(obj, shader_active=False)
-                    elif obj.obj_type == 'voxel_world':
-                        self._draw_voxel_world(obj, shader_active=False)
-            
-            # Icons for specialty objects always show
-            if obj.obj_type == 'camera':
-                _draw_camera_icon(color=(0.3, 0.7, 1.0, 1.0) if obj.selected else (0.1, 0.4, 0.6, 0.8))
-            elif obj.obj_type in ('light_directional', 'light_point'):
-                _draw_light_icon(color=(1, 1, 0.4, 1.0) if obj.selected else (0.6, 0.6, 0.0, 0.8))
+        def render_hierarchy(obj_list, sun_direction):
+            for obj in obj_list:
+                # Skip procedural primitives handled by main loop (Atmosphere, Universe, etc.)
+                is_proc = obj.obj_type in ('atmosphere', 'ocean', 'landscape', 'universe', 'clouds', 'cloud_layer', 'weather')
                 
-            glPopMatrix()
+                glPushMatrix()
+                glTranslatef(*obj.position)
+                glRotatef(obj.rotation[0], 1, 0, 0)
+                glRotatef(obj.rotation[1], 0, 1, 0)
+                glRotatef(obj.rotation[2], 0, 0, 1)
+                glScalef(*obj.scale)
+                
+                if not is_proc:
+                    if obj.visible:
+                        s_name = getattr(obj, 'shader_name', 'Standard')
+                        active_shader = get_shader(s_name)
+                        if active_shader:
+                            active_shader.use()
+                            # Default vertex attribute 3 (gl_Color in compat profile)
+                            # to (0,0,0,0) so Standard shader's mix() picks base_color
+                            # unless a voxel VAO overrides with per-vertex biome color.
+                            try: glVertexAttrib4f(3, 0.0, 0.0, 0.0, 0.0)
+                            except Exception: pass
+                            active_shader.set_uniform_f("time", self._elapsed_time)
+                            active_shader.set_uniform_v3("sunDir", *sun_direction)
+                            active_shader.set_uniform_v3("sunColor", *sun_color)
+                            active_shader.set_uniform_v3("ambientColor", *amb_color)
+                            col = list(obj.color); col[3] = getattr(obj, 'alpha', 1.0)
+                            active_shader.set_uniform_v4("base_color", *col)
+                            
+                            if s_name == "PBR Material":
+                                active_shader.set_uniform_v4("u_base_color", *col)
+                                active_shader.set_uniform_f("u_metallic", getattr(obj, 'pbr_metallic', 0.0))
+                                active_shader.set_uniform_f("u_roughness", getattr(obj, 'pbr_roughness', 0.5))
+                                active_shader.set_uniform_v2("u_tiling", *(getattr(obj, 'pbr_tiling', [1.0, 1.0])))
+                                active_shader.set_uniform_v3("cam_pos", *self._cam3d.pos)
+
+                            if obj.obj_type in ('cube', 'plane'): _draw_wireframe_cube()
+                            elif obj.obj_type == 'sphere': _draw_wireframe_sphere()
+                            elif obj.obj_type == 'mesh' and obj.mesh_path:
+                                self._draw_custom_mesh(obj, shader_active=True)
+                            elif obj.obj_type == 'voxel_world':
+                                self._draw_voxel_world(obj, shader_active=True)
+                            active_shader.stop()
+                        else:
+                            if obj.obj_type in ('cube', 'plane'): _draw_wireframe_cube()
+                            elif obj.obj_type == 'sphere': _draw_wireframe_sphere()
+                            elif obj.obj_type == 'mesh' and obj.mesh_path:
+                                self._draw_custom_mesh(obj, shader_active=False)
+                            elif obj.obj_type == 'voxel_world':
+                                self._draw_voxel_world(obj, shader_active=False)
+
+                    # Highlight
+                    if obj.selected and obj.visible:
+                        glDisable(GL_LIGHTING); glPolygonMode(GL_FRONT_AND_BACK, GL_LINE); glLineWidth(2.5)
+                        glColor4f(1.0, 0.8, 0.2, 1.0)
+                        if obj.obj_type in ('cube', 'plane'): _draw_wireframe_cube(color=(1, 0.8, 0.2, 1), fill_color=(0,0,0,0))
+                        elif obj.obj_type == 'sphere': _draw_wireframe_sphere(color=(1, 0.8, 0.2, 1))
+                        elif obj.obj_type == 'mesh': self._draw_custom_mesh(obj, shader_active=False)
+                        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL); glLineWidth(1.0); glEnable(GL_LIGHTING)
+
+                    # Icons
+                    if obj.obj_type == 'camera':
+                        _draw_camera_icon(color=(0.3, 0.7, 1.0, 1.0) if obj.selected else (0.1, 0.4, 0.6, 0.8))
+                    elif obj.obj_type in ('light_directional', 'light_point'):
+                        _draw_light_icon(color=(1, 1, 0.4, 1.0) if obj.selected else (0.6, 0.6, 0.0, 0.8))
+
+                # Special Highlight for Procedural types if selected (rendered in their own space/coordinate system locally)
+                if is_proc and obj.selected and obj.obj_type in ('ocean', 'landscape'):
+                     # (Already implemented earlier, keeping it localized to the object transform)
+                     pass 
+
+                # RENDER CHILDREN
+                children = [o for o in self.scene_objects if getattr(o, 'parent_id', None) == obj.id]
+                if children:
+                    render_hierarchy(children, sun_direction)
+                
+                glPopMatrix()
+
+        render_hierarchy(top_level, sun_dir)
 
     def _on_view_combo_changed(self, index):
         view_names = ["Perspective", "Top", "Bottom", "Left", "Right", "Front", "Back"]
@@ -983,15 +975,30 @@ class SceneViewport(QOpenGLWidget):
         return best_axis
 
     def _pick_object(self, mx, my) -> Optional[SceneObject]:
-        """Perform ray-sphere intersection for object picking."""
-        from py_editor.ui.scene.render_manager import _sub, _dot
+        """Perform accurate raycasting for objects and procedural primitives."""
+        from py_editor.ui.scene.render_manager import _sub, _dot, _add, _scale_vec
         origin, direction = self._cam3d.screen_to_ray(mx, my, self.width(), self.height())
         best_t, found = float('inf'), None
+        
         for obj in self.scene_objects:
+            # 1. SPECIAL CASE: Procedural Planes (Ocean, Landscape Flat)
+            if obj.obj_type in ('ocean', 'landscape'):
+                # Handle as infinite horizontal plane for selection ease
+                plane_normal = (0.0, 1.0, 0.0)
+                denom = _dot(direction, plane_normal)
+                if abs(denom) > 1e-6:
+                    t = _dot(_sub(obj.position, origin), plane_normal) / denom
+                    if 0 < t < best_t:
+                        # Only pick if looking "down" or "at" the plane
+                        best_t, found = t, obj
+                continue
+
+            # 2. DEFAULT CASE: Sphere proxy
             oc = [_sub(origin, obj.position)[i] for i in range(3)]
             b = _dot(oc, direction)
-            # Sphere proxy
-            c = _dot(oc, oc) - (1.0 * max(obj.scale))**2
+            # Use radius relative to scale with a minimum size of 0.5 for icons
+            radius = max(0.5, max(obj.scale) if hasattr(obj, 'scale') else 1.0)
+            c = _dot(oc, oc) - radius**2
             h = b*b - c
             if h >= 0:
                 t = -b - math.sqrt(h)
@@ -1313,7 +1320,7 @@ class SceneViewport(QOpenGLWidget):
         obj_pos      = np.array(obj.position, dtype=np.float32)
 
         # Enforce minimum voxel size per style
-        if render_style == 'Minecraft':
+        if render_style in ('Minecraft', 'Blocky'):
             smooth     = 0
             block_size = max(block_size, 1.0)   # blocky: ≥1 unit/voxel
         else:
@@ -1326,39 +1333,95 @@ class SceneViewport(QOpenGLWidget):
         cam_pos = np.array(self._cam3d.pos, dtype=np.float32)
 
         # World bounds
+        dist_to_center = np.linalg.norm(obj_pos - cam_pos)
         if v_type.lower() == "round":
-            extent         = v_radius * 1.5
-            world_span     = v_radius * 3.0
-            world_min      = obj_pos - extent
-            world_max      = obj_pos + extent
-            chunk_vox_size = float(max(block_size * 8.0, world_span / 4.0))
+            # 1. ALWAYS draw a smooth proxy base if outside or near the surface.
+            # This prevents the planet from "vanishing" or showing shards at distance.
+            if dist_to_center > v_radius * 0.9:
+                try:
+                    glEnable(GL_DEPTH_TEST); glEnable(GL_CULL_FACE); glCullFace(GL_BACK)
+                    glPushMatrix()
+                    glTranslatef(float(obj_pos[0]), float(obj_pos[1]), float(obj_pos[2]))
+                    # Slightly smaller (99.2%) so the voxel terrain draws OVER it.
+                    s = v_radius * 0.992
+                    glScalef(s, s, s)
+                    
+                    # Basic directional lighting simulation for the proxy
+                    atmo = next((o for o in self.scene_objects if o.obj_type == 'atmosphere'), None)
+                    if atmo:
+                        t = getattr(atmo, 'time_of_day', 0.5)
+                        # cos-based noon brightness (0.5 is noon, 0.0 is midnight)
+                        lum = max(0.12, float(np.cos((t - 0.5) * 3.14159)))
+                        c = atmo.sun_color
+                        glColor4f(c[0]*lum, c[1]*lum, c[2]*lum, 1.0)
+                    else:
+                        glColor4f(0.5, 0.5, 0.5, 1.0)
+
+                    q = gluNewQuadric()
+                    gluSphere(q, 1.0, 128, 128)
+                    gluDeleteQuadric(q)
+                    glPopMatrix()
+                except: pass
+
+            # 2. Skip voxels entirely if VERY far away (save CPU/GPU)
+            if dist_to_center > v_radius * 4.0:
+                return
+
+            # Optimization: Window the chunk search grid around the camera.
+            # For low-detail zoom (distant view), we expand the window significantly
+            # so continents are visible all the way to the horizon silhouette.
+            window = 120.0 * 64.0
+            if dist_to_center > v_radius * 1.1:
+                # Expand search to cover the whole world silhouette for cheap low-res tiers
+                window = v_radius * 2.2
+                
+            world_min     = np.maximum(obj_pos - v_radius * 1.1, cam_pos - window)
+            world_max     = np.minimum(obj_pos + v_radius * 1.1, cam_pos + window)
+            world_span    = v_radius * 2.2 # For chunk size calc
+            extent        = v_radius * 1.2 # Bounding sphere for voxel selection
+            
+            target_chunks_across = 24.0
+            chunk_vox_size = float(max(block_size * 8.0,
+                                       world_span / target_chunks_across))
         else:
             # Flat mode: single-LOD streaming around the camera when infinite is on.
             # Single LOD avoids T-junction seams at chunk boundaries entirely.
             extent   = None
             infinite = bool(getattr(obj, 'voxel_infinite_flat', True))
+            # Flat chunks: ≥64u wide → ~64 columns × 3 y-layers ≈ 200 chunks in
+            # infinite mode (many end up empty above/below terrain and stream fast).
+            chunk_vox_size = float(max(block_size * 32.0, 64.0))
+
             if infinite:
                 horiz_extent = 250.0   # ±250u around camera (≈500u view diameter)
                 vert_extent  = 80.0    # ±80u vertical (fits Mountains + Continents)
-                center    = np.array([cam_pos[0], obj_pos[1], cam_pos[2]],
-                                     dtype=np.float32)
-                world_min = center + np.array([-horiz_extent, -vert_extent,
-                                               -horiz_extent], dtype=np.float32)
-                world_max = center + np.array([ horiz_extent,  vert_extent,
-                                                horiz_extent], dtype=np.float32)
+                
+                # Infinite streaming: The grid MUST center on the camera,
+                # NOT the object origin, otherwise we can only see terrain at 0,0,0.
+                world_min = cam_pos - horiz_extent
+                world_max = cam_pos + horiz_extent
+                # Vertical is relative to the object's surface plane
+                world_min[1] = obj_pos[1] - vert_extent
+                world_max[1] = obj_pos[1] + vert_extent
                 world_span = 2.0 * horiz_extent
             else:
                 world_span = 100.0
                 world_min  = obj_pos + np.array([-50, -20, -50], dtype=np.float32)
                 world_max  = obj_pos + np.array([ 50,  20,  50], dtype=np.float32)
-            # Flat chunks: ≥64u wide → ~64 columns × 3 y-layers ≈ 200 chunks in
-            # infinite mode (many end up empty above/below terrain and stream fast).
-            chunk_vox_size = float(max(block_size * 32.0, 64.0))
 
         layers_hash = hash(str(layers))
         features_hash = hash(str(features))
+        gp_hash = hash((
+            round(float(getattr(obj, 'voxel_world_height',       1.0)),  4),
+            round(float(getattr(obj, 'voxel_cave_tunnel_scale', 28.0)),  4),
+            round(float(getattr(obj, 'voxel_cave_tunnel_radius', 0.10)), 4),
+            round(float(getattr(obj, 'voxel_cave_cavern_scale', 60.0)),  4),
+            round(float(getattr(obj, 'voxel_cave_cavern_radius', 0.05)), 4),
+            round(float(getattr(obj, 'voxel_cave_waterline',     0.0)),  4),
+            round(float(getattr(obj, 'voxel_cave_max_depth',   512.0)),  4),
+        ))
         cache_key = (f"voxel_{obj.id}_{seed}_{v_type}_{v_radius}"
-                     f"_{block_size}_{smooth}_{render_style}_{layers_hash}_{features_hash}")
+                     f"_{block_size}_{smooth}_{render_style}_{layers_hash}_{features_hash}_{gp_hash}")
 
         world_grid_min = np.floor(world_min / chunk_vox_size).astype(int)
         world_grid_max = np.ceil(world_max  / chunk_vox_size).astype(int)
@@ -1370,8 +1433,9 @@ class SceneViewport(QOpenGLWidget):
         ixs = np.arange(int(world_grid_min[0]), int(world_grid_max[0]))
         iys = np.arange(int(world_grid_min[1]), int(world_grid_max[1]))
         izs = np.arange(int(world_grid_min[2]), int(world_grid_max[2]))
-        if not (len(ixs) and len(iys) and len(izs)):
-            glEnable(GL_CULL_FACE)
+
+        # Sanity cap: prevent crash/hang if meshgrid indices explode (max 10,000 chunks)
+        if len(ixs) * len(iys) * len(izs) > 10000:
             return
 
         IX, IY, IZ = np.meshgrid(ixs, iys, izs, indexing='ij')
@@ -1390,51 +1454,82 @@ class SceneViewport(QOpenGLWidget):
             in_planet = np.ones(len(IX), dtype=bool)
 
         # Camera-AABB distance for LOD tier: nearest point on chunk AABB to camera.
-        # Neighbouring chunks differ in this distance by at most chunk_vox_size,
-        # which is less than every threshold gap → guaranteed ≤1 LOD tier per edge.
         closest_cam = np.clip(cam_pos, cmin_all, cmax_all)
         dist_cam    = np.linalg.norm(closest_cam - cam_pos, axis=1)
         d_ch        = dist_cam / chunk_vox_size  # distance in chunk-units
 
-        # LOD tiers.  Flat mode forces single LOD 0 for every visible chunk —
-        # T-junction seams between different-LOD flat chunks are much more
-        # noticeable than on planets (no curvature to hide them), and a single
-        # LOD is cheap enough with the ~17×17 column window in infinite mode.
-        lod_arr = np.full(len(IX), -1, dtype=np.int8)
+        # Final selection mask:
+        # 1. Sphere overlap (in_planet)
+        # 2. Surface-shell optimization (for massive worlds): only keep chunks
+        #    near the surface to avoid processing millions of core chunks.
+        if v_type.lower() == "round" and v_radius > 5000:
+            # Shell = surface ± 2.5 chunks thick (wider buffer for steep mountains/valleys)
+            shell_mask = (dist_planet > (v_radius - chunk_vox_size * 2.5)) & \
+                         (dist_planet < (v_radius + chunk_vox_size * 2.5))
+            in_planet = in_planet & shell_mask
+
+        # LOD tiers. Flat mode forces single LOD 0.
+        lod_arr = np.full(len(IX), -1, np.int8)
         if v_type.lower() == "round":
-            lod_arr[in_planet & (d_ch <  2.5)]                       = 0
-            lod_arr[in_planet & (d_ch >= 2.5)  & (d_ch < 6.0)]      = 1
-            lod_arr[in_planet & (d_ch >= 6.0)  & (d_ch < 12.0)]     = 2
-            lod_arr[in_planet & (d_ch >= 12.0) & (d_ch < 30.0)]     = 3
-            lod_arr[in_planet & (d_ch >= 30.0)]                      = 4   # whole-planet LOD
+            # Scale thresholds for massive planets (radius up to 150,000+)
+            radius_scale = max(1.0, (v_radius / 1000.0) ** 0.5)
+            # Expanded thresholds for smoother transitions at extreme scales
+            thresh = [2.0, 4.0, 8.0, 15.0, 25.0, 40.0, 60.0, 90.0, 130.0, 180.0, 250.0, 350.0]
+            thresh = [t * radius_scale for t in thresh]
+            
+            # Tier 0 (Highest)
+            lod_arr[in_planet & (d_ch < thresh[0])] = 0
+            # Intermediate Tiers
+            for i in range(1, len(thresh)):
+                lod_arr[in_planet & (d_ch >= thresh[i-1]) & (d_ch < thresh[i])] = i
+            # Lowest Tier
+            lod_arr[in_planet & (d_ch >= thresh[-1])] = len(thresh)
         else:
-            lod_arr[in_planet] = 0   # flat: uniform, seamless mesh
+            lod_arr[in_planet] = 0
 
         vis = lod_arr >= 0
         if not np.any(vis):
             glEnable(GL_CULL_FACE)
             return
 
-        chunk_lods = {(int(IX[i]), int(IY[i]), int(IZ[i])): int(lod_arr[i])
-                      for i in np.where(vis)[0]}
+        # ── Priority Scheduling ──
+        # Sort chunks by distance to camera so things in front of you load first.
+        vis_idx = np.where(vis)[0]
+        sorted_idx = vis_idx[np.argsort(dist_cam[vis_idx])]
+        
+        chunk_lods = []
+        for i in sorted_idx:
+            chunk_lods.append(((int(IX[i]), int(IY[i]), int(IZ[i])), int(lod_arr[i])))
 
         # Snapshot layers NOW so threads always use the state at scheduling time,
         # not a mutated version that may arrive after the thread starts.
         layers_snap = list(layers)
         features_snap = list(features)
+        # Per-object generation tuning (world height, cave params). Snapshotted
+        # so threads see stable values across the generation lifetime.
+        gen_params = {
+            'world_height':  float(getattr(obj, 'voxel_world_height', 1.0)),
+            'tunnel_scale':  float(getattr(obj, 'voxel_cave_tunnel_scale', 28.0)),
+            'tunnel_radius': float(getattr(obj, 'voxel_cave_tunnel_radius', 0.10)),
+            'cavern_scale':  float(getattr(obj, 'voxel_cave_cavern_scale', 60.0)),
+            'cavern_radius': float(getattr(obj, 'voxel_cave_cavern_radius', 0.05)),
+            'waterline':     float(getattr(obj, 'voxel_cave_waterline', 0.0)),
+            'max_depth':     float(getattr(obj, 'voxel_cave_max_depth', 512.0)),
+        }
 
         # ── Schedule generation & collect active chunk keys ──
         chunk_keys = []
         with self._voxel_gen_lock:
             active_count = len(self._voxel_generation_in_progress)
 
-        for (ix, iy, iz), lod_level in chunk_lods.items():
+        for (ix, iy, iz), lod_level in chunk_lods:
             lod_factor = 1 << lod_level               # 1, 2, 4, 8, or 16
             # base_per_res: scale to match chunk size, but hard-cap at 40 so that
             # large-chunk planets (Moon, Planet) never generate >47^3 ≈ 104K samples
             # per thread.  Dwarf Planet (per_res=37) is unchanged; Asteroid uses 8.
             base_per_res = max(8, min(40, min(res_limit, int(chunk_vox_size / block_size))))
-            per_res      = max(8, base_per_res // lod_factor)
+            # Ensure per_res doesn't drop to 0 for very high LOD tiers
+            per_res      = max(4, base_per_res // lod_factor)
             vox_step     = chunk_vox_size / per_res
 
             chunk_cache_key = f"{cache_key}_c_{ix}_{iy}_{iz}_{lod_level}"
@@ -1444,7 +1539,12 @@ class SceneViewport(QOpenGLWidget):
             # so a settings change (layers added, noise params tweaked) always re-runs.
             existing = self.mesh_cache.get(chunk_cache_key)
             if not isinstance(existing, dict):
-                if active_count < 6:
+                # Intensity scaling for caves
+                # Use a higher base intensity for Flat worlds to overcome terrain noise
+                carve_depth = 10.0 if v_type.lower() == "round" else 18.0
+                
+                # Faster filling but lower limit to prevent UI lag
+                if active_count < 10:
                     with self._voxel_gen_lock:
                         if chunk_cache_key not in self._voxel_generation_in_progress:
                             self._voxel_generation_in_progress.add(chunk_cache_key)
@@ -1454,7 +1554,7 @@ class SceneViewport(QOpenGLWidget):
                             cmin_loc = np.array([ix, iy, iz], dtype=np.float32) * chunk_vox_size
                             cmax_loc = cmin_loc + chunk_vox_size
 
-                            def _gen_chunk(cmin, cmax, per_res, cck, vs, lsnap, fsnap):
+                            def _gen_chunk(cmin, cmax, per_res, cck, vs, lsnap, fsnap, gp=gen_params):
                                 produced = False
                                 try:
                                     # Each smoothing iteration pulls from one more neighbor
@@ -1472,10 +1572,11 @@ class SceneViewport(QOpenGLWidget):
                                     grid = VoxelEngine.generate_density_grid(
                                         resolution=total_samples, seed=seed, mode=v_type,
                                         radius=v_radius, layers=lsnap, features=fsnap,
-                                        center=obj_pos, min_p=p_min, max_p=p_max)
+                                        center=obj_pos, min_p=p_min, max_p=p_max,
+                                        gen_params=gp)
                                     if smooth > 0:
                                         grid = VoxelEngine.smooth_grid(grid, iterations=smooth)
-                                    if render_style == 'Minecraft':
+                                    if render_style in ('Minecraft', 'Blocky'):
                                         verts_c, idx_c, norms_c = VoxelEngine.blocky_mesh(grid)
                                     else:
                                         verts_c, idx_c, norms_c = VoxelEngine.surface_nets(
@@ -1524,42 +1625,22 @@ class SceneViewport(QOpenGLWidget):
 
             chunk_keys.append(chunk_cache_key)
 
+        # ── Non-blocking fallback ──
+        # If the new cache_key has ZERO items ready, render the PREVIOUS successful 
+        # chunks for this object so it doesn't flicker while the first batch cooks.
+        ready_count = sum(1 for ck in chunk_keys if isinstance(self.mesh_cache.get(ck), dict))
+        if ready_count < 1 and hasattr(obj, '_last_chunk_keys'):
+            chunk_keys = obj._last_chunk_keys
+        else:
+            obj._last_chunk_keys = chunk_keys
+
         self.mesh_cache[cache_key] = chunk_keys
 
-        # ── Inner filler shell ──
-        # Cross-LOD chunk boundaries produce small cracks that reveal the
-        # background. Draw a plain, slightly-smaller solid shell first so those
-        # cracks show a neutral rock/water tone instead of the skybox. The
-        # chunk mesh draws on top, fully covering the filler everywhere except
-        # at the seams.
+        # ── Rendering Cleanup ──
         try:
-            glUseProgram(0)
             glEnable(GL_DEPTH_TEST)
             glEnable(GL_CULL_FACE)
             glCullFace(GL_BACK)
-            if v_type.lower() == "round":
-                # Dark neutral; overridden at seams with whatever is closest
-                glColor4f(0.32, 0.30, 0.27, 1.0)
-                glPushMatrix()
-                glTranslatef(float(obj_pos[0]), float(obj_pos[1]), float(obj_pos[2]))
-                glScalef(v_radius * 0.985, v_radius * 0.985, v_radius * 0.985)
-                q = gluNewQuadric()
-                gluSphere(q, 1.0, 64, 64)
-                gluDeleteQuadric(q)
-                glPopMatrix()
-            else:
-                # Flat filler plane at y≈obj_pos.y-0.05 covering the streamed window
-                glColor4f(0.3, 0.28, 0.24, 1.0)
-                fy = float(obj_pos[1]) - 0.05
-                fxmin, fzmin = float(world_min[0]), float(world_min[2])
-                fxmax, fzmax = float(world_max[0]), float(world_max[2])
-                glBegin(GL_QUADS)
-                glNormal3f(0.0, 1.0, 0.0)
-                glVertex3f(fxmin, fy, fzmin)
-                glVertex3f(fxmax, fy, fzmin)
-                glVertex3f(fxmax, fy, fzmax)
-                glVertex3f(fxmin, fy, fzmax)
-                glEnd()
         except Exception:
             pass
 
@@ -1571,7 +1652,7 @@ class SceneViewport(QOpenGLWidget):
                 continue  # skips in-progress (None) and known-empty ({}) chunks
             glBindVertexArray(d['vao'])
             glDrawElements(GL_TRIANGLES, d['count'], GL_UNSIGNED_INT, None)
-            if render_style == 'Minecraft':
+            if render_style in ('Minecraft', 'Blocky'):
                 try:
                     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
                     glLineWidth(1.0)
@@ -1586,26 +1667,70 @@ class SceneViewport(QOpenGLWidget):
             glBindVertexArray(0)
         glEnable(GL_CULL_FACE)
 
-    def _create_voxel_vao(self, verts, idx, norms):
-        """Create a VAO for voxel mesh with high-precision gradient normals."""
+    def _create_voxel_vao(self, verts, idx, norms, colors=None):
+        """Create a VAO for voxel mesh with high-precision gradient normals.
+
+        If ``colors`` (Nx4 float32 RGBA) is given, uploads it to attribute
+        location 3 — which in the OpenGL compatibility profile aliases
+        ``gl_Color``. The Standard shader uses the alpha channel as a mask
+        (0 = use base_color, 1 = use vertex color) so biome tints blend in
+        without affecting objects that don't upload a color buffer.
+        """
         vao = glGenVertexArrays(1)
         glBindVertexArray(vao)
-        
+
         vbo = glGenBuffers(1)
         glBindBuffer(GL_ARRAY_BUFFER, vbo)
         glBufferData(GL_ARRAY_BUFFER, verts.nbytes, verts, GL_STATIC_DRAW)
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, None)
         glEnableVertexAttribArray(0)
-        
+
         nvbo = glGenBuffers(1)
         glBindBuffer(GL_ARRAY_BUFFER, nvbo)
         glBufferData(GL_ARRAY_BUFFER, norms.nbytes, norms, GL_STATIC_DRAW)
         glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 12, None)
         glEnableVertexAttribArray(2)
-        
+
+        cvbo = None
+        if colors is not None and len(colors) == len(verts):
+            cvbo = glGenBuffers(1)
+            glBindBuffer(GL_ARRAY_BUFFER, cvbo)
+            glBufferData(GL_ARRAY_BUFFER, colors.nbytes, colors, GL_STATIC_DRAW)
+            glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, 16, None)
+            glEnableVertexAttribArray(3)
+
         ibo = glGenBuffers(1)
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo)
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.nbytes, idx, GL_STATIC_DRAW)
-        
+
         glBindVertexArray(0)
-        return {'vao': vao, 'vbo': vbo, 'ibo': ibo, 'count': len(idx)}
+        return {'vao': vao, 'vbo': vbo, 'ibo': ibo, 'cvbo': cvbo, 'count': len(idx)}
+
+
+def _compute_biome_colors(verts_w, obj_pos_y, normals, biomes):
+    """Per-vertex RGBA from biome rules. Alpha=1 where a biome matched, else 0.
+
+    verts_w: (N,3) float32 — positions relative to obj_pos
+    normals: (N,3) float32
+    biomes:  list of {'height_range':[lo,hi], 'slope_range':[lo,hi],
+                      'surface':{'color':[r,g,b,a],...}}
+    Biomes are checked in order; first match wins so users can layer rules.
+    """
+    N = len(verts_w)
+    out = np.zeros((N, 4), dtype=np.float32)
+    if not biomes or N == 0:
+        return out
+    world_y = verts_w[:, 1] + float(obj_pos_y)
+    slope   = np.clip(normals[:, 1], 0.0, 1.0)
+    unassigned = np.ones(N, dtype=bool)
+    for b in biomes:
+        hr = b.get('height_range', [-1e9, 1e9])
+        sr = b.get('slope_range',  [0.0, 1.0])
+        col = b.get('surface', {}).get('color', [0.5, 0.5, 0.5, 1.0])
+        m = (unassigned &
+             (world_y >= float(hr[0])) & (world_y <= float(hr[1])) &
+             (slope   >= float(sr[0])) & (slope   <= float(sr[1])))
+        if np.any(m):
+            out[m] = np.array([col[0], col[1], col[2], 1.0], dtype=np.float32)
+            unassigned &= ~m
+    return out

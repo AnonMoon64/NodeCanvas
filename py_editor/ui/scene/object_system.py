@@ -33,6 +33,7 @@ class SceneObject:
         self.pbr_tiling = [1.0, 1.0]
         self.pbr_displacement_scale = 0.05
         self.parent_id = None
+        self._parent = None # Cached reference for fast matrix calc
         self.children_ids = []
         self.ocean_opacity = 0.6
         if self.obj_type == 'ocean':
@@ -53,7 +54,14 @@ class SceneObject:
         self.controller_type = "None"
         self.alpha = 1.0
         
-        # Environment Properties
+        # --- Environment & Unified Lighting ---
+        self.sun_color = [1.0, 1.0, 0.9, 1.0]
+        self.moon_color = [0.6, 0.7, 1.0, 1.0]
+        self.ambient_color = [0.1, 0.1, 0.2, 1.0]
+        self.moon_intensity = 1.0
+        self.light_update_mode = "Auto" # "Auto", "Manual Sun", "Manual Moon"
+        
+        # Atmosphere Properties (Existing)
         self.time_of_day = 0.25 # 0.0 is midnight, 0.5 is noon
         self.sky_density = 1.0
         self.cloud_density = 0.5
@@ -61,9 +69,9 @@ class SceneObject:
         self.date_day_index = 0          # integer day counter for procedural weather seeding
         # Planet / spherical-atmosphere support
         self.planet_mode = False         # Atmosphere: wrap onto a sphere (planet)
-        self.planet_radius = 637100.0   # 1/10th scale for better viewport visibility
-        self.atmosphere_thickness = 12000.0
-        self.planet_center = [0.0, -637100.0, 0.0]
+        self.planet_radius = 6371.0
+        self.atmosphere_thickness = 1200.0
+        self.planet_center = [0.0, 0.0, 0.0]
         self.ground_albedo = [0.25, 0.3, 0.2]
         self.rayleigh_strength = 1.0
         self.mie_strength = 1.0
@@ -148,12 +156,14 @@ class SceneObject:
         
         # Voxel World Specifics
         self.voxel_type = "Round"    # "Round" or "Flat"
-        self.voxel_radius = 200.0    # 200m radius planet
+        self.voxel_radius = 60000.0    # Default "Large"
         self.voxel_block_size = 1.0
         self.voxel_seed = 123
         # voxel_lod_enabled kept for backwards compatibility with saved scenes;
         # the engine now always uses camera-distance LOD and ignores this value.
         self.voxel_lod_enabled = True
+        self.voxel_lod_layers = 6
+        self.voxel_octree_depth = 8
         self.voxel_smooth_iterations = 2
         self.voxel_render_style = "Smooth"
         # Flat voxel worlds stream around the camera when enabled (on by default).
@@ -162,6 +172,19 @@ class SceneObject:
         self.voxel_layers = []
         self.voxel_biomes = []
         self.voxel_features = [] # ["caves"]
+        # Flat-world vertical scale multiplier. 1.0 = current default (±50u peaks
+        # from layer amp=1.0). Raise to let mountains go higher.
+        self.voxel_world_height = 1.0
+        # Cave feature parameters (used when 'caves' is in voxel_features).
+        # Tunnel radius / scale control passage width; cavern control wide rooms.
+        # Waterline Y gates cave carving — caves don't generate below this level
+        # so they don't flood when the world has water below Y=0.
+        self.voxel_cave_tunnel_scale  = 28.0
+        self.voxel_cave_tunnel_radius = 0.10
+        self.voxel_cave_cavern_scale  = 60.0
+        self.voxel_cave_cavern_radius = 0.05
+        self.voxel_cave_waterline     = 0.0
+        self.voxel_cave_max_depth     = 512.0
 
         # Ocean World (spherical ocean on round planets)
         self.ocean_world_radius = 0.48      # Slightly inside planet radius

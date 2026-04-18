@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget,
     QToolButton, QFrame
 )
+import math
 from pathlib import Path
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer
 
@@ -97,10 +98,56 @@ class SceneEditorWidget(QWidget):
                 except Exception as e:
                     print(f"[SCENE] Auto-convert failed for {fp.name}: {e}")
 
+        # Voxel World variants: two primitives, one obj_type. The drop sets
+        # voxel_type to "Flat" or "Round" so the renderer dispatches correctly.
+        voxel_variant = None
+        if prim_type == "voxel_world_flat":
+            voxel_variant = "Flat"
+            prim_type = "voxel_world"
+        elif prim_type == "voxel_world_round":
+            voxel_variant = "Round"
+            prim_type = "voxel_world"
+
         # Create a new SceneObject at the drop location
         base_name = Path(file_path).stem if file_path else prim_type.capitalize()
         name = f"{base_name}_{len(self.viewport.scene_objects)}"
         obj = SceneObject(name, prim_type, position=[wx, 0, wz])
+        if voxel_variant is not None:
+            obj.voxel_type = voxel_variant
+        
+        # --- AUTO-PARENTING LOGIC ---
+        # Detect closest planet (Voxel World) for parenting
+        planets = [o for o in self.viewport.scene_objects if o.obj_type == 'voxel_world']
+        closest_planet = None
+        min_dist = float('inf')
+        for p in planets:
+            d = math.sqrt((obj.position[0]-p.position[0])**2 + (obj.position[1]-p.position[1])**2 + (obj.position[2]-p.position[2])**2)
+            if d < min_dist:
+                min_dist = d
+                closest_planet = p
+        
+        if closest_planet:
+            # Atmosphere specifically links and matches radius
+            if prim_type == 'atmosphere':
+                obj.parent_id = closest_planet.id
+                obj.planet_mode = True
+                rad = getattr(closest_planet, 'voxel_radius', 60000.0)
+                obj.planet_radius = rad
+                obj.atmosphere_thickness = max(100.0, rad * 0.02)
+                obj.planet_center = [0, 0, 0] # Local center for parented atmo
+                obj.position = [0, 0, 0]
+                obj.rotation = [0, 0, 0]
+                print(f"[SCENE] Linked Atmosphere to Planet {closest_planet.name}")
+            else:
+                # General objects parent and reset local transform for surface sticking
+                obj.parent_id = closest_planet.id
+                # World to Local: p_local = p_world - parent_world
+                obj.position = [wx - closest_planet.position[0], 0, wz - closest_planet.position[2]]
+                
+                # Auto-scale based on planet size
+                if getattr(closest_planet, 'voxel_radius', 0) > 10000:
+                    obj.scale = [10.0, 10.0, 10.0]
+                print(f"[SCENE] Parented {obj.name} to {closest_planet.name}")
 
         if prim_type == "mesh":
             obj.mesh_path = file_path

@@ -8,6 +8,9 @@ eliminates the Minecraft blocky appearance at any resolution.
 import numpy as np
 import time
 
+from py_editor.core.voxel_engine_flat import generate_flat_density
+from py_editor.core.voxel_engine_round import generate_round_density
+
 
 class VoxelEngine:
     """Generates smooth organic meshes from voxel density grids."""
@@ -90,8 +93,11 @@ class VoxelEngine:
 
     @staticmethod
     def _ridged(x, y, z, seed=123):
-        """Ridged noise — good for sharp mountain ridges and canyon edges."""
-        return (1.0 - 2.0 * np.abs(VoxelEngine._perlin_3d(x, y, z, seed=seed))).astype(np.float32)
+        """Ridged noise — sharpened for high-contrast mountain peaks."""
+        v = (1.0 - np.abs(VoxelEngine._perlin_3d(x, y, z, seed=seed)))
+        # Squaring the result creates much sharper peaks and broader valleys,
+        # which reads as 'mountains' rather than 'sand dunes'.
+        return (v * v * 2.0 - 1.2).astype(np.float32)
 
     @staticmethod
     def _voronoi(x, y, z, seed=123):
@@ -142,12 +148,25 @@ class VoxelEngine:
 
     @staticmethod
     def _cellular_caves(x, y, z, seed=123):
-        """Cellular noise based caves - produces connected empty pockets."""
-        # Multi-scale voronoi for organic 'tunnel' networks
-        v1 = VoxelEngine._voronoi(x, y, z, seed=seed)
-        v2 = VoxelEngine._voronoi(x * 1.5, y * 1.5, z * 1.5, seed=seed + 101)
-        # Intersection of two fields creates tubular structures
-        return (np.minimum(v1, v2) + 0.35).astype(np.float32)
+        """Ridged-noise cave field: values near 0 mark cave interior.
+
+        Returns a positive 'carve strength' in [0, 1], where 1 = solid cave
+        interior to be carved out, 0 = untouched rock. Unlike the old voronoi
+        intersection — which produced stalagmite-like floating spikes — this
+        builds Minecraft-style tunnel networks by intersecting two independent
+        ridged-noise fields and taking the portion that's close to the ridge.
+        """
+        # Ridged noise: 1 - |perlin|. Values near 1 follow thin curvy ridges.
+        r1 = 1.0 - np.abs(VoxelEngine._perlin_3d(x,        y,        z,        seed=seed))
+        r2 = 1.0 - np.abs(VoxelEngine._perlin_3d(x * 1.3,  y * 1.7,  z * 1.1,  seed=seed + 41))
+        r3 = 1.0 - np.abs(VoxelEngine._perlin_3d(x * 0.5,  y * 0.5,  z * 0.5,  seed=seed + 77))
+        # Intersection (min) gives thin 1-D curves where all three agree →
+        # tube-shaped tunnel networks. Large scale (r3) gates which regions
+        # have caves so the world isn't Swiss-cheesed uniformly.
+        base = np.minimum(r1, r2)
+        gate = np.clip((r3 - 0.55) * 4.0, 0.0, 1.0)
+        tunnels = np.clip((base - 0.78) * 12.0, 0.0, 1.0) * gate
+        return tunnels.astype(np.float32)
 
     # ------------------------------------------------------------------ #
     #  Smoothing                                                           #
@@ -185,7 +204,7 @@ class VoxelEngine:
     @staticmethod
     def generate_density_grid(resolution=64, seed=123, mode="Round", radius=0.5,
                               layers=None, features=None, center=(0, 0, 0),
-                              min_p=None, max_p=None):
+                              min_p=None, max_p=None, gen_params=None):
         """Generate a float32 density grid. Positive = inside surface."""
         res = int(resolution)
         if min_p is None:
@@ -206,66 +225,18 @@ class VoxelEngine:
         inv_r = np.float32(1.0 / (float(radius) + 1e-6))
         NX, NY, NZ = LX * inv_r, LY * inv_r, LZ * inv_r
 
-        if mode == "Round":
-            dist    = np.sqrt(LX**2 + LY**2 + LZ**2, dtype=np.float32)
-            density = (radius - dist).astype(np.float32)
-            if layers:
-                for layer in layers:
-                    noise_val = VoxelEngine._layer_noise(NX, NY, NZ, layer, seed)
-                    blend = layer.get('blend', 'add')
-                    if   blend == 'subtract': density -= noise_val * radius
-                    elif blend == 'multiply': density *= (1.0 + noise_val)
-                    else:                     density += noise_val * radius
-        else:
-            # Flat landscape: positive below the noise surface.
-            # height is in world Y units; surface is where density = 0.
-            if layers:
-                # Feature-scale normalisation: fixed reference of 100u horizontal.
-                # This keeps noise features a stable world-unit size regardless of
-                # the render window — streaming chunks at different world positions
-                # all sample the same global noise field → no chunk-boundary seams.
-                ref_scale = 100.0
-                # Amplitude budget: matches round-mode `noise_val * radius` semantics.
-                # amp=1.0 → ±ref_scale/2 world-unit displacement; amp=0.25 → ±12.5u.
-                # Scales with ref_scale so tuning ref_scale up gives taller features.
-                amp_scale = ref_scale * 0.5
-                height = np.zeros_like(LX, dtype=np.float32)
-                for layer in layers:
-                    lx_flat = LX / ref_scale
-                    lz_flat = LZ / ref_scale
-                    raw = VoxelEngine._layer_noise(lx_flat, np.zeros_like(lx_flat),
-                                                   lz_flat, layer, seed)
-                    val = raw * amp_scale
-                    blend = layer.get('blend', 'add')
-                    if   blend == 'subtract': height -= val
-                    elif blend == 'multiply': height *= (1.0 + raw * 0.5)
-                    else:                     height += val
-                density = height - LY
-            else:
-                density = -LY   # Pure flat at Y = 0
-
-        # --- Features pass (e.g. Caves) ---
-        if features and "caves" in features:
-            # Sample features in world space for infinite tiling
-            f_scale = 15.0 # Cave scale in world units
-            f_amp   = 0.6  # Cave size / intensity
-            
-            c_noise = VoxelEngine._cellular_caves(LX / f_scale, LY / f_scale, LZ / f_scale, seed=seed + 500)
-            
-            # Apply domain constraints
-            if mode == "Round":
-                dist = np.sqrt(LX**2 + LY**2 + LZ**2, dtype=np.float32)
-                # Planet caves go half-way to center as requested
-                mask = (dist > radius * 0.51) & (dist < radius * 0.98)
-                density[mask] -= c_noise[mask] * radius * f_amp
-            else:
-                # Flat world caves are infinite
-                # Use a soft vertical mask to avoid cutting through the surface abruptly
-                # 'density' already contains (height - LY), so we can use it to fade near the surface.
-                surface_mask = np.clip(density / 5.0, 0.0, 1.0)
-                density -= c_noise * 10.0 * f_amp * surface_mask
-
-        return density.astype(np.float32)
+        # Dispatch to the per-mode generator. Both take the same prepared
+        # coords and the shared noise helpers on VoxelEngine.
+        gen = generate_round_density if mode == "Round" else generate_flat_density
+        return gen(
+            NX, NY, NZ, LX, LY, LZ,
+            resolution=res, seed=seed, radius=float(radius),
+            layers=layers, features=features, center=center,
+            perlin_3d=VoxelEngine._perlin_3d,
+            layer_noise=VoxelEngine._layer_noise,
+            cellular_caves=VoxelEngine._cellular_caves,
+            gen_params=gen_params or {},
+        )
 
     # ------------------------------------------------------------------ #
     #  Surface Nets — interpolated vertex placement                        #

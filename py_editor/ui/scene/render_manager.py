@@ -108,6 +108,32 @@ class Camera3D:
         self.pos[1] += (f[1]*forward + up)*s
         self.pos[2] += (f[2]*forward + r[2]*right)*s
 
+    def focus_on(self, target_pos, target_radius=1.0):
+        """Center camera on target and zoom to a comfortable distance."""
+        # Calculate direction from current camera to target
+        direction = _sub(self.pos, target_pos)
+        dist = _length(direction)
+        
+        # Avoid zero-length vector
+        if dist < 0.01:
+            direction = (0, 0, 1)
+        else:
+            direction = _normalize(direction)
+            
+        # Target distance based on object size
+        target_dist = max(2.5, target_radius * 5.0)
+        
+        # Position camera at target_dist away from object in the original relative direction
+        self.pos[0] = target_pos[0] + direction[0] * target_dist
+        self.pos[1] = target_pos[1] + direction[1] * target_dist
+        self.pos[2] = target_pos[2] + direction[2] * target_dist
+        
+        # Calculate new yaw/pitch to look at target
+        dx, dy, dz = _sub(target_pos, self.pos)
+        self.yaw = math.degrees(math.atan2(dz, dx))
+        # Pitch: angle relative to X-Z plane
+        self.pitch = math.degrees(math.atan2(dy, math.sqrt(dx*dx + dz*dz)))
+
     def screen_to_ray(self, mx, my, vp_w, vp_h):
         aspect = vp_w / max(vp_h, 1)
         fov_rad = math.radians(self.fov)
@@ -159,12 +185,23 @@ class Camera2D:
 # ---- Primitive Drawing Helpers ----
 def _draw_wireframe_cube(sx=1, sy=1, sz=1, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
     hx, hy, hz = sx/2, sy/2, sz/2
-    verts = [(-hx,-hy,-hz),(hx,-hy,-hz),(hx,hy,-hz),(-hx,hy,-hz),(-hx,-hy,hz),(hx,-hy,hz),(hx,hy,hz),(-hx,hy,hz)]
-    faces = [(0,1,2,3),(4,5,6,7),(0,1,5,4),(2,3,7,6),(0,3,7,4),(1,2,6,5)]
+    verts = [(-hx,-hy,-hz),(hx,-hy,-hz),(hx,hy,-hz),(-hx,hy,-hz),
+             (-hx,-hy,hz),(hx,-hy,hz),(hx,hy,hz),(-hx,hy,hz)]
+    faces = [
+        (0,1,2,3, (0,0,-1)), # Back
+        (4,5,6,7, (0,0, 1)), # Front
+        (0,1,5,4, (0,-1,0)), # Bottom
+        (2,3,7,6, (0,1, 0)), # Top
+        (0,3,7,4, (-1,0,0)), # Left
+        (1,2,6,5, (1, 0,0))  # Right
+    ]
     edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
     glColor4f(*fill_color)
     for f in faces:
-        glBegin(GL_QUADS); [glVertex3f(*verts[i]) for i in f]; glEnd()
+        glBegin(GL_QUADS)
+        glNormal3f(*f[4])
+        for i in f[:4]: glVertex3f(*verts[i])
+        glEnd()
     glColor4f(*color); glLineWidth(1.5); glBegin(GL_LINES)
     for a, b in edges: glVertex3f(*verts[a]); glVertex3f(*verts[b])
     glEnd(); glLineWidth(1.0)
@@ -173,10 +210,22 @@ def _draw_wireframe_sphere(radius=0.5, rings=12, segments=16, color=OBJECT_COLOR
     glLineWidth(1.5); glColor4f(*color)
     for i in range(rings + 1):
         phi = math.pi * i / rings; y = radius * math.cos(phi); r = radius * math.sin(phi)
-        glBegin(GL_LINE_LOOP); [glVertex3f(r * math.cos(2*math.pi*j/segments), y, r * math.sin(2*math.pi*j/segments)) for j in range(segments)]; glEnd()
+        glBegin(GL_LINE_LOOP)
+        for j in range(segments):
+            theta = 2*math.pi*j/segments
+            nx, ny, nz = math.sin(phi)*math.cos(theta), math.cos(phi), math.sin(phi)*math.sin(theta)
+            glNormal3f(nx, ny, nz)
+            glVertex3f(r * math.cos(theta), y, r * math.sin(theta))
+        glEnd()
     for j in range(segments):
         theta = 2*math.pi*j/segments
-        glBegin(GL_LINE_STRIP); [glVertex3f(radius*math.sin(math.pi*i/rings)*math.cos(theta), radius*math.cos(math.pi*i/rings), radius*math.sin(math.pi*i/rings)*math.sin(theta)) for i in range(rings+1)]; glEnd()
+        glBegin(GL_LINE_STRIP)
+        for i in range(rings+1):
+            phi = math.pi * i / rings
+            nx, ny, nz = math.sin(phi)*math.cos(theta), math.cos(phi), math.sin(phi)*math.sin(theta)
+            glNormal3f(nx, ny, nz)
+            glVertex3f(radius*nx, radius*ny, radius*nz)
+        glEnd()
     glLineWidth(1.0)
 
 def _draw_cone(radius=0.15, height=0.5, segments=12):

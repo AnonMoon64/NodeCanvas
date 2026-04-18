@@ -2,9 +2,12 @@
 
 ## 🌅 What's New — Dynamic Sky, Weather & Particle Overhaul
 
-- **Volumetric 3D Clouds** (raymarched): fBm+worley density, wind-advected, with
-  self-shadowing, HG phase (forward + back scatter), anvil bias near tops, and
-  a tunable [bottom, top] slab. Looks correct from below, inside, and above.
+> [!CAUTION]
+> **Experimental Alpha Build**: This project is in active development. Features listed below are in various stages of completion. NodeCanvas is currently an experimental platform for procedural content generation research and real-time world orchestration.
+
+NodeCanvas is a high-performance orchestration platform designed to bridge the gap between **Visual Logic Programming** and **Real-time 2D/3D Scene Composition**. It provides a unified environment where logic graphs can drive complex procedural landscapes, lighting systems, and actor behaviors.
+
+- **Volumetric 3D Clouds** Not working.
 - **Spherical-Planet Atmosphere**: the Atmosphere primitive can now wrap onto
   a sphere. Fly up past `atmosphere_thickness` and the sky fades to space
   with a glowing **atmospheric rim**. Rayleigh + Mie scattering, soft sunset
@@ -83,11 +86,6 @@
 - **Persistence 1.0**: Full `.scene` serialization implemented. Save and Load your procedural environments instantly.
 - **AI Agent Tool Stability**: Implemented a thread-safe multi-threaded bridge for AI agent tool execution. This ensures all AI-generated nodes and connections are immediately visible and correctly indexed by the QGraphicsScene.
 
-> [!CAUTION]
-> **Experimental Alpha Build**: This project is in active development. Features listed below are in various stages of completion. NodeCanvas is currently an experimental platform for procedural content generation research and real-time world orchestration.
-
-NodeCanvas is a high-performance orchestration platform designed to bridge the gap between **Visual Logic Programming** and **Real-time 3D Scene Composition**. It provides a unified environment where logic graphs can drive complex procedural landscapes, lighting systems, and actor behaviors.
-
 ---
 
 ## 🏗 Core Architecture
@@ -102,7 +100,7 @@ NodeCanvas is built on a modular "Separated Pipeline" architecture:
 - **Node Properties Inspector**: Highly interactive variadic nodes like **SelectInt** and **StringAppend** feature a dedicated Properties panel for dynamic pin management (+/- pins).
 - **Inter-Graph Calls**: Use the `CallGraph` node to run sub-logic as functional routines.
 - **Node UX Fixes**: Staggered Z-ordering for input widgets prevents dropdowns (Presets/Sources) from being obscured by adjacent sliders or fields.
-- **Performance Optimized**: A hardware-accelerated canvas designed to handle hundreds of nodes with zero lag.
+- **Performance Optimized**: A hardware-accelerated canvas designed to handle hundreds of nodes.
 
 ### 2. The 3D Scene Compositor
 
@@ -146,16 +144,7 @@ NodeCanvas is built on a modular "Separated Pipeline" architecture:
 
 As and Alpha-stage development environment, the following areas are currently identified as **Primary Development Focus**:
 
-- **Visual Polish**: The current lighting model uses a dual-pass fixed-function approach. While atmospheric, it lacks advanced shadows and Screen-Space Ambient Occlusion (SSAO).
 - **Materials**: Materials are currently vertex-colored per biome; full PBR texture support is in the pipeline.
-- **Ocean Surface Fidelity**: Balanced Physically-Based shading system with **Triple-Layer Specular** (Broad Sheen, Tight Glint, Sub-pixel Sparkle) and **Always-on SSS Rim lighting**.
-- **Advanced Foam System**: Implemented a 3-layer responsive foam engine:
-  - **Jacobian Fold Foam**: Simulates foam at wave breaking points.
-  - **Height Whitecaps**: Artist-controlled crest density.
-  - **Animated Streaks**: Wind-aligned trails that drag behind moving crests.
-  - **Persistent Advection**: CPU-side foam density buffer that advects using water velocity.
-  - **Flowmap Panning**: Shader-integrated flowmap technique for high-quality foam and bubble motion.
-
 ---
 
 ## 🚧 Engineering Roadmap
@@ -163,7 +152,7 @@ As and Alpha-stage development environment, the following areas are currently id
 ### Phase 1: Landscape Fidelity (Current)
 
 - [x] **Infinite Streaming**: Multi-threaded async loading.
-- [x] **Smooth Normals**: Organic terrain shading.
+- [ ] **Smooth Normals**: Organic terrain shading.
 - [x] **Hardened Persistence**:
   - Centralized **.scene** format for full world serialization.
   - Full persistence for landscape properties (Resolution, Radius, Chunk Size).
@@ -173,8 +162,7 @@ As and Alpha-stage development environment, the following areas are currently id
   - **Billboard Correction**: Fixed invalid OpenGL states for flickering-free vegetation.
   - **VRAM Caching**: Optimized display lists for consistent 60FPS exploration.
 - [x] **Advanced Blending**: Explicit layer weighting and post-process ocean flattening for geologic realism.
-- [x] **GPU-Accelerated Ocean**: Real-time Gerstner wave simulation on the GPU.
-- [x] **Advanced Smoothing**: User-configurable 0-1 smoothing slider for sanding off mountain peaks.
+- [x] **GPU-Accelerated Ocean**: Real-time FFT and Gerstner wave simulation on the GPU.
 - [ ] **Advanced Biome Blending**: Smooth transitions between differing terrain types.
 
 ### Phase 2: Generation & Simulation
@@ -188,7 +176,6 @@ As and Alpha-stage development environment, the following areas are currently id
 - [x] **GPU-Accelerated Rendering**: Migrating the CPU-bound mesh generation to vertex/compute shaders.
 - [x] **High-Performance Swarms**: Integrated **Compute-Shader Boids** (Separation, Alignment, Cohesion) with **Indirect Instancing**.
 - [x] **Custom Mesh Pipeline**: Native **.obj to .mesh** binary conversion and hardware-accelerated model rendering.
-- [x] **Atmospheric Scattering**: Volumetric clouds and Rayleigh/Mie scattering with Zenith-based grading and land-to-space transitions.
 - [ ] **Physics Integration**: Rigid body support for spawned actors on slopes.
 
 ### Phase 4: Security & Ecosystem (Long-Term)

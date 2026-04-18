@@ -56,6 +56,7 @@ class MainWindow(QMainWindow):
         # Wire global signals
         self.scene_editor.viewport.object_selected.connect(self._on_object_selected)
         self.hierarchy.outliner.object_selected.connect(self._on_object_selected)
+        self.hierarchy.outliner.object_focused.connect(self._on_object_focused)
         self.explorer.file_opened.connect(self._on_explorer_file_opened)
         self.properties.property_changed.connect(self._on_property_changed)
 
@@ -313,6 +314,13 @@ class MainWindow(QMainWindow):
     def _on_object_renamed(self, obj, new_name):
         obj.name = new_name
         self._on_object_selected(obj)
+    
+    def _on_object_focused(self, obj):
+        if not obj: return
+        # Center camera on object
+        radius = max(obj.scale) if hasattr(obj, 'scale') else 1.0
+        self.scene_editor.viewport._cam3d.focus_on(obj.position, radius)
+        self.scene_editor.viewport.update()
     
     def _duplicate_object(self, obj):
         if not obj: return

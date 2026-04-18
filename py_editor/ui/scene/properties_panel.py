@@ -136,7 +136,39 @@ class PropertySlider(QWidget):
         if self._updating: return
         self._updating = True
         s_val = int((fval - self.vmin) / (self.vmax - self.vmin) * 1000) if self.vmax > self.vmin else 0
-        self.slider.setValue(s_val); self.valueChanged.emit(fval); self._updating = False
+        self.slider.setValue(s_val);        self.spin.blockSignals(False)
+        self._updating = False
+
+class ColorPickerButton(QPushButton):
+    """A button that displays and picks an RGB/RGBA color."""
+    colorChanged = pyqtSignal(list)
+
+    def __init__(self, color=[1.0, 1.0, 1.0, 1.0], parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(80)
+        self.setFixedHeight(22)
+        self._color = list(color)
+        self.clicked.connect(self._pick_color)
+        self._update_style()
+
+    def set_color(self, color):
+        self._color = list(color)
+        self._update_style()
+
+    def _update_style(self):
+        c = self._color
+        r, g, b = int(c[0]*255), int(c[1]*255), int(c[2]*255)
+        # Use a border to make light colors visible against gray
+        self.setStyleSheet(f"background-color: rgb({r},{g},{b}); border: 1px solid #555; border-radius: 2px;")
+
+    def _pick_color(self):
+        c = self._color
+        initial = QColor.fromRgbF(c[0], c[1], c[2], c[3])
+        color = QColorDialog.getColor(initial, self, "Pick Color", QColorDialog.ColorDialogOption.ShowAlphaChannel)
+        if color.isValid():
+            new_color = [color.redF(), color.greenF(), color.blueF(), color.alphaF()]
+            self.set_color(new_color)
+            self.colorChanged.emit(new_color)
 
 class ObjectPropertiesPanel(QWidget):
     """The Right-side properties inspector."""
@@ -153,11 +185,10 @@ class ObjectPropertiesPanel(QWidget):
         "Continents":   {"noise_type": "fbm",     "freq": 0.35, "amp": 0.55, "blend": "add"},
         # Rolling hills on top of continents
         "Hills":        {"noise_type": "fbm",     "freq": 1.2,  "amp": 0.20, "blend": "add"},
-        # Mountain chains — ridged noise, taller and higher-frequency than before
-        # so they read as mountains rather than dunes after Gaussian smoothing.
-        "Mountains":    {"noise_type": "ridged",  "freq": 2.5,  "amp": 0.65, "blend": "add"},
-        # Dramatic individual peaks for very mountainous worlds
-        "Sharp Peaks":  {"noise_type": "ridged",  "freq": 4.0,  "amp": 0.45, "blend": "add"},
+        # Mountain chains — now with sharpened ridged noise and higher amplitude
+        "Mountains":    {"noise_type": "ridged",  "freq": 2.2,  "amp": 0.75, "blend": "add", "mask_threshold": 0.25},
+        # Dramatic individual peaks
+        "Sharp Peaks":  {"noise_type": "ridged",  "freq": 3.8,  "amp": 0.85, "blend": "add", "mask_threshold": 0.35},
         # Fine rocky surface roughness
         "Rocky Detail": {"noise_type": "fbm",     "freq": 5.0,  "amp": 0.08, "blend": "add"},
         # Deep carved valleys / river systems
@@ -184,6 +215,8 @@ class ObjectPropertiesPanel(QWidget):
         self._current_objects = []
         self._current_prefab_path = None
         self._updating = False
+        self._row_map = {} # widget -> row_container mapping for visibility toggle
+        self._regen_timer = None # For throttling rapid changes
         # Main layout contains a scroll area so the properties panel stays fixed size
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0,0,0,0)
@@ -288,7 +321,47 @@ class ObjectPropertiesPanel(QWidget):
         self.sun_intensity.valueChanged.connect(lambda v: self.update_obj_prop('sun_intensity', v))
         self._add_property_row(eg, "Sun Intensity", self.sun_intensity)
 
-        # Universe Specifics (in the same group if it's a universe object)
+        self.planet_radius = PropertySlider(6371.0, 1.0, 300000.0)
+        self.planet_radius.valueChanged.connect(lambda v: self.update_obj_prop('planet_radius', v))
+        self._add_property_row(eg, "Planet Radius", self.planet_radius)
+
+        self.atmo_thick = PropertySlider(1200.0, 1.0, 50000.0)
+        self.atmo_thick.valueChanged.connect(lambda v: self.update_obj_prop('atmosphere_thickness', v))
+        self._add_property_row(eg, "Atmo Thickness", self.atmo_thick)
+
+        
+        eg.addSpacing(6)
+        lbl_lighting = QLabel("Global Illumination")
+        lbl_lighting.setStyleSheet("color: #4fc3f7; font-weight: bold; font-size: 11px; margin-top: 4px;")
+        eg.addWidget(lbl_lighting)
+
+        self.sun_color_btn = ColorPickerButton()
+        self.sun_color_btn.colorChanged.connect(lambda c: self.update_obj_prop('sun_color', c))
+        self._add_property_row(eg, "Sun Color", self.sun_color_btn)
+
+        self.moon_color_btn = ColorPickerButton()
+        self.moon_color_btn.colorChanged.connect(lambda c: self.update_obj_prop('moon_color', c))
+        self._add_property_row(eg, "Moon Color", self.moon_color_btn)
+
+        self.amb_color_btn = ColorPickerButton()
+        self.amb_color_btn.colorChanged.connect(lambda c: self.update_obj_prop('ambient_color', c))
+        self._add_property_row(eg, "Ambient Color", self.amb_color_btn)
+
+        self.moon_int = PropertySlider(1.0, 0.0, 10.0)
+        self.moon_int.valueChanged.connect(lambda v: self.update_obj_prop('moon_intensity', v))
+        self._add_property_row(eg, "Moon Power", self.moon_int)
+
+        self.light_mode = QComboBox()
+        self.light_mode.addItems(["Auto", "Manual Sun", "Manual Moon"])
+        self.light_mode.currentIndexChanged.connect(lambda i: self.update_obj_prop('light_update_mode', self.light_mode.currentText()))
+        self._add_property_row(eg, "Light Mode", self.light_mode)
+        
+        # Universe Specifics (Stars, Nebulas)
+        eg.addSpacing(6)
+        self.uni_lbl = QLabel("Universe Specifics")
+        self.uni_lbl.setStyleSheet("color: #4fc3f7; font-weight: bold; font-size: 11px; margin-top: 4px;")
+        eg.addWidget(self.uni_lbl)
+
         self.star_density = PropertySlider(1.0, 0.0, 5.0)
         self.star_density.valueChanged.connect(lambda v: self.update_obj_prop('star_density', v))
         self._add_property_row(eg, "Star Density", self.star_density)
@@ -296,7 +369,7 @@ class ObjectPropertiesPanel(QWidget):
         self.neb_intensity = PropertySlider(0.5, 0.0, 2.0)
         self.neb_intensity.valueChanged.connect(lambda v: self.update_obj_prop('nebula_intensity', v))
         self._add_property_row(eg, "Nebula Power", self.neb_intensity)
-        
+
         layout.addWidget(self.env_group)
         
         self.save_btn = QPushButton("💾 SAVE PREFAB")
@@ -466,7 +539,19 @@ class ObjectPropertiesPanel(QWidget):
         if not self._current_objects: return
         for obj in self._current_objects:
             setattr(obj, prop, val)
-        self.property_changed.emit()
+        
+        # Throttled regeneration for voxel world settings (freq, amp, seed etc)
+        # to avoid flooding the thread pool during slider drags.
+        needs_throttle = prop.startswith('voxel_') or prop in ('sun_color', 'ambient_color')
+        if needs_throttle:
+            from PyQt6.QtCore import QTimer
+            if self._regen_timer: self._regen_timer.stop()
+            self._regen_timer = QTimer()
+            self._regen_timer.setSingleShot(True)
+            self._regen_timer.timeout.connect(self.property_changed.emit)
+            self._regen_timer.start(150) # 150ms delay
+        else:
+            self.property_changed.emit()
 
     def update_shader_param(self, key, val):
         if not self._current_objects: return
@@ -548,9 +633,20 @@ class ObjectPropertiesPanel(QWidget):
             self.time_slider.setValue(getattr(obj, 'time_of_day', 0.25))
             self.sun_size.setValue(getattr(obj, 'sun_size', 1.0))
             self.sun_intensity.setValue(getattr(obj, 'sun_intensity', 10.0))
+            self.planet_radius.setValue(getattr(obj, 'planet_radius', 6371.0))
+            self.atmo_thick.setValue(getattr(obj, 'atmosphere_thickness', 1200.0))
+            
+            self.sun_color_btn.set_color(getattr(obj, 'sun_color', [1.0, 1.0, 0.9, 1.0]))
+            self.moon_color_btn.set_color(getattr(obj, 'moon_color', [0.6, 0.7, 1.0, 1.0]))
+            self.amb_color_btn.set_color(getattr(obj, 'ambient_color', [0.1, 0.1, 0.2, 1.0]))
+            self.moon_int.setValue(getattr(obj, 'moon_intensity', 1.0))
+            self.light_mode.setCurrentText(getattr(obj, 'light_update_mode', 'Auto'))
+
             is_universe = obj.obj_type == 'universe'
-            self.star_density.setVisible(is_universe)
-            self.neb_intensity.setVisible(is_universe)
+            self.uni_lbl.setVisible(is_universe)
+            self._row_map[self.star_density].setVisible(is_universe)
+            self._row_map[self.neb_intensity].setVisible(is_universe)
+            
             if is_universe:
                 self.star_density.setValue(getattr(obj, 'star_density', 1.0))
                 self.neb_intensity.setValue(getattr(obj, 'nebula_intensity', 0.5))
@@ -620,6 +716,7 @@ class ObjectPropertiesPanel(QWidget):
             self.vox_detail_combo.setCurrentIndex(bidx)
             self.vox_detail_combo.blockSignals(False)
             self.vox_seed.setValue(getattr(obj, 'voxel_seed', 123))
+            self.vox_world_height.setValue(float(getattr(obj, 'voxel_world_height', 1.0)))
             idx = self.vox_type.findText(getattr(obj, 'voxel_type', 'Round'))
             if idx != -1: self.vox_type.setCurrentIndex(idx)
             # Infinite-flat checkbox (sync state + hide for Round mode)
@@ -638,8 +735,11 @@ class ObjectPropertiesPanel(QWidget):
             self.vox_max_chunk_res.blockSignals(True)
             self.vox_max_chunk_res.setValue(int(getattr(obj, 'voxel_max_single_chunk_res', 128)))
             self.vox_max_chunk_res.blockSignals(False)
-            # Layers
+            # Layers — features (3D volumetric) shown first with a prefix so
+            # they can be identified and removed from the same list.
             self.vox_layers_list.clear()
+            for f in getattr(obj, 'voxel_features', []):
+                self.vox_layers_list.addItem(f"[Feature] {f}")
             for l in getattr(obj, 'voxel_layers', []):
                 self.vox_layers_list.addItem(l.get('name', 'Layer'))
             self.v_layer_panel.setVisible(False)
@@ -647,6 +747,7 @@ class ObjectPropertiesPanel(QWidget):
             self.vox_biomes_list.clear()
             for b in getattr(obj, 'voxel_biomes', []):
                 self.vox_biomes_list.addItem(b.get('name', 'Biome'))
+            self.v_biome_panel.setVisible(False)
         elif obj.obj_type == 'camera':
             self.cam_speed.setValue(getattr(obj, 'camera_speed', 10.0))
             self.cam_sens.setValue(getattr(obj, 'camera_sensitivity', 0.15))
@@ -1054,10 +1155,13 @@ class ObjectPropertiesPanel(QWidget):
         self._add_property_row(self.sp_lay, label, slider)
 
     def _add_property_row(self, layout, label_text, widget):
-        row = QHBoxLayout()
+        container = QWidget()
+        row = QHBoxLayout(container)
+        row.setContentsMargins(0, 0, 0, 0)
         lbl = QLabel(label_text); lbl.setFixedWidth(90); lbl.setStyleSheet(LABEL_SS)
         row.addWidget(lbl); row.addWidget(widget)
-        layout.addLayout(row)
+        layout.addWidget(container)
+        self._row_map[widget] = container
 
     def _init_controller_ui(self, layout):
         self.cont_group = QGroupBox("Controller Settings")
@@ -1129,11 +1233,11 @@ class ObjectPropertiesPanel(QWidget):
 
         # Render Style
         self.vox_render_style = QComboBox()
-        self.vox_render_style.addItems(["Smooth", "Minecraft"])
+        self.vox_render_style.addItems(["Smooth", "Blocky"])
         self.vox_render_style.setStyleSheet(COMBO_SS)
         self.vox_render_style.setToolTip(
             "Smooth = No Man's Sky style (interpolated verts + smoothing)\n"
-            "Minecraft = Classic block look (no smoothing, no interpolation)")
+            "Blocky = Classic cube look (no smoothing, no interpolation)")
         self.vox_render_style.currentTextChanged.connect(
             lambda t: self.update_obj_prop('voxel_render_style', t))
         self._add_property_row(vg, "Style", self.vox_render_style)
@@ -1146,7 +1250,10 @@ class ObjectPropertiesPanel(QWidget):
             ("Asteroid (5 u) — Default", 5.0),
             ("Dwarf Planet (50 u)", 50.0),
             ("Moon (500 u)", 500.0),
-            ("Planet (2000 u)", 2000.0),
+            ("Small Planet (2,000 u)", 2000.0),
+            ("Planet (10,000 u)", 10000.0),
+            ("Large Planet (60,000 u)", 60000.0),
+            ("Huge Planet (150,000 u) — extreme scale", 150000.0),
         ]
         self.vox_radius = QComboBox()
         for name, _ in self.vox_radius_presets_list:
@@ -1171,7 +1278,7 @@ class ObjectPropertiesPanel(QWidget):
             self.vox_detail_combo.addItem(name)
         self.vox_detail_combo.setToolTip(
             "Voxel face size in world units. Smaller = finer terrain detail, heavier to generate.\n"
-            "Minimum enforced by style: Smooth ≥ 0.5 u/voxel, Minecraft ≥ 1.0 u/voxel.\n"
+            "Minimum enforced by style: Smooth ≥ 0.5 u/voxel, Blocky ≥ 1.0 u/voxel.\n"
             "LOD tiles are generated automatically based on camera distance.")
         self.vox_detail_combo.currentIndexChanged.connect(self._on_vox_detail_changed)
         self._add_property_row(vg, "Detail", self.vox_detail_combo)
@@ -1196,6 +1303,13 @@ class ObjectPropertiesPanel(QWidget):
         self.vox_seed.setStyleSheet(SPIN_SS)
         self.vox_seed.valueChanged.connect(lambda v: self.update_obj_prop('voxel_seed', v))
         self._add_property_row(vg, "Seed", self.vox_seed)
+
+        # World Height — multiplier on layer amp_scale (flat mode).
+        # 1.0 = stock, 5.0 lets mountains rise 5× higher.
+        self.vox_world_height = PropertySlider(1.0, 0.1, 20.0)
+        self.vox_world_height.valueChanged.connect(
+            lambda v: self.update_obj_prop('voxel_world_height', float(v)))
+        self._add_property_row(vg, "World Height", self.vox_world_height)
 
         # Prefetch neighborhood for chunked LOD (per-object override)
         self.vox_prefetch = QSpinBox()
@@ -1260,6 +1374,11 @@ class ObjectPropertiesPanel(QWidget):
         self.vl_amp.valueChanged.connect(lambda v: self._update_selected_vox_layer('amp', v))
         self._add_property_row(vlg, "Amplitude", self.vl_amp)
 
+        # Mask Threshold (only grow in high ground)
+        self.vl_mask = PropertySlider(0.0, 0.0, 1.0)
+        self.vl_mask.valueChanged.connect(lambda v: self._update_selected_vox_layer('mask_threshold', v))
+        self._add_property_row(vlg, "Mask", self.vl_mask)
+
         # Seed
         self.vl_seed = QSpinBox()
         self.vl_seed.setRange(0, 999999)
@@ -1267,6 +1386,47 @@ class ObjectPropertiesPanel(QWidget):
         self.vl_seed.valueChanged.connect(lambda v: self._update_selected_vox_layer('seed', v))
         self._add_property_row(vlg, "Seed", self.vl_seed)
         vg.addWidget(self.v_layer_panel)
+
+        # ---- Caves Feature Detail Panel ----
+        # Shown when the `[Feature] caves` row is selected in the list. Writes
+        # directly to the voxel_cave_* object attributes (same object, not a
+        # per-feature sub-dict) so existing scenes keep working.
+        self.v_caves_panel = QFrame()
+        self.v_caves_panel.setVisible(False)
+        vcg = QVBoxLayout(self.v_caves_panel)
+        vcg.setContentsMargins(0, 5, 0, 0)
+
+        self.vc_tunnel_scale = PropertySlider(28.0, 4.0, 200.0)
+        self.vc_tunnel_scale.valueChanged.connect(
+            lambda v: self.update_obj_prop('voxel_cave_tunnel_scale', float(v)))
+        self._add_property_row(vcg, "Tunnel Scale", self.vc_tunnel_scale)
+
+        self.vc_tunnel_radius = PropertySlider(0.10, 0.02, 0.40)
+        self.vc_tunnel_radius.valueChanged.connect(
+            lambda v: self.update_obj_prop('voxel_cave_tunnel_radius', float(v)))
+        self._add_property_row(vcg, "Tunnel Radius", self.vc_tunnel_radius)
+
+        self.vc_cavern_scale = PropertySlider(60.0, 10.0, 400.0)
+        self.vc_cavern_scale.valueChanged.connect(
+            lambda v: self.update_obj_prop('voxel_cave_cavern_scale', float(v)))
+        self._add_property_row(vcg, "Cavern Scale", self.vc_cavern_scale)
+
+        self.vc_cavern_radius = PropertySlider(0.05, 0.0, 0.40)
+        self.vc_cavern_radius.valueChanged.connect(
+            lambda v: self.update_obj_prop('voxel_cave_cavern_radius', float(v)))
+        self._add_property_row(vcg, "Cavern Radius", self.vc_cavern_radius)
+
+        self.vc_waterline = PropertySlider(0.0, -500.0, 500.0)
+        self.vc_waterline.valueChanged.connect(
+            lambda v: self.update_obj_prop('voxel_cave_waterline', float(v)))
+        self._add_property_row(vcg, "Waterline Y", self.vc_waterline)
+
+        self.vc_max_depth = PropertySlider(512.0, 10.0, 4096.0)
+        self.vc_max_depth.valueChanged.connect(
+            lambda v: self.update_obj_prop('voxel_cave_max_depth', float(v)))
+        self._add_property_row(vcg, "Max Depth", self.vc_max_depth)
+
+        vg.addWidget(self.v_caves_panel)
 
         # ---- BIOMES (context-menu driven) ----
         vg.addSpacing(8)
@@ -1280,7 +1440,51 @@ class ObjectPropertiesPanel(QWidget):
         self.vox_biomes_list.setFixedHeight(80)
         self.vox_biomes_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.vox_biomes_list.customContextMenuRequested.connect(self._on_vox_biome_context)
+        self.vox_biomes_list.currentRowChanged.connect(self._on_vox_biome_selected)
         vg.addWidget(self.vox_biomes_list)
+
+        # ---- Biome Detail Panel ----
+        self.v_biome_panel = QFrame()
+        self.v_biome_panel.setVisible(False)
+        vbg = QVBoxLayout(self.v_biome_panel)
+        vbg.setContentsMargins(0, 5, 0, 0)
+
+        self.vb_color = ColorPickerButton([0.5, 0.5, 0.5, 1.0])
+        self.vb_color.colorChanged.connect(
+            lambda c: self._update_selected_vox_biome('color', list(c)))
+        self._add_property_row(vbg, "Color", self.vb_color)
+
+        self.vb_rough = PropertySlider(0.8, 0.0, 1.0)
+        self.vb_rough.valueChanged.connect(
+            lambda v: self._update_selected_vox_biome('roughness', float(v)))
+        self._add_property_row(vbg, "Roughness", self.vb_rough)
+
+        self.vb_metallic = PropertySlider(0.0, 0.0, 1.0)
+        self.vb_metallic.valueChanged.connect(
+            lambda v: self._update_selected_vox_biome('metallic', float(v)))
+        self._add_property_row(vbg, "Metallic", self.vb_metallic)
+
+        self.vb_h_min = PropertySlider(0.0, -1000.0, 1000.0)
+        self.vb_h_min.valueChanged.connect(
+            lambda v: self._update_selected_vox_biome('height_min', float(v)))
+        self._add_property_row(vbg, "Height Min", self.vb_h_min)
+
+        self.vb_h_max = PropertySlider(10.0, -1000.0, 1000.0)
+        self.vb_h_max.valueChanged.connect(
+            lambda v: self._update_selected_vox_biome('height_max', float(v)))
+        self._add_property_row(vbg, "Height Max", self.vb_h_max)
+
+        self.vb_s_min = PropertySlider(0.0, 0.0, 1.0)
+        self.vb_s_min.valueChanged.connect(
+            lambda v: self._update_selected_vox_biome('slope_min', float(v)))
+        self._add_property_row(vbg, "Slope Min", self.vb_s_min)
+
+        self.vb_s_max = PropertySlider(1.0, 0.0, 1.0)
+        self.vb_s_max.valueChanged.connect(
+            lambda v: self._update_selected_vox_biome('slope_max', float(v)))
+        self._add_property_row(vbg, "Slope Max", self.vb_s_max)
+
+        vg.addWidget(self.v_biome_panel)
 
         layout.addWidget(self.vox_group)
 
@@ -1368,28 +1572,53 @@ class ObjectPropertiesPanel(QWidget):
         elif action.parent() == preset_menu:
             p_name = action.text()
             p = self.VOXEL_LAYER_PRESETS[p_name]
-            for obj in self._current_objects:
-                if not hasattr(obj, 'voxel_layers'): obj.voxel_layers = []
-                obj.voxel_layers.append({
-                    "name": p_name,
-                    "noise_type": p.get('noise_type', 'perlin'),
-                    "freq": p['freq'], "amp": p['amp'], "blend": p.get('blend', 'add'),
-                    "seed": 123 + len(obj.voxel_layers)
-                })
+            # "Caves" is a 3D subsurface feature, not a 2D heightmap layer.
+            # Adding it as a layer raises the ground (the `caves` noise returns
+            # negative values, blend='subtract' → height increases → mountains).
+            # Route it to voxel_features so the engine carves real tunnels.
+            if p.get('noise_type') == 'caves':
+                for obj in self._current_objects:
+                    if not hasattr(obj, 'voxel_features'): obj.voxel_features = []
+                    if 'caves' not in obj.voxel_features:
+                        obj.voxel_features.append('caves')
+            else:
+                for obj in self._current_objects:
+                    if not hasattr(obj, 'voxel_layers'): obj.voxel_layers = []
+                    obj.voxel_layers.append({
+                        "name": p_name,
+                        "noise_type": p.get('noise_type', 'perlin'),
+                        "freq": p['freq'], "amp": p['amp'], "blend": p.get('blend', 'add'),
+                        "seed": 123 + len(obj.voxel_layers)
+                    })
         elif action == del_a:
+            # Feature rows come first in the list; rows < n_features remove
+            # features, later rows remove voxel_layers with an offset.
             for obj in self._current_objects:
-                if hasattr(obj, 'voxel_layers') and row < len(obj.voxel_layers):
-                    obj.voxel_layers.pop(row)
+                feats = getattr(obj, 'voxel_features', [])
+                n_feats = len(feats)
+                if row < n_feats:
+                    feats.pop(row)
+                else:
+                    lrow = row - n_feats
+                    if hasattr(obj, 'voxel_layers') and lrow < len(obj.voxel_layers):
+                        obj.voxel_layers.pop(lrow)
         elif action == ren_a:
             from PyQt6.QtWidgets import QInputDialog
             obj = self._current_objects[0]
+            n_feats = len(getattr(obj, 'voxel_features', []))
+            if row < n_feats:
+                # Features are fixed identifiers, not user-renamable.
+                return
+            lrow = row - n_feats
             layers = getattr(obj, 'voxel_layers', [])
-            cur = layers[row]['name'] if row < len(layers) else ''
+            cur = layers[lrow]['name'] if lrow < len(layers) else ''
             name, ok = QInputDialog.getText(self, "Rename Layer", "Name:", text=cur)
             if ok and name:
                 for o in self._current_objects:
                     lay = getattr(o, 'voxel_layers', [])
-                    if row < len(lay): lay[row]['name'] = name
+                    n_f = len(getattr(o, 'voxel_features', []))
+                    lr = row - n_f
+                    if 0 <= lr < len(lay): lay[lr]['name'] = name
                     
         self.set_objects(self._current_objects)
         self.property_changed.emit()
@@ -1428,12 +1657,34 @@ class ObjectPropertiesPanel(QWidget):
     def _on_vox_layer_selected(self, row):
         if row < 0 or not self._current_objects:
             self.v_layer_panel.setVisible(False)
+            self.v_caves_panel.setVisible(False)
             return
         obj = self._current_objects[0]
+        n_feats = len(getattr(obj, 'voxel_features', []))
+        if row < n_feats:
+            # Feature row: show the matching feature panel if we have one.
+            self.v_layer_panel.setVisible(False)
+            feat = obj.voxel_features[row]
+            if feat == 'caves':
+                self._updating = True
+                self.vc_tunnel_scale.setValue(float(getattr(obj, 'voxel_cave_tunnel_scale',  28.0)))
+                self.vc_tunnel_radius.setValue(float(getattr(obj, 'voxel_cave_tunnel_radius', 0.10)))
+                self.vc_cavern_scale.setValue(float(getattr(obj, 'voxel_cave_cavern_scale',  60.0)))
+                self.vc_cavern_radius.setValue(float(getattr(obj, 'voxel_cave_cavern_radius', 0.05)))
+                self.vc_waterline.setValue(float(getattr(obj, 'voxel_cave_waterline', 0.0)))
+                self.vc_max_depth.setValue(float(getattr(obj, 'voxel_cave_max_depth', 512.0)))
+                self._updating = False
+                self.v_caves_panel.setVisible(True)
+            else:
+                self.v_caves_panel.setVisible(False)
+            return
+        self.v_caves_panel.setVisible(False)
+        lrow = row - n_feats
         layers = getattr(obj, 'voxel_layers', [])
-        if row >= len(layers):
+        if lrow >= len(layers):
             self.v_layer_panel.setVisible(False)
             return
+        row = lrow
         self.v_layer_panel.setVisible(True)
         l = layers[row]
         self._updating = True
@@ -1443,17 +1694,78 @@ class ObjectPropertiesPanel(QWidget):
         if bl_idx >= 0: self.vl_blend.setCurrentIndex(bl_idx)
         self.vl_freq.setValue(l.get('freq', 1.0))
         self.vl_amp.setValue(l.get('amp', 0.1))
+        self.vl_mask.setValue(l.get('mask_threshold', 0.0))
         self.vl_seed.setValue(int(l.get('seed', 123)))
         self._updating = False
+
+    def _on_vox_biome_selected(self, row):
+        if row < 0 or not self._current_objects:
+            self.v_biome_panel.setVisible(False)
+            return
+        obj = self._current_objects[0]
+        biomes = getattr(obj, 'voxel_biomes', [])
+        if row >= len(biomes):
+            self.v_biome_panel.setVisible(False)
+            return
+        b = biomes[row]
+        surf = b.get('surface', {})
+        hrng = b.get('height_range', [0.0, 10.0])
+        srng = b.get('slope_range', [0.0, 1.0])
+        self._updating = True
+        self.vb_color.set_color(surf.get('color', [0.5, 0.5, 0.5, 1.0]))
+        self.vb_rough.setValue(float(surf.get('roughness', 0.8)))
+        self.vb_metallic.setValue(float(surf.get('metallic', 0.0)))
+        self.vb_h_min.setValue(float(hrng[0]))
+        self.vb_h_max.setValue(float(hrng[1]))
+        self.vb_s_min.setValue(float(srng[0]))
+        self.vb_s_max.setValue(float(srng[1]))
+        self._updating = False
+        self.v_biome_panel.setVisible(True)
+
+    def _update_selected_vox_biome(self, key, val):
+        if self._updating or not self._current_objects: return
+        row = self.vox_biomes_list.currentRow()
+        if row < 0: return
+        for obj in self._current_objects:
+            biomes = getattr(obj, 'voxel_biomes', [])
+            if row >= len(biomes): continue
+            b = biomes[row]
+            if key in ('color', 'roughness', 'metallic'):
+                b.setdefault('surface', {})[key] = val
+            elif key == 'height_min':
+                hr = b.setdefault('height_range', [0.0, 10.0]); hr[0] = val
+            elif key == 'height_max':
+                hr = b.setdefault('height_range', [0.0, 10.0]); hr[1] = val
+            elif key == 'slope_min':
+                sr = b.setdefault('slope_range', [0.0, 1.0]); sr[0] = val
+            elif key == 'slope_max':
+                sr = b.setdefault('slope_range', [0.0, 1.0]); sr[1] = val
+
+        from PyQt6.QtCore import QTimer
+        if self._regen_timer: self._regen_timer.stop()
+        self._regen_timer = QTimer()
+        self._regen_timer.setSingleShot(True)
+        self._regen_timer.timeout.connect(self.property_changed.emit)
+        self._regen_timer.start(150)
 
     def _update_selected_vox_layer(self, key, val):
         if self._updating or not self._current_objects: return
         row = self.vox_layers_list.currentRow()
         if row < 0: return
         for obj in self._current_objects:
-            if row < len(obj.voxel_layers):
-                obj.voxel_layers[row][key] = val
-        self.property_changed.emit()
+            n_feats = len(getattr(obj, 'voxel_features', []))
+            if row < n_feats:
+                continue  # Feature rows have no editable fields.
+            lrow = row - n_feats
+            if lrow < len(obj.voxel_layers):
+                obj.voxel_layers[lrow][key] = val
+        
+        from PyQt6.QtCore import QTimer
+        if self._regen_timer: self._regen_timer.stop()
+        self._regen_timer = QTimer()
+        self._regen_timer.setSingleShot(True)
+        self._regen_timer.timeout.connect(self.property_changed.emit)
+        self._regen_timer.start(150)
 
     def _on_vox_type_changed(self, t):
         self.update_obj_prop('voxel_type', t)

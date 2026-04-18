@@ -35,8 +35,9 @@ def _create_ocean_world_shader():
     uniform float wave_intensity;
     uniform float wave_speed;
     uniform vec4  ocean_color;
-    uniform float sun_angle;
-    uniform float rain_intensity;
+    uniform vec3  sunDir;
+    uniform vec3  sunColor;
+    uniform vec3  ambientColor;
 
     in vec3 v_world;
     in vec3 v_norm;
@@ -122,26 +123,28 @@ def _create_ocean_world_shader():
             perturbed = normalize(perturbed - amp * ((rx - rc) / e * tx + (rz - rc) / e * tz));
         }
 
-        // Sun
-        vec3 sun_dir = normalize(vec3(sin(sun_angle), cos(sun_angle), 0.2));
+        // Sun (Unified)
+        vec3 sun_dir = normalize(sunDir);
         vec3 view_dir = normalize(cam_pos - v_world);
         vec3 half_dir = normalize(sun_dir + view_dir);
 
+        float day_ratio = max(0.0, min(1.0, sun_dir.y * 5.0 + 0.5));
+
         // Diffuse with deep-water tint
         float NdotL = max(dot(perturbed, sun_dir), 0.0);
-        float diffuse = NdotL * 0.6 + 0.25;
+        float diffuse = (NdotL * 0.6 + 0.25);
 
         // Specular (narrow & wide lobes) for sun glitter
         float spec_narrow = pow(max(dot(perturbed, half_dir), 0.0), 180.0) * 1.4;
         float spec_wide   = pow(max(dot(perturbed, half_dir), 0.0), 24.0)  * 0.35;
-        float spec = spec_narrow + spec_wide;
+        float spec = (spec_narrow + spec_wide) * day_ratio;
 
         // Fresnel + rim
         float VdotN = max(dot(dir, view_dir), 0.0);
         float fresnel = pow(1.0 - VdotN, 5.0);
 
         // Reflection sky tint for grazing angles
-        vec3 sky_tint = mix(vec3(0.55, 0.72, 0.95), vec3(1.0, 0.85, 0.65), clamp(sun_dir.y * 0.5 + 0.5, 0.0, 1.0));
+        vec3 sky_tint = mix(ambientColor, sunColor, day_ratio);
 
         // Foam (crests + a little high-freq detail)
         float crest = fbm(dir * 6.0 + vec3(t*0.3, t*0.2, t*0.15)) - 0.5;
@@ -204,7 +207,10 @@ def _create_ocean_world_fft_shader():
         vec3 sphere_n = normalize(gl_Vertex.xyz);
         vec3 w_pos    = planet_center + sphere_n * planet_radius;
 
-        // Triplanar UVs in world space (per-cascade tile sizes)
+        // Triplanar UVs with *continuous* weights (no power falloff — the old
+        // pow(..,4) created pinch zones where one projection abruptly dominated,
+        // which showed up as horizontal bands on the sphere). Linear weights
+        // give smooth cross-fades between the three planes.
         vec2 uv_xz0 = w_pos.xz / u_wave_scale;
         vec2 uv_xy0 = w_pos.xy / u_wave_scale;
         vec2 uv_yz0 = w_pos.yz / u_wave_scale;
@@ -212,28 +218,29 @@ def _create_ocean_world_fft_shader():
         vec2 uv_xz1 = w_pos.xz / u_wave_scale_c1;
         vec2 uv_xz2 = w_pos.xz / u_wave_scale_c2;
 
-        // Blend weights: how much each projection contributes based on sphere normal.
         vec3 an = abs(sphere_n);
-        an = pow(an, vec3(4.0));
-        an /= (an.x + an.y + an.z + 1e-5);
+        an = an / (an.x + an.y + an.z + 1e-5);
 
-        // Cascade-0 triplanar displacement
+        // Cascade 0 triplanar — each projection contributes a tangent-plane
+        // displacement aligned with its own "up" axis.
         vec3 d_xz = sampleDisp(uv_xz0, u_displacement_map, u_choppiness);
         vec3 d_xy = sampleDisp(uv_xy0, u_displacement_map, u_choppiness);
         vec3 d_yz = sampleDisp(uv_yz0, u_displacement_map, u_choppiness);
-        // Each projection uses its own "up": XZ projects vertical onto Y; XY onto Z; YZ onto X.
-        vec3 disp0 = an.y * vec3(d_xz.x, d_xz.y, d_xz.z)
+        vec3 disp0 = an.y * d_xz
                    + an.z * vec3(d_xy.x, d_xy.z, d_xy.y)
                    + an.x * vec3(d_yz.z, d_yz.x, d_yz.y);
 
-        // Cascade 1 & 2 only from XZ projection — subtle extra chop
+        // Cascades 1 & 2 — XZ only, scaled by cascade weights
         vec3 d1 = sampleDisp(uv_xz1, u_displacement_c1, u_choppiness) * u_cascade1_weight;
         vec3 d2 = sampleDisp(uv_xz2, u_displacement_c2, u_choppiness) * u_cascade2_weight;
-        disp0 += an.y * (vec3(d1.x, d1.y, d1.z) + vec3(d2.x, d2.y, d2.z));
+        disp0 += an.y * (d1 + d2);
 
-        // Displace outward along normal (scalar height) + a bit of tangential choppiness
-        float height = dot(disp0, sphere_n) * 0.3 + length(disp0) * 0.02;
-        vec3 disp_world = sphere_n * height + (disp0 - sphere_n * dot(disp0, sphere_n)) * 0.05;
+        // Radial height from the displacement's "up" component projected onto the
+        // sphere normal. Tangential components use the sphere tangent frame so there
+        // is no direction bias at poles vs equator.
+        float height = dot(disp0, sphere_n);
+        vec3 tangential = disp0 - sphere_n * height;
+        vec3 disp_world = sphere_n * height + tangential * 0.15;
 
         vec3 out_world = w_pos + disp_world;
         gl_Position = gl_ModelViewProjectionMatrix * vec4(out_world, 1.0);
@@ -250,15 +257,11 @@ def _create_ocean_world_fft_shader():
     #version 330 compatibility
     uniform vec3  cam_pos;
     uniform float time;
-    uniform float sun_angle;
+    uniform vec3  sunDir;
+    uniform vec3  sunColor;
+    uniform vec3  ambientColor;
     uniform vec4  ocean_color;
     uniform float rain_intensity;
-    uniform float u_fresnel_strength;
-    uniform float u_specular_intensity;
-    uniform float u_peak_brightness;
-    uniform float u_sss_strength;
-
-    uniform sampler2D u_jacobian_map;
     uniform sampler2D u_jacobian_c1;
     uniform sampler2D u_jacobian_c2;
     uniform sampler2D u_displacement_map;
@@ -321,23 +324,23 @@ def _create_ocean_world_fft_shader():
         float foam = clamp(1.0 - jac, 0.0, 1.0);
         foam = pow(foam, 2.0) * 1.2;
 
-        // Sun
-        vec3 sun_dir = normalize(vec3(sin(sun_angle), cos(sun_angle), 0.2));
+        // Sun (Unified)
+        vec3 sun_dir = normalize(sunDir);
         vec3 view_dir = normalize(cam_pos - v_world);
         vec3 half_dir = normalize(sun_dir + view_dir);
+        float day_ratio = max(0.0, min(1.0, sun_dir.y * 5.0 + 0.5));
 
         float NdotL = max(dot(n, sun_dir), 0.0);
         float diffuse = NdotL * 0.6 + 0.3;
 
         float sp1 = pow(max(dot(n, half_dir), 0.0), 180.0) * 1.8 * u_specular_intensity;
         float sp2 = pow(max(dot(n, half_dir), 0.0), 28.0)  * 0.4;
-        float spec = (sp1 + sp2) * u_peak_brightness;
+        float spec = (sp1 + sp2) * u_peak_brightness * day_ratio;
 
         float VdotN = max(dot(v_dir, view_dir), 0.0);
         float fresnel = pow(1.0 - VdotN, 5.0) * u_fresnel_strength * 2.5;
 
-        vec3 sky_tint = mix(vec3(0.55, 0.72, 0.95), vec3(1.0, 0.85, 0.65),
-                            clamp(sun_dir.y * 0.5 + 0.5, 0.0, 1.0));
+        vec3 sky_tint = mix(ambientColor, sunColor, day_ratio);
 
         float crest = hC * 0.5 + 0.5;
         vec3 deep    = ocean_color.rgb * 0.55;
@@ -422,8 +425,14 @@ def render_ocean_world(camera_pos, obj, elapsed_time, weather_obj=None):
     color = list(getattr(obj, 'ocean_world_color',
                          getattr(obj, 'material', {}).get('base_color', [0.05, 0.25, 0.6, 0.85])))
     pos = obj.position
-    time_of_day = getattr(obj, 'time_of_day', 0.25)
-    sun_angle = (time_of_day - 0.5) * 6.28318
+    
+    from .procedural_atmosphere import get_sun_direction, get_sun_color, get_ambient_color
+    atmo = next((o for o in obj.scene_ref.scene_objects if o.obj_type == 'atmosphere' and o.active), None) if hasattr(obj, 'scene_ref') else None
+    
+    sun_dir = get_sun_direction(atmo)
+    sun_col = get_sun_color(atmo)
+    amb_col = get_ambient_color(atmo)
+    
     use_fft = bool(getattr(obj, 'ocean_use_fft', False))
 
     rain_i = 0.0
@@ -494,7 +503,9 @@ def render_ocean_world(camera_pos, obj, elapsed_time, weather_obj=None):
         sh.set_uniform_f("u_cascade1_weight", float(getattr(obj, 'ocean_cascade1_weight', 0.5)))
         sh.set_uniform_f("u_cascade2_weight", float(getattr(obj, 'ocean_cascade2_weight', 0.7)))
         sh.set_uniform_f("time", adjusted_t)
-        sh.set_uniform_f("sun_angle", sun_angle)
+        sh.set_uniform_v3("sunDir", *sun_dir)
+        sh.set_uniform_v3("sunColor", *sun_col)
+        sh.set_uniform_v3("ambientColor", *amb_col)
         sh.set_uniform_v4("ocean_color", *color)
         sh.set_uniform_f("rain_intensity", rain_i)
         sh.set_uniform_f("u_fresnel_strength",   float(getattr(obj, 'ocean_fresnel_strength', 0.3)))
@@ -520,7 +531,9 @@ def render_ocean_world(camera_pos, obj, elapsed_time, weather_obj=None):
         _ocean_world_shader.set_uniform_f("time",           elapsed_time)
         _ocean_world_shader.set_uniform_f("wave_speed",     wave_speed)
         _ocean_world_shader.set_uniform_f("wave_intensity", wave_intensity)
-        _ocean_world_shader.set_uniform_f("sun_angle",      sun_angle)
+        _ocean_world_shader.set_uniform_v3("sunDir",        *sun_dir)
+        _ocean_world_shader.set_uniform_v3("sunColor",       *sun_col)
+        _ocean_world_shader.set_uniform_v3("ambientColor",    *amb_col)
         _ocean_world_shader.set_uniform_v4("ocean_color",   *color)
         _ocean_world_shader.set_uniform_f("rain_intensity", rain_i)
 

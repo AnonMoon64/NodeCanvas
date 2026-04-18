@@ -12,8 +12,10 @@ def create_standard_shader():
     v_src = """
     #version 120
     varying vec3 v_normal;
+    varying vec4 v_vcolor;
     void main() {
         v_normal = gl_NormalMatrix * gl_Normal;
+        v_vcolor = gl_Color;
         gl_Position = ftransform();
     }
     """
@@ -21,12 +23,21 @@ def create_standard_shader():
     #version 120
     uniform vec4 base_color;
     uniform vec3 sunDir;
+    uniform vec3 sunColor;
+    uniform vec3 ambientColor;
     varying vec3 v_normal;
+    varying vec4 v_vcolor;
     void main() {
         vec3 n = normalize(v_normal);
         vec3 l = normalize(sunDir);
-        float diff = max(dot(n, l), 0.2);
-        gl_FragColor = vec4(base_color.rgb * diff, base_color.a);
+        float diff = max(dot(n, l), 0.0);
+        // v_vcolor.a acts as a mask: 0 = use base_color (non-voxel/non-biome),
+        // 1 = use per-vertex biome color. Drivers that alias attribute 3 to
+        // gl_Color will pass through our uploaded biome data.
+        vec3 albedo = mix(base_color.rgb, v_vcolor.rgb, v_vcolor.a);
+        vec3 lit = albedo * diff * sunColor;
+        vec3 final = lit + ambientColor * albedo;
+        gl_FragColor = vec4(final, base_color.a);
     }
     """
     return ShaderProgram(v_src, f_src)
@@ -121,14 +132,18 @@ def create_fish_shader():
     #version 120
     uniform vec4 base_color;
     uniform vec3 sunDir;
+    uniform vec3 sunColor;
+    uniform vec3 ambientColor;
     varying vec3 v_pos;
     varying vec3 v_normal;
 
     void main() {
         vec3 n = normalize(v_normal);
         vec3 l = normalize(sunDir);
-        float diff = max(dot(n, l), 0.2);
-        gl_FragColor = vec4(base_color.rgb * diff, base_color.a);
+        float diff = max(dot(n, l), 0.0);
+        vec3 lit = base_color.rgb * diff * sunColor;
+        vec3 final = lit + ambientColor * base_color.rgb;
+        gl_FragColor = vec4(final, base_color.a);
     }
     """
     return ShaderProgram(v_src, f_src)
@@ -161,14 +176,18 @@ def create_flag_shader():
     #version 120
     uniform vec4 base_color;
     uniform vec3 sunDir;
+    uniform vec3 sunColor;
+    uniform vec3 ambientColor;
     varying vec3 v_pos;
     varying vec3 v_normal;
 
     void main() {
         vec3 n = normalize(v_normal);
         vec3 l = normalize(sunDir);
-        float diff = max(dot(n, l), 0.2);
-        gl_FragColor = vec4(base_color.rgb * diff, base_color.a);
+        float diff = max(dot(n, l), 0.0);
+        vec3 lit = base_color.rgb * diff * sunColor;
+        vec3 final = lit + ambientColor * base_color.rgb;
+        gl_FragColor = vec4(final, base_color.a);
     }
     """
     return ShaderProgram(v_src, f_src)
@@ -354,6 +373,9 @@ def create_ocean_shader_fft():
     uniform float u_cascade1_weight;
     uniform float u_cascade2_weight;
     uniform float time_of_day;
+    uniform vec3  sunDir;
+    uniform vec3  sunColor;
+    uniform vec3  ambientColor;
 
     // Advanced Visuals
     uniform float u_fresnel_strength;
@@ -502,10 +524,9 @@ def create_ocean_shader_fft():
             _splash_foam += clamp(rain_h * amp, 0.0, 1.0) * 0.35;
         }
 
-        // --- Day/Night Lighting ---
-        vec3  sun_dir   = normalize(vec3(sin(time_of_day * 6.28), cos(time_of_day * 6.28), 0.2));
-        vec3  light_dir = sun_dir;
-        float day_ratio = max(sin(time_of_day * 3.14159), 0.0);
+        // --- Day/Night Lighting (Unified) ---
+        vec3  light_dir = normalize(sunDir);
+        float day_ratio = max(0.0, min(1.0, light_dir.y * 5.0 + 0.5));
 
         // --- Base Water Color (SoT: rich teal-inky blue, not flat navy) ---
         float h_norm    = clamp(v_height * 0.04 + 0.55, 0.0, 1.0);
@@ -518,7 +539,7 @@ def create_ocean_shader_fft():
         // --- Ambient sky bounce — the key to "wet" look ---
         // Even in shadow, ocean always reflects some sky. SoT water is NEVER flat matte.
         vec3 sky_amb_day   = mix(vec3(0.07, 0.18, 0.32), vec3(0.18, 0.35, 0.52), h_norm);
-        vec3 sky_amb_night = vec3(0.03, 0.07, 0.16);
+        vec3 sky_amb_night = ambientColor;
         water_rgb += mix(sky_amb_night, sky_amb_day, day_ratio) * 0.25;
 
         // --- Directional Diffuse ---
@@ -526,7 +547,7 @@ def create_ocean_shader_fft():
         float NdotL   = dot(normal, light_dir);
         float diffuse  = mix(0.38, 1.0, clamp(NdotL * 0.5 + 0.5, 0.0, 1.0));
         diffuse = mix(0.47, diffuse, day_ratio);
-        water_rgb *= diffuse;
+        water_rgb *= (diffuse * sunColor);
 
         // --- SoT Foam System (three layers) ---
         // 1. Jacobian fold foam — where waves break
@@ -802,6 +823,8 @@ def create_pbr_shader():
     uniform float u_metallic;
     uniform float u_roughness;
     uniform vec3 sunDir;
+    uniform vec3 sunColor;
+    uniform vec3 ambientColor;
     uniform vec3 cam_pos;
     
     uniform bool hasAlbedo;
@@ -883,8 +906,8 @@ def create_pbr_shader():
 
         float NdotL = max(dot(N, L), 0.0);        
 
-        vec3 ambient = vec3(0.03) * albedo * ao;
-        vec3 radiance = vec3(2.5, 2.3, 2.1); // Direct sunlight radiance approx
+        vec3 ambient = ambientColor * albedo * ao;
+        vec3 radiance = sunColor * 3.0; // Scaled radiance from unified sun
 
         vec3 result = (kD * albedo / PI + specular) * radiance * NdotL;
         result += ambient;

@@ -28,13 +28,23 @@ _atmosphere_sphere = None
 
 
 def _sun_direction(time_of_day: float):
-    """Return normalised sun direction for a given time-of-day (0..1)."""
-    sol_angle = (time_of_day - 0.25) * 2.0 * math.pi   # noon = 0.5 → sun at top (y=+1)
-    sx = math.cos(sol_angle)
-    sy = math.sin(sol_angle)
-    sz = 0.15
-    m = math.sqrt(sx*sx + sy*sy + sz*sz)
-    return (sx / m, sy / m, sz / m)
+    """Return normalised sun direction following a realistic circular arc."""
+    # Noon = 0.5 -> Angle = 0 -> sun at top (Y=+1)
+    angle = (time_of_day - 0.5) * 2.0 * math.pi
+    
+    # Orbit inclination (tilt)
+    inclination = math.radians(23.5)
+    
+    # Base circular path in XY plane
+    x = math.sin(angle)
+    y = math.cos(angle)
+    z = 0.0
+    
+    # Rotate around X axis to apply inclination
+    ry = y * math.cos(inclination) - z * math.sin(inclination)
+    rz = y * math.sin(inclination) + z * math.cos(inclination)
+    
+    return (x, ry, rz)
 
 
 def _moon_direction(time_of_day: float):
@@ -265,22 +275,53 @@ def render_atmosphere(camera_pos, obj, time_override=None):
 
 
 def get_sun_direction(obj):
-    """Helper used by scene_view to sync the directional light."""
-    return _sun_direction(getattr(obj, 'time_of_day', 0.25) if obj else 0.25)
+    """Helper used by main loop to sync the global light direction."""
+    if not obj: return (0, 1, 0)
+    mode = getattr(obj, 'light_update_mode', 'Auto')
+    tod = getattr(obj, 'time_of_day', 0.25)
+    
+    if mode == "Manual Moon":
+        return _moon_direction(tod)
+    elif mode == "Manual Sun":
+        return _sun_direction(tod)
+        
+    # Auto: Swap based on which one is up
+    sun = _sun_direction(tod)
+    if sun[1] > -0.1: # Sun is up or rising
+        return sun
+    return _moon_direction(tod)
 
 
 def get_sun_color(obj):
-    """Return a physically-ish-plausible sun color for the current time."""
-    tod = getattr(obj, 'time_of_day', 0.25) if obj else 0.25
-    _, sy, _ = _sun_direction(tod)
-    day = max(0.0, min(1.0, sy * 2.0 + 0.3))
-    twilight = max(0.0, min(1.0, 1.0 - abs(sy) * 3.0))
-    # Warm at horizon, white at noon
-    warm = (1.0, 0.55, 0.22)
-    white = (1.0, 0.97, 0.9)
-    col = (
-        warm[0] * twilight + white[0] * day,
-        warm[1] * twilight + white[1] * day,
-        warm[2] * twilight + white[2] * day,
-    )
-    return col
+    """Return the active light color (Sun or Moon) with smooth transitions."""
+    if not obj: return (1.0, 1.0, 0.9)
+    
+    mode = getattr(obj, 'light_update_mode', 'Auto')
+    tod = getattr(obj, 'time_of_day', 0.25)
+    
+    sun_col = getattr(obj, 'sun_color', [1.0, 1.0, 0.9])[:3]
+    moon_col = getattr(obj, 'moon_color', [0.6, 0.7, 1.0])[:3]
+    moon_int = float(getattr(obj, 'moon_intensity', 1.0))
+    
+    if mode == "Manual Sun": return tuple(sun_col)
+    if mode == "Manual Moon": return tuple(c * moon_int for c in moon_col)
+    
+    # Auto logic
+    sun_dir = _sun_direction(tod)
+    # Day ratio: 1.0 at noon, 0.0 at horizon/night
+    day_ratio = max(0.0, min(1.0, sun_dir[1] * 5.0 + 0.5)) 
+    # Moon ratio: 1.0 at midnight, 0.0 at horizon/day
+    moon_ratio = max(0.0, min(1.0, -sun_dir[1] * 5.0 + 0.5))
+    
+    r = sun_col[0] * day_ratio + (moon_col[0] * moon_int) * moon_ratio
+    g = sun_col[1] * day_ratio + (moon_col[1] * moon_int) * moon_ratio
+    b = sun_col[2] * day_ratio + (moon_col[2] * moon_int) * moon_ratio
+    
+    return (r, g, b)
+
+
+def get_ambient_color(obj):
+    """Return the global ambient sky color."""
+    if not obj: return (0.1, 0.1, 0.2)
+    col = getattr(obj, 'ambient_color', [0.1, 0.1, 0.2])[:3]
+    return tuple(col)
