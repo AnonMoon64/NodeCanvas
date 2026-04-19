@@ -10,6 +10,8 @@ import time
 
 from py_editor.core.voxel_engine_flat import generate_flat_density
 from py_editor.core.voxel_engine_round import generate_round_density
+from py_editor.core.voxel_water_flat import generate_water_flat_density
+from py_editor.core.voxel_water_round import generate_water_round_density
 
 
 class VoxelEngine:
@@ -227,8 +229,16 @@ class VoxelEngine:
 
         # Dispatch to the per-mode generator. Both take the same prepared
         # coords and the shared noise helpers on VoxelEngine.
-        gen = generate_round_density if mode == "Round" else generate_flat_density
-        return gen(
+        if mode == "Round":
+            gen = generate_round_density
+        elif mode == "Flat":
+            gen = generate_flat_density
+        elif mode == "WaterRound":
+            gen = generate_water_round_density
+        else:
+            gen = generate_water_flat_density
+
+        density, colors = gen(
             NX, NY, NZ, LX, LY, LZ,
             resolution=res, seed=seed, radius=float(radius),
             layers=layers, features=features, center=center,
@@ -238,12 +248,37 @@ class VoxelEngine:
             gen_params=gen_params or {},
         )
 
+        # Apply subtractive excavators
+        excavators = (gen_params or {}).get('excavators', [])
+        if excavators:
+            for ex in excavators:
+                # Local coords relative to excavator center
+                epos = ex['pos']
+                er   = ex['radius']
+                es   = ex['softness']
+                
+                # World-space distance to excavator center
+                dist_sq = (X - epos[0])**2 + (Y - epos[1])**2 + (Z - epos[2])**2
+                dist    = np.sqrt(dist_sq)
+                
+                # Sdf for sphere: positive inside.
+                e_density = np.clip((er - dist) / (es + 1e-6), 0.0, 10.0)
+                # Subtract: positive density (inside) becomes negative (outside)
+                density -= e_density.astype(np.float32)
+                
+                # Optionally: change color of the excavated wall to brown dirt
+                # if the excavator touches it.
+                inside_ex = dist < er + 0.5
+                colors[inside_ex] = [0.38, 0.26, 0.18] # Dirt brown
+
+        return density, colors
+
     # ------------------------------------------------------------------ #
     #  Surface Nets — interpolated vertex placement                        #
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def surface_nets(grid, threshold=0.0, pad=True):
+    def surface_nets(grid, threshold=0.0, pad=True, color_grid=None):
         """
         Surface Nets extraction with gradient-based vertex interpolation.
 
@@ -276,6 +311,7 @@ class VoxelEngine:
         if len(active_coords) == 0:
             return (np.array([], dtype=np.float32),
                     np.array([], dtype=np.uint32),
+                    np.array([], dtype=np.float32),
                     np.array([], dtype=np.float32))
 
         N = len(active_coords)
@@ -378,12 +414,24 @@ class VoxelEngine:
         _faces(signs[1:-1, :-1, 1:-1] != signs[1:-1, 1:,  1:-1], 1)
         _faces(signs[1:-1, 1:-1, :-1] != signs[1:-1, 1:-1, 1: ], 2)
 
+        # 6. Colors
+        if color_grid is not None:
+            # Padded color search
+            if pad:
+                c_padded = np.pad(color_grid, ((1,1),(1,1),(1,1),(0,0)), mode='constant')
+            else:
+                c_padded = color_grid
+            v_colors = c_padded[ci, cj, ck]
+        else:
+            v_colors = np.ones((N, 3), dtype=np.float32)
+
         return (verts.astype(np.float32),
                 np.array(indices, dtype=np.uint32),
-                v_norms.astype(np.float32))
+                v_norms.astype(np.float32),
+                v_colors.astype(np.float32))
 
     @staticmethod
-    def blocky_mesh(grid, threshold=0.0):
+    def blocky_mesh(grid, threshold=0.0, color_grid=None):
         """Generate a blocky cube-based mesh from a density grid.
 
         Vectorised with numpy — only faces on the boundary between solid and
@@ -397,6 +445,7 @@ class VoxelEngine:
         if grid.size == 0:
             return (np.array([], dtype=np.float32),
                     np.array([], dtype=np.uint32),
+                    np.array([], dtype=np.float32),
                     np.array([], dtype=np.float32))
 
         nx, ny, nz = grid.shape
@@ -404,6 +453,7 @@ class VoxelEngine:
         if not solid.any():
             return (np.array([], dtype=np.float32),
                     np.array([], dtype=np.uint32),
+                    np.array([], dtype=np.float32),
                     np.array([], dtype=np.float32))
 
         # Pad with False on all sides so "out of bounds" counts as empty ⇒
@@ -434,6 +484,7 @@ class VoxelEngine:
         all_verts   = []
         all_norms   = []
         all_indices = []
+        all_colors  = []
         vert_offset = 0
 
         def _emit_face(mask, corner_offsets, normal):
@@ -456,6 +507,16 @@ class VoxelEngine:
                 quad_verts[:, ci, 1] = cy + dy * half_y
                 quad_verts[:, ci, 2] = cz + dz * half_z
             all_verts.append(quad_verts.reshape(-1, 3))
+            # Colors for this face
+            if color_grid is not None:
+                # color_grid is expected to be (nx, ny, nz, 3)
+                c_face = color_grid[ii, jj, kk] # (n, 3)
+                # Expand to (n, 4, 3) for quad vertices
+                quad_colors = np.broadcast_to(c_face[:, np.newaxis, :], (n, 4, 3))
+                all_colors.append(quad_colors.reshape(-1, 3))
+            else:
+                all_colors.append(np.ones((n * 4, 3), dtype=np.float32))
+
             all_norms.append(np.tile(np.asarray(normal, dtype=np.float32),
                                      (n * 4, 1)))
 
@@ -469,14 +530,18 @@ class VoxelEngine:
             vert_offset += n * 4
 
         # Corner offsets (x,y,z) in units of (half_x, half_y, half_z).
-        # Match the CCW winding of the original blocky_mesh faces.
+        # Winding is CCW when viewed from the outside so cross(e1,e2) in
+        # _compute_biome_spawns gives the correct outward normal direction,
+        # which drives slope-based biome filtering.
         _emit_face(mask_nx, [(-1,-1,-1), (-1, 1,-1), (-1, 1, 1), (-1,-1, 1)],
                    (-1.0, 0.0, 0.0))
         _emit_face(mask_px, [( 1,-1,-1), ( 1,-1, 1), ( 1, 1, 1), ( 1, 1,-1)],
                    ( 1.0, 0.0, 0.0))
-        _emit_face(mask_ny, [(-1,-1,-1), (-1,-1, 1), ( 1,-1, 1), ( 1,-1,-1)],
+        # NY: CCW from below → cross gives −Y ✓
+        _emit_face(mask_ny, [(-1,-1,-1), ( 1,-1,-1), ( 1,-1, 1), (-1,-1, 1)],
                    ( 0.0,-1.0, 0.0))
-        _emit_face(mask_py, [(-1, 1,-1), ( 1, 1,-1), ( 1, 1, 1), (-1, 1, 1)],
+        # PY: CCW from above → cross gives +Y ✓  (was CW, gave −Y, broke slope filter)
+        _emit_face(mask_py, [(-1, 1,-1), (-1, 1, 1), ( 1, 1, 1), ( 1, 1,-1)],
                    ( 0.0, 1.0, 0.0))
         _emit_face(mask_nz, [(-1,-1,-1), ( 1,-1,-1), ( 1, 1,-1), (-1, 1,-1)],
                    ( 0.0, 0.0,-1.0))
@@ -486,12 +551,14 @@ class VoxelEngine:
         if not all_verts:
             return (np.array([], dtype=np.float32),
                     np.array([], dtype=np.uint32),
+                    np.array([], dtype=np.float32),
                     np.array([], dtype=np.float32))
 
-        verts_np = np.concatenate(all_verts, axis=0).astype(np.float32)
-        norms_np = np.concatenate(all_norms, axis=0).astype(np.float32)
-        idx_np   = np.concatenate(all_indices).astype(np.uint32)
-        return verts_np, idx_np, norms_np
+        verts_np  = np.concatenate(all_verts, axis=0).astype(np.float32)
+        norms_np  = np.concatenate(all_norms, axis=0).astype(np.float32)
+        idx_np    = np.concatenate(all_indices).astype(np.uint32)
+        colors_np = np.concatenate(all_colors, axis=0).astype(np.float32)
+        return verts_np, idx_np, norms_np, colors_np
 
 
 def main():

@@ -72,4 +72,14 @@ def generate_round_density(NX, NY, NZ, LX, LY, LZ, *, resolution, seed,
         depth_mask   = surface_fade * core_fade
         density -= c_noise * carve_depth * depth_mask
 
-    return density.astype(np.float32)
+    # --- Coloring (Gray top, Brown dirt) ---
+    res_x, res_y, res_z = density.shape
+    colors = np.ones((res_x, res_y, res_z, 3), dtype=np.float32)
+    # Default stony gray for planet surface
+    colors[:] = [0.45, 0.45, 0.48]
+    
+    # Buried voxels (density > 1.0) become brown dirt/rock
+    is_buried = density > 1.0
+    colors[is_buried] = [0.35, 0.22, 0.15]
+
+    return density.astype(np.float32), colors

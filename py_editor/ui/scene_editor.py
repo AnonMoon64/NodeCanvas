@@ -108,6 +108,12 @@ class SceneEditorWidget(QWidget):
         elif prim_type == "voxel_world_round":
             voxel_variant = "Round"
             prim_type = "voxel_world"
+        elif prim_type == "voxel_water_flat":
+            voxel_variant = "WaterFlat"
+            prim_type = "voxel_water"
+        elif prim_type == "voxel_water_round":
+            voxel_variant = "WaterRound"
+            prim_type = "voxel_water"
 
         # Handle Spawner
         if prim_type == "spawner":

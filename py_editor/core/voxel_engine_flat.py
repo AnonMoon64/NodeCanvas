@@ -129,4 +129,14 @@ def generate_flat_density(NX, NY, NZ, LX, LY, LZ, *, resolution, seed,
         delta = carve_strength * carve_depth * depth_fade * water_fade
         density = np.where(above_ground, density, density - delta)
 
-    return density.astype(np.float32)
+    # --- Coloring (Green top, Brown dirt) ---
+    res_x, res_y, res_z = density.shape
+    colors = np.ones((res_x, res_y, res_z, 3), dtype=np.float32)
+    # Default green for grass
+    colors[:] = [0.22, 0.48, 0.15]
+    
+    # Buried voxels (density > 1.5) become brown dirt
+    is_buried = density > 1.5
+    colors[is_buried] = [0.38, 0.26, 0.18]
+
+    return density.astype(np.float32), colors

@@ -60,13 +60,14 @@ def _child_signature(children):
 class _InstanceBatch:
     """Single mesh + many transforms merged into one VAO."""
 
-    __slots__ = ('vao', 'vbo', 'ibo', 'count', 'mesh_path', 'shader_name', 'material_path', 'shader_params')
+    __slots__ = ('vao', 'vbo', 'ibo', 'count', 'mesh_path', 'shader_name', 'material_path', 'shader_params', 'max_distance')
 
-    def __init__(self, mesh_path, shader_name, material_path, shader_params, children):
+    def __init__(self, mesh_path, shader_name, material_path, shader_params, children, max_distance=120.0):
         """`children` is either a list of SceneObject or a list of
         (position, rotation, scale) float tuples."""
         self.mesh_path = mesh_path
         self.shader_name = shader_name
+        self.max_distance = float(max_distance)
         self.material_path = material_path
         self.shader_params = shader_params
         
@@ -317,9 +318,10 @@ class ChunkSpawnBatchCache:
         if entry:
             return entry['batches'], entry['leftovers']
 
-        # Group by mesh_path
+        # Group by mesh_path — include max_distance so spawners with different
+        # per-spawner distances end up in separate batches for independent culling.
         groups = {}
-        group_origs = {}  # (mesh_path, shader_name) -> [original spawn dicts, for fallback]
+        group_origs = {}
         leftovers = []
         for sp in spawns:
             mp = _resolve_spawn_mesh_path(sp)
@@ -329,8 +331,8 @@ class ChunkSpawnBatchCache:
                 continue
             mat = sp.get('material_path', '')
             params = sp.get('shader_params', {})
-            # Include material and params in the batching key
-            key = (mp, sn, mat, tuple(sorted(params.items())))
+            max_d = float(sp.get('max_distance', 120.0))
+            key = (mp, sn, mat, max_d, tuple(sorted(params.items())))
             groups.setdefault(key, []).append((
                 tuple(sp['pos']), tuple(sp['rot']), tuple(sp['scale']),
                 tuple(sp.get('color', (1, 1, 1, 1)))
@@ -339,13 +341,13 @@ class ChunkSpawnBatchCache:
 
         self.invalidate(chunk_key)
         batches = []
-        for (mp, sn, mat, p_tuple), xs in groups.items():
+        for (mp, sn, mat, max_d, p_tuple), xs in groups.items():
             try:
                 params = dict(p_tuple)
-                batches.append(_InstanceBatch(mp, sn, mat, params, xs))
+                batches.append(_InstanceBatch(mp, sn, mat, params, xs, max_distance=max_d))
             except Exception as e:
                 print(f"[CHUNK BATCH] Failed to batch {mp} ({sn}, {mat}): {e}")
-                leftovers.extend(group_origs[(mp, sn, mat, p_tuple)])
+                leftovers.extend(group_origs[(mp, sn, mat, max_d, p_tuple)])
         self._cache[chunk_key] = {'batches': batches, 'leftovers': leftovers}
         return batches, leftovers
 

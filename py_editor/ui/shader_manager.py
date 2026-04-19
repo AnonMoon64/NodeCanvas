@@ -95,14 +95,17 @@ def get_texture(path):
         return 0
 
 def get_shader(name_or_path):
-    """Retrieve a compiled shader from the cache or compile a new one from a .shader file."""
+    """Retrieve a compiled shader from the cache or compile a new one from a .shader file.
+    Includes a hot-reloading check based on file mtime.
+    """
     if not name_or_path:
         return None
-
-    if name_or_path in _SHADER_CACHE:
-        return _SHADER_CACHE[name_or_path]
     
-    # Fallback map for legacy hardcoded presets to maintain backwards compatibility
+    # 1. Resolve File Path (Simplified logic to get the path before cache check)
+    from py_editor.core import paths as _ap
+    project_root = _ap.get_project_root()
+    core_shaders_dir = project_root / "shaders"
+
     fallback_map = {
         "Standard": "standard.shader",
         "Grass": "grass.shader",
@@ -111,47 +114,55 @@ def get_shader(name_or_path):
         "Flag Waving": "flag_waving.shader",
         "Ocean (FFT)": "ocean_fft.shader",
         "Ocean (Gerstner)": "ocean_gerstner.shader",
-        "PBR Material": "pbr_material.shader"
+        "PBR Material": "pbr_material.shader",
+        "voxel_water": "voxel_water.shader"
     }
 
     file_to_load = name_or_path
-    
-    # 1. Check fallback map
-    from py_editor.core import paths as _ap
-    project_root = _ap.get_project_root()
-    core_shaders_dir = project_root / "shaders"
-
     if name_or_path in fallback_map:
         file_to_load = str(core_shaders_dir / fallback_map[name_or_path])
     
-    # 2. If it's a relative filename, try current shaders directory
     if not os.path.isabs(file_to_load):
-        # Try project-relative shaders/
+        if file_to_load.startswith("shaders/"): file_to_load = file_to_load[8:]
         potential_path = core_shaders_dir / file_to_load
+        if not potential_path.exists() and not file_to_load.endswith(".shader"):
+            alt = core_shaders_dir / (file_to_load + ".shader")
+            if alt.exists(): potential_path = alt
         if potential_path.exists():
             file_to_load = str(potential_path)
         else:
-            # Try app-relative shaders/ (near this file)
             app_shaders_dir = Path(__file__).parent.parent.parent / "shaders"
             potential_path = app_shaders_dir / file_to_load
+            if not potential_path.exists() and not file_to_load.endswith(".shader"):
+                alt = app_shaders_dir / (file_to_load + ".shader")
+                if alt.exists(): potential_path = alt
             if potential_path.exists():
                 file_to_load = str(potential_path)
 
-    if not os.path.exists(file_to_load):
-        # 3. Last ditch effort: if it's an absolute path pointing to the root, 
-        # but the file isn't there, try injecting /shaders/
-        p = Path(file_to_load)
-        if p.parent == project_root or p.parent == Path(__file__).parent.parent.parent:
-            alt_path = p.parent / "shaders" / p.name
-            if alt_path.exists():
-                file_to_load = str(alt_path)
+    if not os.path.exists(file_to_load) and not file_to_load.endswith(".shader"):
+        alt = file_to_load + ".shader"
+        if os.path.exists(alt): file_to_load = alt
 
     if not os.path.exists(file_to_load):
-        print(f"[SHADER MANAGER] Warning: Shader file not found: {file_to_load}")
-        print(f"    (Checked project shaders: {core_shaders_dir})")
+        # Last ditch: check existing cache if we can't find it on disk
+        if name_or_path in _SHADER_CACHE: return _SHADER_CACHE[name_or_path][0]
         return None
+
+    # 2. Check Cache with mtime
+    try:
+        mtime = os.path.getmtime(file_to_load)
+    except:
+        mtime = 0
         
-    print(f"[SHADER MANAGER] Initializing shader from: {file_to_load}")
+    if name_or_path in _SHADER_CACHE:
+        entry = _SHADER_CACHE[name_or_path]
+        if isinstance(entry, tuple) and len(entry) == 2:
+            prog, cached_mtime = entry
+            if mtime <= cached_mtime:
+                return prog
+        print(f"[SHADER MANAGER] Stale or legacy cache for {name_or_path}. Reloading...")
+
+    # 3. Load and Compile
     try:
         with open(file_to_load, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -161,7 +172,7 @@ def get_shader(name_or_path):
             v_src = parts[0].replace("// -- VERTEX --", "").strip()
             f_src = parts[1].strip()
             prog = ShaderProgram(v_src, f_src)
-            _SHADER_CACHE[name_or_path] = prog
+            _SHADER_CACHE[name_or_path] = (prog, mtime)
             return prog
         else:
             print(f"[SHADER ERROR] Invalid format in {file_to_load}. Missing // -- FRAGMENT --")
@@ -256,3 +267,9 @@ def get_shader_params(name_or_path):
         print(f"[SHADER MANAGER] Param parse error: {e}")
         
     return params
+
+def clear_shader_cache():
+    """Wipe the global shader cache to force a full recompile on the next request."""
+    global _SHADER_CACHE
+    _SHADER_CACHE.clear()
+    print("[SHADER MANAGER] Shader cache cleared.")

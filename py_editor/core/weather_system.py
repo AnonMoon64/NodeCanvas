@@ -227,9 +227,18 @@ def update_weather(weather_obj, scene_objects, camera_pos, dt: float):
 
     spec = spec_from_preset(preset, overrides)
 
-    # 4.5 Environmental Culling: Don't let rain go through the ocean
+    # 4.5 Environmental Culling: Don't let rain go through the ocean or voxel water
     ocean_obj = next((o for o in scene_objects if getattr(o, 'obj_type', '') == 'ocean' and getattr(o, 'active', True)), None)
-    if ocean_obj:
+    water_obj = next((o for o in scene_objects if getattr(o, 'obj_type', '') == 'voxel_water' and getattr(o, 'active', True)), None)
+    
+    if water_obj:
+        is_round = (getattr(water_obj, 'voxel_type', 'Round') == 'Round')
+        if is_round:
+            spec.kill_center = tuple(getattr(water_obj, 'voxel_center', (0,0,0)))
+            spec.kill_radius = float(getattr(water_obj, 'voxel_radius', 0.0)) + 0.1
+        else:
+            spec.kill_height = float(getattr(water_obj, 'voxel_water_level', 0.0)) - 0.1
+    elif ocean_obj:
         # Pad slightly to ensure quads don't flicker at exactly 0
         spec.kill_height = float(getattr(ocean_obj, 'landscape_ocean_level', 0.0)) - 0.2
 

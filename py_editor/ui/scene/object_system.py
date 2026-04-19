@@ -41,6 +41,18 @@ class SceneObject:
             self.material['preset'] = 'Water'
             # Auto-attach base volumetric spray logic
             self.logic_list = ["py_editor/nodes/graphs/OceanSpray.logic"]
+        elif self.obj_type == 'voxel_water':
+            self.material = dict(MATERIAL_PRESETS['Water'])
+            self.material['preset'] = 'Water'
+            self.material['base_color'] = [0.05, 0.45, 0.85, 0.8]
+            self.material['opacity'] = 0.8
+            self.shader_name = "voxel_water"
+        elif self.obj_type == 'voxel_excavator':
+            self.material = dict(DEFAULT_MATERIAL)
+            self.material['base_color'] = [1.0, 0.3, 0.3, 0.5] # Semi-transparent red
+            self.voxel_excavator_radius = 5.0
+            self.voxel_excavator_softness = 0.1
+            self.color = [1.0, 0.2, 0.2, 1.0] # Gizmo color
         else:
             self.material = dict(DEFAULT_MATERIAL)
         self.active = True
@@ -175,6 +187,11 @@ class SceneObject:
         # Flat-world vertical scale multiplier. 1.0 = current default (±50u peaks
         # from layer amp=1.0). Raise to let mountains go higher.
         self.voxel_world_height = 1.0
+
+        # Voxel Water Specifics
+        self.voxel_water_level = 0.0
+        self.voxel_water_speed = 1.0
+        self.voxel_water_surge = 0.5
         # Cave feature parameters (used when 'caves' is in voxel_features).
         # Tunnel radius / scale control passage width; cavern control wide rooms.
         # Waterline Y gates cave carving — caves don't generate below this level
@@ -250,6 +267,17 @@ class SceneObject:
             elif hasattr(obj, k):
                 setattr(obj, k, v)
         obj.spawner_controller_type = d.get('spawner_controller_type', 'None')
+        
+        # Healing / Migration: Ensure voxel water always has its shader and material
+        if obj.obj_type == 'voxel_water':
+            if getattr(obj, 'shader_name', 'Standard') == 'Standard':
+                obj.shader_name = "voxel_water"
+            if 'base_color' not in obj.material:
+                obj.material['base_color'] = [0.05, 0.45, 0.85, 0.8]
+                obj.material['opacity'] = 0.8
+            if 'shallow_color' not in obj.material:
+                obj.material['shallow_color'] = [0.1, 0.8, 0.9, 1.0]
+
         return obj
 
 

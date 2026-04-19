@@ -19,7 +19,9 @@ class PrimitiveTree(QTreeWidget):
             "Shapes": ["Cube", "Sphere", "Cylinder", "Plane"],
             "Environment": ["Landscape (Deprecated)", "Ocean", "Ocean World", "Cloud Layer",
                             "Atmosphere", "Weather", "Universe",
-                            "Voxel World Flat", "Voxel World Round"],
+                            "Voxel World Flat", "Voxel World Round",
+                            "Voxel Water Flat", "Voxel Water Round",
+                            "Voxel Excavator"],
             "Lights": ["Point Light", "Directional Light"],
             "Camera": ["Camera"]
         }

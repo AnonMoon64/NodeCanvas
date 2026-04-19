@@ -125,6 +125,19 @@ class MainWindow(QMainWindow):
         settings_act.triggered.connect(self._on_open_settings)
         self.toolbar.addAction(settings_act)
 
+        self.toolbar.addSeparator()
+
+        reload_shaders_act = QAction("Reload Shaders", self)
+        reload_shaders_act.setShortcut("F4")
+        reload_shaders_act.triggered.connect(self._on_reload_shaders)
+        self.toolbar.addAction(reload_shaders_act)
+
+    def _on_reload_shaders(self):
+        from py_editor.ui.shader_manager import clear_shader_cache
+        clear_shader_cache()
+        self.scene_editor.viewport.update()
+        QMessageBox.information(self, "Shaders", "Shader cache cleared. Viewport will recompile on next draw.")
+
     def _on_play_standalone(self):
         """Export current scene and launch standalone runtime as a separate process."""
         try:

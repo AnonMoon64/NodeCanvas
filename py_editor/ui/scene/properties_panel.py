@@ -906,7 +906,7 @@ class ObjectPropertiesPanel(QWidget):
         self.ocean_group.setVisible(primary.obj_type in ('ocean', 'ocean_world'))
         self.cam_group.setVisible(primary.obj_type == 'camera')
         self.mesh_group.setVisible(primary.obj_type == 'mesh')
-        self.voxel_group.setVisible(primary.obj_type == 'voxel_world')
+        self.voxel_group.setVisible(primary.obj_type in ('voxel_world', 'voxel_water'))
         self.controller_group.setVisible(primary.obj_type in ('cube', 'sphere', 'mesh', 'voxel_world'))
         self.weather_group.setVisible(primary.obj_type == 'weather')
         self.spawner_group.setVisible(primary.obj_type == 'spawner')
@@ -1030,7 +1030,20 @@ class ObjectPropertiesPanel(QWidget):
             self.ocean_foam_streak_speed.setValue(getattr(obj, 'ocean_foam_streak_speed', 1.5))
             # Surface detail
             self.ocean_detail_strength.setValue(getattr(obj, 'ocean_detail_strength', 0.4))
-        elif obj.obj_type == 'voxel_world':
+        elif obj.obj_type in ('voxel_world', 'voxel_water'):
+            is_water = (obj.obj_type == 'voxel_water')
+            
+            # Hide/Show water-only vs world-only rows
+            self.vox_water_level_row.setVisible(is_water)
+            self.vox_water_speed_row.setVisible(is_water)
+            self.vox_water_surge_row.setVisible(is_water)
+            self.vox_world_height_row.setVisible(not is_water)
+            
+            if is_water:
+                self.vox_water_level.setValue(getattr(obj, 'voxel_water_level', 0.0))
+                self.vox_water_speed.setValue(getattr(obj, 'voxel_water_speed', 1.0))
+                self.vox_water_surge.setValue(getattr(obj, 'voxel_water_surge', 0.5))
+
             # Radius: choose closest preset and apply
             radius_val = float(getattr(obj, 'voxel_radius', 0.5))
             try:
@@ -1058,14 +1071,25 @@ class ObjectPropertiesPanel(QWidget):
             self.vox_seed.setValue(getattr(obj, 'voxel_seed', 123))
             self.vox_world_height.setValue(float(getattr(obj, 'voxel_world_height', 1.0)))
             self.vox_spawn_dist.setValue(float(getattr(obj, 'voxel_spawn_max_distance', 120.0)))
-            idx = self.vox_type.findText(getattr(obj, 'voxel_type', 'Round'))
+            v_type_str = getattr(obj, 'voxel_type', 'Round')
+            
+            # Use obj_type to determine flat/round for dedicated primitives
+            obj_type_low = str(getattr(obj, 'obj_type', '')).lower()
+            is_flat = "flat" in obj_type_low or "flat" in v_type_str.lower()
+            
+            # Hide redundant Mode and Radius rows
+            self.vox_type_row.setVisible(False)
+            self.vox_radius_row.setVisible(not is_flat)
+            self.vox_world_height_row.setVisible(is_flat)
+            
+            idx = self.vox_type.findText("Flat" if is_flat else "Round")
             if idx != -1: self.vox_type.setCurrentIndex(idx)
+            
             # Infinite-flat checkbox (sync state + hide for Round mode)
             self.vox_infinite_flat.blockSignals(True)
             self.vox_infinite_flat.setChecked(bool(getattr(obj, 'voxel_infinite_flat', True)))
             self.vox_infinite_flat.blockSignals(False)
-            self.vox_infinite_flat.setVisible(
-                str(getattr(obj, 'voxel_type', 'Round')).lower() == 'flat')
+            self.vox_infinite_flat.setVisible(is_flat)
             rs_idx = self.vox_render_style.findText(getattr(obj, 'voxel_render_style', 'Smooth'))
             if rs_idx != -1: self.vox_render_style.setCurrentIndex(rs_idx)
             # Prefetch and max chunk resolution (per-object overrides)
@@ -1076,20 +1100,42 @@ class ObjectPropertiesPanel(QWidget):
             self.vox_max_chunk_res.blockSignals(True)
             self.vox_max_chunk_res.setValue(int(getattr(obj, 'voxel_max_single_chunk_res', 128)))
             self.vox_max_chunk_res.blockSignals(False)
-            self.vox_spawn_dist.setValue(float(getattr(obj, 'voxel_spawn_max_distance', 120.0)))
-            # Layers — features (3D volumetric) shown first with a prefix so
-            # they can be identified and removed from the same list.
+            # Hide terrain layers/biomes for water objects
+            is_water = obj.obj_type == 'voxel_water'
+            self.vox_layers_lbl.setVisible(not is_water)
+            self.vox_layers_list.setVisible(not is_water)
+            self.vox_biomes_lbl.setVisible(not is_water)
+            self.vox_biomes_list.setVisible(not is_water)
+            self.vox_spawn_dist.setVisible(not is_water)
+            self._row_map[self.vox_spawn_dist].setVisible(not is_water)
+            
+            # Water Color Rows
+            self.vox_water_deep_row.setVisible(is_water)
+            self.vox_water_shallow_row.setVisible(is_water)
+            if is_water:
+                self.vox_water_deep_col.blockSignals(True)
+                self.vox_water_deep_col.set_color(obj.material.get('base_color', [1,1,1,1]))
+                self.vox_water_deep_col.blockSignals(False)
+                self.vox_water_shallow_col.blockSignals(True)
+                self.vox_water_shallow_col.set_color(obj.material.get('shallow_color', [1,1,1,1]))
+                self.vox_water_shallow_col.blockSignals(False)
+            
+            # Layers — features (3D volumetric)
             self.vox_layers_list.clear()
-            for f in getattr(obj, 'voxel_features', []):
-                self.vox_layers_list.addItem(f"[Feature] {f}")
-            for l in getattr(obj, 'voxel_layers', []):
-                self.vox_layers_list.addItem(l.get('name', 'Layer'))
+            if not is_water:
+                for f in getattr(obj, 'voxel_features', []):
+                    self.vox_layers_list.addItem(f"[Feature] {f}")
+                for l in getattr(obj, 'voxel_layers', []):
+                    self.vox_layers_list.addItem(l.get('name', 'Layer'))
             self.v_layer_panel.setVisible(False)
+            
             # Biomes
             self.vox_biomes_list.clear()
-            for b in getattr(obj, 'voxel_biomes', []):
-                self.vox_biomes_list.addItem(b.get('name', 'Biome'))
+            if not is_water:
+                for b in getattr(obj, 'voxel_biomes', []):
+                    self.vox_biomes_list.addItem(b.get('name', 'Biome'))
             self.v_biome_panel.setVisible(False)
+            self.v_caves_panel.setVisible(False)
         elif obj.obj_type == 'camera':
             self.cam_speed.setValue(getattr(obj, 'camera_speed', 10.0))
             self.cam_sens.setValue(getattr(obj, 'camera_sensitivity', 0.15))
@@ -1703,7 +1749,7 @@ class ObjectPropertiesPanel(QWidget):
         self.vox_type.addItems(["Round", "Flat"])
         self.vox_type.setStyleSheet(COMBO_SS)
         self.vox_type.currentTextChanged.connect(self._on_vox_type_changed)
-        self._add_property_row(vg, "Mode", self.vox_type)
+        self.vox_type_row = self._add_property_row(vg, "Mode", self.vox_type)
 
         # Infinite flat terrain — streams chunks around the camera for flat mode.
         # Hidden for Round mode (always bounded by radius).
@@ -1747,7 +1793,7 @@ class ObjectPropertiesPanel(QWidget):
         self.vox_radius.setToolTip("Select a world size preset. Large sizes may be heavy — they use chunked LOD generation.")
         self.vox_radius.currentIndexChanged.connect(self._on_vox_radius_changed)
         self._last_vox_radius_index = 1  # Default = Small Planet
-        self._add_property_row(vg, "Radius", self.vox_radius)
+        self.vox_radius_row = self._add_property_row(vg, "Radius", self.vox_radius)
 
         # Detail Level (preset dropdown) — maps to voxel block size internally.
         # block_size is the physical world-unit length of one voxel face.
@@ -1795,7 +1841,7 @@ class ObjectPropertiesPanel(QWidget):
         self.vox_world_height = PropertySlider(1.0, 0.1, 20.0)
         self.vox_world_height.valueChanged.connect(
             lambda v: self.update_obj_prop('voxel_world_height', float(v)))
-        self._add_property_row(vg, "World Height", self.vox_world_height)
+        self.vox_world_height_row = self._add_property_row(vg, "World Height", self.vox_world_height)
 
         # Prefetch neighborhood for chunked LOD (per-object override)
         self.vox_prefetch = QSpinBox()
@@ -1821,11 +1867,35 @@ class ObjectPropertiesPanel(QWidget):
         self.vox_max_chunk_res.valueChanged.connect(lambda v: self.update_obj_prop('voxel_max_single_chunk_res', int(v)))
         self._add_property_row(vg, "MaxChunkRes", self.vox_max_chunk_res)
 
+        # --- Voxel Water Specifics ---
+        self.vox_water_level = PropertySlider(0.0, -100.0, 100.0)
+        self.vox_water_level.valueChanged.connect(lambda v: self.update_obj_prop('voxel_water_level', float(v)))
+        self.vox_water_level_row = self._add_property_row(vg, "Water Level", self.vox_water_level)
+
+        self.vox_water_speed = PropertySlider(1.0, 0.1, 10.0)
+        self.vox_water_speed.valueChanged.connect(lambda v: self.update_obj_prop('voxel_water_speed', float(v)))
+        self.vox_water_speed_row = self._add_property_row(vg, "Flow Speed", self.vox_water_speed)
+
+        self.vox_water_surge = PropertySlider(0.5, 0.0, 5.0)
+        self.vox_water_surge.valueChanged.connect(lambda v: self.update_obj_prop('voxel_water_surge', float(v)))
+        self.vox_water_surge_row = self._add_property_row(vg, "Surge/Climb", self.vox_water_surge)
+        
+        # Color Controls
+        self.vox_water_deep_col = ColorPickerButton([0.05, 0.45, 0.85, 0.8])
+        self.vox_water_deep_col.colorChanged.connect(
+            lambda c: self._update_vox_water_mat('base_color', list(c)))
+        self.vox_water_deep_row = self._add_property_row(vg, "Water Color", self.vox_water_deep_col)
+        
+        self.vox_water_shallow_col = ColorPickerButton([0.1, 0.8, 0.9, 1.0])
+        self.vox_water_shallow_col.colorChanged.connect(
+            lambda c: self._update_vox_water_mat('shallow_color', list(c)))
+        self.vox_water_shallow_row = self._add_property_row(vg, "Shallow Tint", self.vox_water_shallow_col)
+
         # ---- FEATURE LAYERS (context-menu driven) ----
         vg.addSpacing(8)
-        lbl = QLabel("FEATURE LAYERS  (right-click to add / presets)")
-        lbl.setStyleSheet("color: #4fc3f7; font-size: 10px; font-weight: bold;")
-        vg.addWidget(lbl)
+        self.vox_layers_lbl = QLabel("FEATURE LAYERS  (right-click to add / presets)")
+        self.vox_layers_lbl.setStyleSheet("color: #4fc3f7; font-size: 10px; font-weight: bold;")
+        vg.addWidget(self.vox_layers_lbl)
 
         self.vox_layers_list = QListWidget()
         self.vox_layers_list.setStyleSheet(
@@ -1924,9 +1994,9 @@ class ObjectPropertiesPanel(QWidget):
 
         # ---- BIOMES (context-menu driven) ----
         vg.addSpacing(8)
-        bio_lbl = QLabel("BIOMES  (right-click to add / presets)")
-        bio_lbl.setStyleSheet("color: #4fc3f7; font-size: 10px; font-weight: bold;")
-        vg.addWidget(bio_lbl)
+        self.vox_biomes_lbl = QLabel("BIOMES  (right-click to add / presets)")
+        self.vox_biomes_lbl.setStyleSheet("color: #4fc3f7; font-size: 10px; font-weight: bold;")
+        vg.addWidget(self.vox_biomes_lbl)
 
         self.vox_biomes_list = QListWidget()
         self.vox_biomes_list.setStyleSheet(
@@ -2043,6 +2113,12 @@ class ObjectPropertiesPanel(QWidget):
         self.vbs_density.valueChanged.connect(
             lambda v: self._update_selected_vb_spawn('density', float(v)))
         self._add_property_row(spg, "Density", self.vbs_density)
+
+        self.vbs_max_dist = PropertySlider(120.0, 10.0, 2000.0)
+        self.vbs_max_dist.setToolTip("Max camera distance (meters) at which this spawner is drawn.")
+        self.vbs_max_dist.valueChanged.connect(
+            lambda v: self._update_selected_vb_spawn('max_distance', float(v)))
+        self._add_property_row(spg, "Max Distance", self.vbs_max_dist)
 
         self.vbs_slope_min = PropertySlider(0.7, 0.0, 1.0)
         self.vbs_slope_min.valueChanged.connect(
@@ -2344,6 +2420,15 @@ class ObjectPropertiesPanel(QWidget):
         if self._updating or not self._current_objects: return
         row = self.vox_biomes_list.currentRow()
         if row < 0: return
+
+    def _update_vox_water_mat(self, key, val):
+        """Update specialized water material properties."""
+        if self._updating or not self._current_objects: return
+        for obj in self._current_objects:
+            if not hasattr(obj, 'material'): continue
+            obj.material[key] = val
+        # Trigger redraw (not full regen, since it's just colors)
+        self.scene_view.update()
         for obj in self._current_objects:
             biomes = getattr(obj, 'voxel_biomes', [])
             if row >= len(biomes): continue
@@ -2418,6 +2503,7 @@ class ObjectPropertiesPanel(QWidget):
         if ki >= 0: self.vbs_kind.setCurrentIndex(ki)
         self.vbs_prefab.setText(s.get('prefab_path', ''))
         self.vbs_density.setValue(float(s.get('density', 0.05)))
+        self.vbs_max_dist.setValue(float(s.get('max_distance', 120.0)))
         self.vbs_slope_min.setValue(float(s.get('slope_min', 0.7)))
         self.vbs_slope_max.setValue(float(s.get('slope_max', 1.0)))
         self.vbs_h_min.setValue(float(s.get('height_min', -1000.0)))

@@ -37,22 +37,24 @@ Instead of relying solely on heavy C++ engines, NodeCanvas investigates how far 
 - **Unified Physics**: Per-chunk triangle collision for voxel terrain ensures dynamic objects interact physically with the world surface.
 - **Compute Shader Boids**: An experimental test-bed exploring GPU-driven schooling mechanics and indirect instancing.
 - **Basic Atmosphere & Weather**: Experimental day-night cycles, simple scattering models, and procedural rain/snow streaming.
+- **NEW: Procedural Biome Spawner**: Shader-driven foliage placement (Grass, Rocks, etc.) with dynamic UI property detection.
+- **Enhanced: Voxel Water Shader**: Real-time shader-driven waves and rain-impact ripples with vertex displacement.
+
 - **Modular Asset Pipeline**:
   - Material `.material` system with PBR support and automated creation from textures.
   - Drag-and-drop `.prefab` support with automated creation from `.mesh`.
   - Interactive `.shader` file mapping.
   - Native binary `.mesh` conversion with manual rotation bake and normal recalculation pipeline.
   - Spawner system `.spawner` with GPU-driven boids.
-  - **NEW: Procedural Biome Spawner**: Shader-driven foliage placement (Grass, Rocks, etc.) with dynamic UI property detection.
   - Controller system `.controller` with AI wandering or direct player control.
 
 Todo:
 
 - Change ocean chunk generation to use a large plane that follows the player.
+- [x] Add voxel water (Shader waves, rain ripples, and surging).
 - Improve the spawner system to support more than 1000 boids.
-- Add more node types.
-- **Completed**: Voxel World Biome Spawning & Dynamic Shader UI.
-- **Completed**: Hierarchy Outliner Synchronization.
+- **Work in Progress**: Voxel World Biome Spawning & Dynamic Shader UI.
+- **Work in Progress**: Hierarchy Outliner Synchronization.
 
 ---
 
@@ -84,7 +86,7 @@ python py_editor/main.py
 ### First Steps in the Sandbox
 
 1. Open the **Outliner**.
-2. Right-click and add a **Landscape** (depracted) or **Voxel World Flat** or **Voxel World Sphere** object.
+2. Right-click and add a **Landscape** (deprecated) or **Voxel World Flat**, **Voxel World Sphere**, **Voxel Water Flat**, or **Voxel Water Round** object.
 3. In the **Properties Panel**, set the environment parameters (radius, biome colors, noise scales).
 4. Drop a **Weather** primitive into the scene and open the **Logic Canvas** to wire up procedural weather triggers.
 

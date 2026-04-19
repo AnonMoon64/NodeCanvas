@@ -200,6 +200,7 @@ class SceneViewport(QOpenGLWidget):
         # Voxel generation / streaming tuning
         self.voxel_max_single_chunk_res = 256
         self.voxel_prefetch_neighborhood = 3 # Increased default to avoid "cut off" look in large worlds
+        self._last_shader_reset_time = 0.0
         # Pending CPU-generated chunk meshes (chunk_key -> (verts, idx, norms))
         self._pending_voxel_chunks = {}
         # Track generation in progress to avoid duplicate threads
@@ -232,23 +233,11 @@ class SceneViewport(QOpenGLWidget):
         nodes = data.get("nodes", data.get("objects", []))
         
         for nd in nodes:
-            obj = SceneObject(
-                name=nd.get("name", "Object"),
-                obj_type=nd.get("type", nd.get("obj_type", "cube")),
-                position=nd.get("position", [0, 0, 0]),
-                rotation=nd.get("rotation", [0, 0, 0]),
-                scale=nd.get("scale", [1, 1, 1])
-            )
-            obj.active = nd.get("active", True)
-            obj.visible = nd.get("visible", True)
-            obj.logic_path = nd.get("logic_path", "")
-            
-            # Restore specialized props
-            for k, v in nd.items():
-                if k not in ("name", "type", "obj_type", "position", "rotation", "scale", "active", "visible", "logic_path"):
-                    setattr(obj, k, v)
-            
-            self.scene_objects.append(obj)
+            try:
+                obj = SceneObject.from_dict(nd)
+                self.scene_objects.append(obj)
+            except Exception as e:
+                print(f"[SCENE_VIEW] Failed to load object {nd.get('name', '???')}: {e}")
         
         print(f"[VIEWPORT] Loaded {len(self.scene_objects)} objects into standalone")
         self.update()
@@ -1039,11 +1028,43 @@ class SceneViewport(QOpenGLWidget):
                             try: glVertexAttrib4f(3, 0.0, 0.0, 0.0, 0.0)
                             except Exception: pass
                             active_shader.set_uniform_f("time", self._elapsed_time)
+                            active_shader.set_uniform_f("u_time", self._elapsed_time)
+                            
+                            # Camera position for Fresnel
+                            cp = np.array(self._cam3d.pos, dtype=np.float32)
+                            active_shader.set_uniform_v3("cam_pos", *cp)
                             active_shader.set_uniform_v3("sunDir", *sun_direction)
-                            active_shader.set_uniform_v3("sunColor", *sun_color)
-                            active_shader.set_uniform_v3("ambientColor", *amb_color)
-                            col = list(obj.color); col[3] = getattr(obj, 'alpha', 1.0)
+                            active_shader.set_uniform_v3("sunColor", *sun_color[:3])
+                            active_shader.set_uniform_v3("ambientColor", *amb_color[:3])
+                            # Use material base color if available, fallback to obj.color
+                            mat = getattr(obj, 'material', {})
+                            col = list(mat.get('base_color', obj.color))
+                            col[3] = getattr(obj, 'alpha', mat.get('opacity', 1.0))
                             active_shader.set_uniform_v4("base_color", *col)
+                            
+                            if "voxel_water" in s_name.lower():
+                                s_col = mat.get('shallow_color', [0.1, 0.8, 0.9, 1.0])
+                                active_shader.set_uniform_v4("shallow_color", *s_col)
+                                active_shader.set_uniform_v3("cam_pos", *self._cam3d.pos)
+                                active_shader.set_uniform_v3("u_objPos", *obj.position)
+                                
+                                # Planet mode detection
+                                is_round = "round" in str(getattr(obj, 'obj_type', '')).lower()
+                                active_shader.set_uniform_i("u_planetMode", 1 if is_round else 0)
+                                if is_round:
+                                    atmo = next((o for o in self.scene_objects if o.obj_type == 'atmosphere' and o.active), None)
+                                    p_center = getattr(atmo, 'planet_center', [0.0, 0.0, 0.0])
+                                    p_radius = getattr(atmo, 'planet_radius', 100.0)
+                                    active_shader.set_uniform_v3("u_planetCenter", *p_center)
+                                    active_shader.set_uniform_f("u_planetRadius", float(p_radius))
+                                
+                                # Pass rain intensity for ripples
+                                ri = 0.0
+                                weather = next((o for o in self.scene_objects if o.obj_type == 'weather' and o.active), None)
+                                if weather:
+                                    ri = float(getattr(weather, '_current_intensity', 0.0))
+                                active_shader.set_uniform_f("u_rain_intensity", ri)
+                                active_shader.set_uniform_f("u_rain_time", self._elapsed_time)
                             
                             if "pbr_material" in s_name.lower() or s_name == "PBR Material":
                                 active_shader.set_uniform_v4("u_base_color", *col)
@@ -1064,7 +1085,7 @@ class SceneViewport(QOpenGLWidget):
                             elif obj.obj_type == 'sphere': _draw_wireframe_sphere()
                             elif obj.obj_type == 'mesh' and obj.mesh_path:
                                 self._draw_custom_mesh(obj, shader_active=True)
-                            elif obj.obj_type == 'voxel_world':
+                            elif obj.obj_type in ('voxel_world', 'voxel_water'):
                                 self._draw_voxel_world(obj, shader_active=True, 
                                                        sun_dir=sun_direction, 
                                                        sun_color=sun_color, 
@@ -1075,7 +1096,7 @@ class SceneViewport(QOpenGLWidget):
                             elif obj.obj_type == 'sphere': _draw_wireframe_sphere()
                             elif obj.obj_type == 'mesh' and obj.mesh_path:
                                 self._draw_custom_mesh(obj, shader_active=False)
-                            elif obj.obj_type == 'voxel_world':
+                            elif obj.obj_type in ('voxel_world', 'voxel_water'):
                                 self._draw_voxel_world(obj, shader_active=False,
                                                        sun_dir=sun_direction, 
                                                        sun_color=sun_color, 
@@ -1115,8 +1136,8 @@ class SceneViewport(QOpenGLWidget):
                                 except Exception: pass
                                 active_shader.set_uniform_f("time", self._elapsed_time)
                                 active_shader.set_uniform_v3("sunDir", *sun_direction)
-                                active_shader.set_uniform_v3("sunColor", *sun_color)
-                                active_shader.set_uniform_v3("ambientColor", *amb_color)
+                                active_shader.set_uniform_v3("sunColor", *sun_color[:3])
+                                active_shader.set_uniform_v3("ambientColor", *amb_color[:3])
                                 active_shader.set_uniform_v4("base_color", 1.0, 1.0, 1.0, 1.0)
                                 for b in batches:
                                     b.draw()
@@ -1666,11 +1687,19 @@ class SceneViewport(QOpenGLWidget):
         · Thread throttle (≤6 concurrent) prevents memory blowout on Moon/Planet.
         """
         v_type       = str(getattr(obj, 'voxel_type', 'Round')).strip()
+        # Water uses specialized generators internally
+        if obj.obj_type == 'voxel_water':
+            v_type = "Water" + v_type
+            
         v_radius     = float(getattr(obj, 'voxel_radius', 5.0))
         seed         = int(getattr(obj, 'voxel_seed', 123))
         smooth       = int(getattr(obj, 'voxel_smooth_iterations', 2))
         block_size   = float(getattr(obj, 'voxel_block_size', 1.0))
         render_style = str(getattr(obj, 'voxel_render_style', 'Smooth'))
+        
+        # Force water to always be smooth (removes grid lines)
+        if obj.obj_type == 'voxel_water':
+            render_style = "Smooth"
         layers       = getattr(obj, 'voxel_layers', [])
         features     = getattr(obj, 'voxel_features', [])
         obj_pos      = np.array(obj.position, dtype=np.float32)
@@ -1684,13 +1713,18 @@ class SceneViewport(QOpenGLWidget):
 
         res_limit = int(getattr(obj, 'voxel_max_single_chunk_res',
                                 getattr(self, 'voxel_max_single_chunk_res', 128)))
+        
+        v_type_lower = v_type.lower()
+        is_round = "round" in v_type_lower
+        is_flat  = "flat" in v_type_lower
 
         # Camera position needed early for infinite-flat streaming bounds.
         cam_pos = np.array(self._cam3d.pos, dtype=np.float32)
 
         # World bounds
         dist_to_center = np.linalg.norm(obj_pos - cam_pos)
-        if v_type.lower() == "round":
+        is_round = "round" in v_type.lower()
+        if is_round:
             # 1. ALWAYS draw a smooth proxy base if outside or near the surface.
             # This prevents the planet from "vanishing" or showing shards at distance.
             if dist_to_center > v_radius * 0.9:
@@ -1805,9 +1839,7 @@ class SceneViewport(QOpenGLWidget):
         cmin_all = np.stack([IX, IY, IZ], axis=1).astype(np.float32) * chunk_vox_size
         cmax_all = cmin_all + chunk_vox_size
 
-        # Sphere-AABB overlap: closest point on each chunk box to the planet centre.
-        # This is correct for any planet-to-chunk size ratio (small planet, large chunk).
-        if v_type.lower() == "round":
+        if is_round:
             closest_planet = np.clip(obj_pos, cmin_all, cmax_all)           # (N,3)
             dist_planet    = np.linalg.norm(closest_planet - obj_pos, axis=1)  # (N,)
             in_planet      = dist_planet <= extent
@@ -1832,7 +1864,7 @@ class SceneViewport(QOpenGLWidget):
         # 1. Sphere overlap (in_planet)
         # 2. Surface-shell optimization (for massive worlds): only keep chunks
         #    near the surface to avoid processing millions of core chunks.
-        if v_type.lower() == "round" and v_radius > 5000:
+        if is_round and v_radius > 5000:
             # Shell = surface ± 2.5 chunks thick (wider buffer for steep mountains/valleys)
             shell_mask = (dist_planet > (v_radius - chunk_vox_size * 2.5)) & \
                          (dist_planet < (v_radius + chunk_vox_size * 2.5))
@@ -1840,7 +1872,7 @@ class SceneViewport(QOpenGLWidget):
 
         # LOD tiers. Flat mode forces single LOD 0.
         lod_arr = np.full(len(IX), -1, np.int8)
-        if v_type.lower() == "round":
+        if is_round:
             # Scale thresholds for massive planets (radius up to 150,000+)
             radius_scale = max(1.0, (v_radius / 1000.0) ** 0.5)
             # Expanded thresholds for smoother transitions at extreme scales
@@ -1892,7 +1924,23 @@ class SceneViewport(QOpenGLWidget):
             'cavern_radius': float(getattr(obj, 'voxel_cave_cavern_radius', 0.05)),
             'waterline':     float(getattr(obj, 'voxel_cave_waterline', 0.0)),
             'max_depth':     float(getattr(obj, 'voxel_cave_max_depth', 512.0)),
+            # Water simulation params
+            'water_level':  float(getattr(obj, 'voxel_water_level', 0.0)),
+            'water_speed':  float(getattr(obj, 'voxel_water_speed', 1.0)),
+            'water_surge':  float(getattr(obj, 'voxel_water_surge', 0.5)),
+            'u_time':       float(self._elapsed_time),
         }
+
+        # Find all excavators in the scene to pass to the density generator
+        excavators = []
+        for s_obj in getattr(self, 'scene_objects', []):
+            if s_obj.obj_type == 'voxel_excavator' and s_obj.active:
+                excavators.append({
+                    'pos': s_obj.position,
+                    'radius': getattr(s_obj, 'voxel_excavator_radius', 5.0),
+                    'softness': getattr(s_obj, 'voxel_excavator_softness', 0.1)
+                })
+        gen_params['excavators'] = excavators
 
         # ── Schedule generation & collect active chunk keys ──
         chunk_keys = []
@@ -1956,7 +2004,7 @@ class SceneViewport(QOpenGLWidget):
                                     # → globally-aligned density grid → seamless edges
                                     total_samples = per_res + 2 * margin + 1
 
-                                    grid = VoxelEngine.generate_density_grid(
+                                    grid, grid_colors = VoxelEngine.generate_density_grid(
                                         resolution=total_samples, seed=seed, mode=v_type,
                                         radius=v_radius, layers=lsnap, features=fsnap,
                                         center=obj_pos, min_p=p_min, max_p=p_max,
@@ -1964,10 +2012,11 @@ class SceneViewport(QOpenGLWidget):
                                     if smooth > 0:
                                         grid = VoxelEngine.smooth_grid(grid, iterations=smooth)
                                     if render_style in ('Minecraft', 'Blocky'):
-                                        verts_c, idx_c, norms_c = VoxelEngine.blocky_mesh(grid)
+                                        verts_c, idx_c, norms_c, colors_c = VoxelEngine.blocky_mesh(
+                                            grid, color_grid=grid_colors)
                                     else:
-                                        verts_c, idx_c, norms_c = VoxelEngine.surface_nets(
-                                            grid, pad=False)
+                                        verts_c, idx_c, norms_c, colors_c = VoxelEngine.surface_nets(
+                                            grid, pad=False, color_grid=grid_colors)
 
                                     if len(verts_c) > 0 and len(idx_c) > 0:
                                         p_size   = p_max - p_min
@@ -1977,8 +2026,11 @@ class SceneViewport(QOpenGLWidget):
                                         # Implement LOD skirts via overlapping clip boundaries
                                         # Extending the clip bounds by `vs` allows mismatched LOD 
                                         # edges to intersect slightly rather than leaving a gap.
-                                        clip_min = cmin - obj_pos - vs
-                                        clip_max = cmax - obj_pos + vs
+                                        # WATER EXCEPTION: Transparent surfaces cannot overlap without
+                                        # causing Z-fighting and double-blending.
+                                        clip_vs = vs if obj.obj_type != 'voxel_water' else 0.0
+                                        clip_min = cmin - obj_pos - clip_vs
+                                        clip_max = cmax - obj_pos + clip_vs
                                         tri_arr   = idx_c.reshape(-1, 3)
                                         centroids = verts_w[tri_arr].mean(axis=1)
                                         keep      = (np.all(centroids >= clip_min, axis=1) &
@@ -1989,8 +2041,8 @@ class SceneViewport(QOpenGLWidget):
                                             verts_w_c = np.ascontiguousarray(verts_w, dtype=np.float32)
                                             norms_c_c = np.ascontiguousarray(norms_c, dtype=np.float32)
                                             idx_c_out = np.array(idx_out, dtype=np.uint32)
-                                            colors_c  = np.ascontiguousarray(
-                                                _compute_biome_colors(verts_w_c, opy, norms_c_c, bsnap),
+                                            colors_final = np.ascontiguousarray(
+                                                _compute_biome_colors(verts_w_c, opy, norms_c_c, bsnap, engine_colors=colors_c),
                                                 dtype=np.float32)
                                             # Deterministic seed per (object_seed, chunk_key) so
                                             # regenerations reproduce the exact same scatter.
@@ -2003,7 +2055,7 @@ class SceneViewport(QOpenGLWidget):
                                                     verts_w_c,
                                                     idx_c_out,
                                                     norms_c_c,
-                                                    colors_c,
+                                                    colors_final,
                                                     chunk_spawns,
                                                 )
                                                 produced = True
@@ -2057,35 +2109,98 @@ class SceneViewport(QOpenGLWidget):
 
         self.mesh_cache[cache_key] = chunk_keys
 
-        # ── Rendering Cleanup ──
-        try:
-            glEnable(GL_DEPTH_TEST)
-            glEnable(GL_CULL_FACE)
-            glCullFace(GL_BACK)
-        except Exception:
-            pass
+        # ── Shader Synchronization ──
+        # NUCLEAR HARDENING: Force shader_active=True for water, even if hierarchy says False
+        if obj.obj_type == 'voxel_water':
+            shader_active = True
+
+        active_shader = None
+        if shader_active:
+            from py_editor.ui.shader_manager import get_shader
+            s_name = getattr(obj, 'shader_name', 'Standard')
+            if obj.obj_type == 'voxel_water':
+                s_name = "voxel_water"
+            active_shader = get_shader(s_name)
+            
+            # Self-Healing: If we are failing to load the water shader, clear cache and retry
+            if obj.obj_type == 'voxel_water' and (not active_shader or active_shader.program == 0):
+                cur_t = time.time()
+                if cur_t - self._last_shader_reset_time > 5.0:
+                    print(f"[VOXEL] Water shader lost! Attempting emergency reload...")
+                    from py_editor.ui.shader_manager import clear_shader_cache
+                    clear_shader_cache()
+                    active_shader = get_shader("voxel_water")
+                    self._last_shader_reset_time = cur_t
+            
+            if active_shader:
+                active_shader.use()
+                
+                # Default Lighting Trio
+                active_shader.set_uniform_v3("sunDir",        *(sun_dir or (0.5, 0.7, 0.2)))
+                active_shader.set_uniform_v3("sunColor",      *(sun_color[:3] if sun_color else (1, 1, 1)))
+                active_shader.set_uniform_v3("ambientColor",  *(amb_color[:3] if amb_color else (0.1, 0.1, 0.1)))
+                
+                # Camera and Time
+                cp = np.array(self._cam3d.pos, dtype=np.float32)
+                active_shader.set_uniform_v3("cam_pos",       *cp)
+                active_shader.set_uniform_f("u_time",         self._elapsed_time)
+                active_shader.set_uniform_f("time",           self._elapsed_time)
+                
+                # Voxel Water Specifics
+                if obj.obj_type == 'voxel_water':
+                    active_shader.set_uniform_f("u_water_speed", float(getattr(obj, 'voxel_water_speed', 1.0)))
+                    active_shader.set_uniform_f("u_water_surge", float(getattr(obj, 'voxel_water_surge', 0.5)))
+                    active_shader.set_uniform_v3("u_objPos",     *obj.position)
+                    
+                    is_round = (getattr(obj, 'voxel_type', 'Round') == 'Round')
+                    active_shader.set_uniform_i("u_planetMode",  1 if is_round else 0)
+                    active_shader.set_uniform_v3("u_planetCenter", *getattr(obj, 'voxel_center', [0,0,0]))
+                    active_shader.set_uniform_f("u_planetRadius", float(getattr(obj, 'voxel_radius', 100.0)))
+
+                    mat = getattr(obj, 'material', {})
+                    active_shader.set_uniform_v4("base_color",    *mat.get('base_color', [0.05, 0.45, 0.85, 0.8]))
+                    active_shader.set_uniform_v4("shallow_color", *mat.get('shallow_color', [0.1, 0.8, 0.9, 1.0]))
+                    
+                    weather = next((obj for obj in self.scene_objects if obj.obj_type == 'weather'), None)
+                    if weather:
+                        ri = float(getattr(weather, '_current_intensity', 0.0))
+                        active_shader.set_uniform_f("u_rain_intensity", ri)
+                        active_shader.set_uniform_f("u_rain_time",      self._elapsed_time)
 
         # ── Render all chunks with a ready VAO ──
         glDisable(GL_CULL_FACE)
-        for ck in chunk_keys:
+        
+        # Add a tiny Y-bias for water to prevent Z-fighting artifacts
+        if obj.obj_type == 'voxel_water':
+            glPushMatrix()
+            # Hardened Y-bias (0.08) to decisively solve Z-fighting with terrain
+            glTranslatef(0.0, 0.08, 0.0)
+            # Reversing chunk keys for Far-to-Near rendering (required for Alpha Blending)
+            chunk_keys_to_draw = list(reversed(chunk_keys))
+        else:
+            chunk_keys_to_draw = chunk_keys
+
+        for ck in chunk_keys_to_draw:
             d = self.mesh_cache.get(ck)
             if not isinstance(d, dict) or 'vao' not in d:
                 continue  # skips in-progress (None) and known-empty ({}) chunks
             glBindVertexArray(d['vao'])
             glDrawElements(GL_TRIANGLES, d['count'], GL_UNSIGNED_INT, None)
+
+        if obj.obj_type == 'voxel_water':
+            glPopMatrix() # Balance the Y-bias Push
             if render_style in ('Minecraft', 'Blocky'):
                 try:
                     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
                     glLineWidth(1.0)
                     glDrawElements(GL_TRIANGLES, d['count'], GL_UNSIGNED_INT, None)
-                except Exception:
-                    pass
+                except Exception: pass
                 finally:
-                    try:
-                        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
-                    except Exception:
-                        pass
-            glBindVertexArray(0)
+                    try: glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+                    except Exception: pass
+        
+        # ── Correct Global Cleanup ──
+        glBindVertexArray(0)
         glEnable(GL_CULL_FACE)
 
         # ── Biome spawner draws ──
@@ -2123,13 +2238,23 @@ class SceneViewport(QOpenGLWidget):
                 sps = d.get('spawns') or []
                 if not sps: continue
 
-                # Chunk-level distance cull
+                # Chunk-level distance cull — skip if no spawner in this chunk
+                # could possibly be visible at the camera's current distance.
                 first = sps[0]['pos']
                 dx = (first[0] + obj_p[0]) - cam_p[0]
                 dy = (first[1] + obj_p[1]) - cam_p[1]
-                       # Render instance batches (Prefabs/Meshes)
+                dz = (first[2] + obj_p[2]) - cam_p[2]
+                chunk_dist2 = dx*dx + dy*dy + dz*dz
+                if chunk_dist2 > spawn_max_d2:
+                    continue
+
+                # Render instance batches (Prefabs/Meshes)
                 batches, leftovers = self._chunk_spawn_batches.get_batches(ck, sps)
                 for b in batches:
+                    # Per-batch distance cull using the spawner's own max_distance
+                    b_max_d = getattr(b, 'max_distance', spawn_max_d)
+                    if chunk_dist2 > b_max_d * b_max_d:
+                        continue
                     sn = b.shader_name or 'Standard'
                     mat_path = getattr(b, 'material_path', '')
                     
@@ -2140,8 +2265,8 @@ class SceneViewport(QOpenGLWidget):
                         s.use()
                         # Pass common Lighting/Environment uniforms
                         s.set_uniform_v3("sunDir",        *(sun_dir or (0.5, 0.7, 0.2)))
-                        s.set_uniform_v3("sunColor",      *(sun_color or (1, 1, 1)))
-                        s.set_uniform_v3("ambientColor",  *(amb_color or (0.1, 0.1, 0.1)))
+                        s.set_uniform_v3("sunColor",      *(sun_color[:3] if sun_color else (1, 1, 1)))
+                        s.set_uniform_v3("ambientColor",  *(amb_color[:3] if amb_color else (0.1, 0.1, 0.1)))
                         s.set_uniform_v3("cam_pos",       *cam_p)
                         
                         t_val = getattr(self, '_elapsed_time', 0.0)
@@ -2189,8 +2314,7 @@ class SceneViewport(QOpenGLWidget):
                         # Reset to default if no material
                         if sn == 'Standard':
                             s.set_uniform_v4("base_color", 1.0, 1.0, 1.0, 1.0)
-                        elif sn == 'grass.shader':
-                            # Restore shader default green
+                        elif sn.endswith('grass.shader'):
                             s.set_uniform_v4("base_color", 0.15, 0.45, 0.1, 1.0)
 
                     # Spawner-specific param overrides
@@ -2206,24 +2330,63 @@ class SceneViewport(QOpenGLWidget):
                 # Fallback primitives use the global spawn shader
                 global_sn = getattr(obj, 'shader_name', 'Standard')
                 for sp in leftovers:
+                    sp_max_d = float(sp.get('max_distance', spawn_max_d))
+                    if chunk_dist2 > sp_max_d * sp_max_d:
+                        continue
                     # Sync shader for fallback primitives
                     sn = sp.get('shader_name', global_sn)
                     mat_path = sp.get('material_path', '')
                     if sn != last_sn:
-                        s = get_shader(sn)
-                        if s:
-                            s.use()
-                            s.set_uniform_v3("sunDir",        *(sun_dir or (0.5, 0.7, 0.2)))
-                            s.set_uniform_v3("sunColor",      *(sun_color or (1, 1, 1)))
-                            s.set_uniform_v3("ambientColor",  *(amb_color or (0.1, 0.1, 0.1)))
-                            s.set_uniform_v3("cam_pos",       *cam_p)
-                            t_val = getattr(self, '_elapsed_time', 0.0)
-                            s.set_uniform_f("time", t_val); s.set_uniform_f("u_time", t_val)
+                        s_name = getattr(obj, 'shader_name', 'Standard')
+                        active_shader = get_shader(s_name)
+                        
+                        # Self-Healing: If water is falling back to Standard, try a cache clear
+                        if obj.obj_type == 'voxel_water' and (not active_shader or active_shader.program == 0):
+                            from py_editor.ui.shader_manager import clear_shader_cache
+                            clear_shader_cache()
+                            active_shader = get_shader("voxel_water")
+
+                        if active_shader:
+                            active_shader.use()
+                            
+                            # Environment uniforms
+                            active_shader.set_uniform_v3("sunDir",        *(sun_dir or (0.5, 0.7, 0.2)))
+                            active_shader.set_uniform_v3("sunColor",      *(sun_color[:3] if sun_color else (1, 1, 1)))
+                            active_shader.set_uniform_v3("ambientColor",  *(amb_color[:3] if amb_color else (0.1, 0.1, 0.1)))
+                            active_shader.set_uniform_v3("cam_pos",       *cam_p)
+                            active_shader.set_uniform_f("time",           self._elapsed_time)
+                            active_shader.set_uniform_f("u_time",         self._elapsed_time)
+                            
+                            if obj.obj_type == 'voxel_water':
+                                active_shader.set_uniform_f("u_water_speed", float(getattr(obj, 'voxel_water_speed', 1.0)))
+                                active_shader.set_uniform_f("u_water_surge", float(getattr(obj, 'voxel_water_surge', 0.5)))
+                                active_shader.set_uniform_v3("u_objPos",     *obj.position)
+                                
+                                # Planet info
+                                is_round = (getattr(obj, 'voxel_type', 'Round') == 'Round')
+                                active_shader.set_uniform_i("u_planetMode",  1 if is_round else 0)
+                                active_shader.set_uniform_v3("u_planetCenter", *getattr(obj, 'voxel_center', [0,0,0]))
+                                active_shader.set_uniform_f("u_planetRadius", float(getattr(obj, 'voxel_radius', 100.0)))
+
+                                # Material colors
+                                mat = getattr(obj, 'material', {})
+                                bc = mat.get('base_color', [0.05, 0.45, 0.85, 0.8])
+                                sc = mat.get('shallow_color', [0.1, 0.8, 0.9, 1.0])
+                                active_shader.set_uniform_v4("base_color",    *bc)
+                                active_shader.set_uniform_v4("shallow_color", *sc)
+                                
+                                # Weather
+                                weather = next((obj for obj in self.scene_objects if obj.obj_type == 'weather'), None)
+                                if weather:
+                                    ri = float(getattr(weather, '_current_intensity', 0.0))
+                                    active_shader.set_uniform_f("u_rain_intensity", ri)
+                                    active_shader.set_uniform_f("u_rain_time",      self._elapsed_time)
                             
                             if mat_path:
                                 try:
                                     import json
-                                    with open(mat_path, 'r') as f: m_data = json.load(f)
+                                    from py_editor.core import paths as _ap
+                                    with open(_ap.resolve(mat_path), 'r') as f: m_data = json.load(f)
                                     tex = m_data.get('albedo') or m_data.get('texture_path')
                                     if tex:
                                         from py_editor.ui.shader_manager import get_texture
@@ -2293,8 +2456,11 @@ class SceneViewport(QOpenGLWidget):
         nvbo = glGenBuffers(1)
         glBindBuffer(GL_ARRAY_BUFFER, nvbo)
         glBufferData(GL_ARRAY_BUFFER, norms.nbytes, norms, GL_STATIC_DRAW)
+        # Using both legacy glNormalPointer and modern index 2 for compatibility
         glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 12, None)
         glEnableVertexAttribArray(2)
+        glNormalPointer(GL_FLOAT, 0, None)
+        glEnableClientState(GL_NORMAL_ARRAY)
 
         cvbo = None
         if colors is not None and len(colors) == len(verts):
@@ -2432,7 +2598,7 @@ def _compute_biome_spawns(verts_w, idx, norms, obj_pos, biomes, seed_hash):
     return spawns_out
 
 
-def _compute_biome_colors(verts_w, obj_pos_y, normals, biomes):
+def _compute_biome_colors(verts_w, obj_pos_y, normals, biomes, engine_colors=None):
     """Per-vertex RGBA from biome rules. Alpha=1 where a biome matched, else 0.
 
     verts_w: (N,3) float32 — positions relative to obj_pos
@@ -2443,6 +2609,11 @@ def _compute_biome_colors(verts_w, obj_pos_y, normals, biomes):
     """
     N = len(verts_w)
     out = np.zeros((N, 4), dtype=np.float32)
+    # If we have colors from the engine (e.g. depth-dirt or excavation walls),
+    # use them as the base color (alpha=1.0 so they render, but biomes can still override).
+    if engine_colors is not None and len(engine_colors) == N:
+        out[:, :3] = engine_colors
+        out[:, 3] = 1.0
     if not biomes or N == 0:
         return out
     world_y = verts_w[:, 1] + float(obj_pos_y)

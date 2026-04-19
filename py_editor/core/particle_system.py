@@ -75,6 +75,8 @@ class ParticleSpec:
     # Flags
     receive_weather: bool = False     # auto-tracks camera for global weather
     kill_height: float = -10000.0     # GPU culling height (e.g. ocean floor)
+    kill_center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    kill_radius: float = -1.0         # Spherical culling (e.g. planet surface)
     gravity_scale: float = 1.0        # convenience multiplier
 
 
@@ -360,6 +362,8 @@ class ParticleManager:
             data = em.pool.alive_render_data()
             if data is not None and len(data):
                 self._renderer._current_kill_height = em.spec.kill_height
+                self._renderer._current_kill_center = em.spec.kill_center
+                self._renderer._current_kill_radius = em.spec.kill_radius
                 self._renderer.draw(data, camera_pos, em.spec.blend_mode, em.spec.render_mode,
                                     em.spec.stretch_length)
 
@@ -686,10 +690,16 @@ out vec4 frag;
 
 uniform int render_mode;
 uniform float u_kill_height;
+uniform vec3  u_kill_center;
+uniform float u_kill_radius;
 
 void main() {
     float kill_h = u_kill_height;
     if (v_world_pos.y < kill_h) discard;
+    
+    if (u_kill_radius > 0.0) {
+        if (length(v_world_pos - u_kill_center) < u_kill_radius) discard;
+    }
     vec2 d = v_uv - vec2(0.5);
     float dist = length(d);
     
@@ -798,6 +808,10 @@ class _SpriteRenderer:
         self.shader.set_uniform_v3("cam_up",    *cam_up)
         self.shader.set_uniform_i("render_mode", 1 if render_mode == "stretch" else 0)
         self.shader.set_uniform_f("stretch_len", float(stretch_length))
+        
+        self.shader.set_uniform_f("u_kill_height", float(getattr(self, '_current_kill_height', -10000.0)))
+        self.shader.set_uniform_v3("u_kill_center", *getattr(self, '_current_kill_center', (0,0,0)))
+        self.shader.set_uniform_f("u_kill_radius", float(getattr(self, '_current_kill_radius', -1.0)))
         self.shader.set_uniform_f("u_kill_height", float(getattr(self, '_current_kill_height', -10000.0)))
 
         glBindVertexArray(self.vao)
