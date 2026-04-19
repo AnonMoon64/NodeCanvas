@@ -1,0 +1,474 @@
+{
+    "type": "prefab",
+    "root": {
+        "id": "3925218d",
+        "name": "CommonTree_1",
+        "obj_type": "mesh",
+        "position": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "rotation": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "scale": [
+            1.0,
+            1.0,
+            1.0
+        ],
+        "selected": false,
+        "color": [
+            0.7,
+            0.7,
+            0.7,
+            1.0
+        ],
+        "file_path": null,
+        "mesh_path": "models/FBX/CommonTree_1.mesh",
+        "texture_path": "models/Textures/Bark_NormalTree.png",
+        "pbr_maps": {
+            "base_color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ],
+            "roughness": 0.5,
+            "metallic": 0.0,
+            "albedo": "models/Textures/Bark_NormalTree.png"
+        },
+        "pbr_tiling": [
+            1.0,
+            1.0
+        ],
+        "pbr_displacement_scale": 0.05,
+        "parent_id": null,
+        "_parent": null,
+        "children_ids": [],
+        "ocean_opacity": 0.6,
+        "material": {
+            "base_color": [
+                0.8,
+                0.8,
+                0.8,
+                1.0
+            ],
+            "roughness": 0.7,
+            "metallic": 0.0,
+            "emissive_color": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "preset": "Plastic"
+        },
+        "active": true,
+        "visible": true,
+        "intensity": 1.0,
+        "is_procedural": false,
+        "range": 10.0,
+        "fov": 60.0,
+        "camera_speed": 10.0,
+        "camera_sensitivity": 0.15,
+        "controller_type": "None",
+        "alpha": 1.0,
+        "sun_color": [
+            1.0,
+            1.0,
+            0.9,
+            1.0
+        ],
+        "moon_color": [
+            0.6,
+            0.7,
+            1.0,
+            1.0
+        ],
+        "ambient_color": [
+            0.1,
+            0.1,
+            0.2,
+            1.0
+        ],
+        "moon_intensity": 1.0,
+        "light_update_mode": "Auto",
+        "time_of_day": 0.25,
+        "sky_density": 1.0,
+        "cloud_density": 0.5,
+        "time_speed": 0.0,
+        "date_day_index": 0,
+        "planet_mode": false,
+        "planet_radius": 6371.0,
+        "atmosphere_thickness": 1200.0,
+        "planet_center": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "ground_albedo": [
+            0.25,
+            0.3,
+            0.2
+        ],
+        "rayleigh_strength": 1.0,
+        "mie_strength": 1.0,
+        "god_rays_strength": 0.6,
+        "exposure": 1.0,
+        "cloud_coverage": 0.5,
+        "cloud_absorption": 0.8,
+        "cloud_anvil": 0.3,
+        "cloud_wind": [
+            6.0,
+            0.0,
+            2.0
+        ],
+        "cloud_steps": 48,
+        "cloud_layer_bottom": 900.0,
+        "cloud_layer_top": 2200.0,
+        "weather_mode": "flat",
+        "weather_type_override": "Auto",
+        "weather_intensity_override": 0.8,
+        "weather_seed": 1234,
+        "weather_cell_size": 800.0,
+        "weather_wind": [
+            8.0,
+            0.0,
+            0.0
+        ],
+        "weather_time_rate": 0.005,
+        "_current_weather": "Clear",
+        "_current_intensity": 0.0,
+        "sun_size": 1.0,
+        "sun_intensity": 10.0,
+        "star_density": 1.0,
+        "star_brightness": 1.0,
+        "nebula_intensity": 0.5,
+        "landscape_type": "procedural",
+        "landscape_size_mode": "finite",
+        "landscape_chunk_size": 128,
+        "landscape_grid_radius": 1,
+        "landscape_resolution": 32,
+        "landscape_render_bias": -0.02,
+        "landscape_seed": 123,
+        "landscape_height_scale": 150.0,
+        "landscape_ocean_level": 0.08,
+        "landscape_ocean_flattening": 0.4,
+        "landscape_tip_smoothing": 0.1,
+        "landscape_noise_layers": [
+            {
+                "type": "perlin",
+                "mode": "fbm",
+                "amp": 1.0,
+                "freq": 0.007,
+                "octaves": 4,
+                "persistence": 0.45,
+                "lacunarity": 2.0,
+                "weight": 1.2,
+                "exponent": 1.0
+            },
+            {
+                "type": "perlin",
+                "mode": "ridged",
+                "amp": 0.65,
+                "freq": 0.012,
+                "octaves": 3,
+                "persistence": 0.5,
+                "lacunarity": 2.1,
+                "weight": 0.4,
+                "exponent": 2.5
+            },
+            {
+                "type": "perlin",
+                "mode": "fbm",
+                "amp": 0.15,
+                "freq": 0.04,
+                "octaves": 3,
+                "persistence": 0.5,
+                "lacunarity": 2.0,
+                "weight": 0.15,
+                "exponent": 1.0
+            }
+        ],
+        "landscape_biomes": [
+            {
+                "name": "Deep Ocean",
+                "height_range": [
+                    -1000.0,
+                    -5.0
+                ],
+                "slope_range": [
+                    0.0,
+                    1.0
+                ],
+                "surface": {
+                    "color": [
+                        0.05,
+                        0.1,
+                        0.3,
+                        1.0
+                    ],
+                    "roughness": 0.1,
+                    "metallic": 0.2
+                }
+            },
+            {
+                "name": "Shallow Water",
+                "height_range": [
+                    -5.0,
+                    0.0
+                ],
+                "slope_range": [
+                    0.0,
+                    1.0
+                ],
+                "surface": {
+                    "color": [
+                        0.1,
+                        0.4,
+                        0.6,
+                        1.0
+                    ],
+                    "roughness": 0.2,
+                    "metallic": 0.1
+                }
+            },
+            {
+                "name": "Beach",
+                "height_range": [
+                    0.0,
+                    2.0
+                ],
+                "slope_range": [
+                    0.0,
+                    0.2
+                ],
+                "surface": {
+                    "color": [
+                        0.85,
+                        0.8,
+                        0.65,
+                        1.0
+                    ],
+                    "roughness": 0.9,
+                    "metallic": 0.0
+                }
+            },
+            {
+                "name": "Grassland",
+                "height_range": [
+                    2.0,
+                    15.0
+                ],
+                "slope_range": [
+                    0.0,
+                    0.15
+                ],
+                "surface": {
+                    "color": [
+                        0.25,
+                        0.4,
+                        0.1,
+                        1.0
+                    ],
+                    "roughness": 0.8,
+                    "metallic": 0.0
+                }
+            },
+            {
+                "name": "Forest",
+                "height_range": [
+                    15.0,
+                    35.0
+                ],
+                "slope_range": [
+                    0.15,
+                    0.4
+                ],
+                "surface": {
+                    "color": [
+                        0.1,
+                        0.25,
+                        0.05,
+                        1.0
+                    ],
+                    "roughness": 0.9,
+                    "metallic": 0.0
+                }
+            },
+            {
+                "name": "Mountain",
+                "height_range": [
+                    35.0,
+                    1000.0
+                ],
+                "slope_range": [
+                    0.4,
+                    1.0
+                ],
+                "surface": {
+                    "color": [
+                        0.4,
+                        0.4,
+                        0.45,
+                        1.0
+                    ],
+                    "roughness": 0.7,
+                    "metallic": 0.0
+                }
+            },
+            {
+                "name": "Snow Cap",
+                "height_range": [
+                    45.0,
+                    1000.0
+                ],
+                "slope_range": [
+                    0.0,
+                    1.0
+                ],
+                "surface": {
+                    "color": [
+                        0.95,
+                        0.95,
+                        1.0,
+                        1.0
+                    ],
+                    "roughness": 0.3,
+                    "metallic": 0.0
+                }
+            }
+        ],
+        "landscape_spawn_enabled": false,
+        "landscape_spawn_rows": 1,
+        "landscape_spawn_cols": 1,
+        "landscape_spawn_spacing": [
+            10.0,
+            10.0
+        ],
+        "visualize_climate": false,
+        "landscape_features": [],
+        "ocean_wave_speed": 3.5,
+        "ocean_wave_scale": 1.0,
+        "ocean_wave_steepness": 0.3,
+        "ocean_foam_amount": 0.1,
+        "ocean_fft_resolution": 256,
+        "ocean_wave_choppiness": 1.5,
+        "ocean_wave_intensity": 1.0,
+        "ocean_use_fft": true,
+        "ocean_fresnel_strength": 0.3,
+        "ocean_specular_intensity": 1.0,
+        "ocean_reflection_tint": [
+            0.5,
+            0.7,
+            1.0,
+            1.0
+        ],
+        "logic_list": [],
+        "voxel_type": "Round",
+        "voxel_radius": 60000.0,
+        "voxel_block_size": 1.0,
+        "voxel_seed": 123,
+        "voxel_lod_enabled": true,
+        "voxel_lod_layers": 6,
+        "voxel_octree_depth": 8,
+        "voxel_smooth_iterations": 2,
+        "voxel_render_style": "Smooth",
+        "voxel_infinite_flat": true,
+        "voxel_layers": [],
+        "voxel_biomes": [],
+        "voxel_features": [],
+        "voxel_world_height": 1.0,
+        "voxel_cave_tunnel_scale": 28.0,
+        "voxel_cave_tunnel_radius": 0.1,
+        "voxel_cave_cavern_scale": 60.0,
+        "voxel_cave_cavern_radius": 0.05,
+        "voxel_cave_waterline": 0.0,
+        "voxel_cave_max_depth": 512.0,
+        "ocean_world_radius": 0.48,
+        "ocean_world_wave_speed": 3.0,
+        "ocean_world_wave_intensity": 0.015,
+        "ocean_world_color": [
+            0.05,
+            0.25,
+            0.6,
+            0.85
+        ],
+        "shader_name": "PBR Material",
+        "shader_params": {
+            "speed": 6.0,
+            "freq": 3.0,
+            "intensity": 1.0,
+            "yaw_amp": 0.4,
+            "side_amp": 0.2,
+            "roll_amp": 0.1,
+            "flag_amp": 0.2,
+            "wave_speed": 3.0,
+            "wave_amplitude": 0.1,
+            "forward_axis": 0.0,
+            "invert_axis": 0.0,
+            "base_color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+            ]
+        },
+        "velocity": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "acceleration": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "physics_enabled": false,
+        "mass": 1.0,
+        "collision_properties": [
+            {
+                "tag": "default",
+                "shape": "sphere",
+                "radius": 0.5,
+                "offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "enabled": true
+            }
+        ],
+        "spawner_prefabs": [],
+        "spawner_count": 5,
+        "spawner_radius": 10.0,
+        "spawner_min_offset": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "spawner_max_offset": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "spawner_min_tint": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+        ],
+        "spawner_max_tint": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+        ],
+        "spawner_find_ground": false,
+        "spawner_controller_type": "None",
+        "material_path": "C:/Users/AnonM/Desktop/NodeCanvas/models/Textures/Bark_NormalTree.material"
+    }
+}

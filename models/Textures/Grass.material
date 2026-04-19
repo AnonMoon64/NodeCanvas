@@ -1,0 +1,21 @@
+{
+    "base_color": [
+        0.8,
+        0.8,
+        0.8,
+        1.0
+    ],
+    "roughness": 0.7,
+    "metallic": 0.0,
+    "emissive_color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+    ],
+    "preset": "Plastic",
+    "voxel_smooth_iterations": 2,
+    "voxel_seed": 123,
+    "voxel_type": "Flat",
+    "albedo": "models/Textures/Grass.png"
+}

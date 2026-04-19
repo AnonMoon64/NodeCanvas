@@ -37,6 +37,8 @@ class GPUBoidManager:
         return cls._instance
 
     def __init__(self, max_boids=30000):
+        if hasattr(self, '_initialized') and self._initialized:
+            return
         self.max_boids = max_boids
         self.num_boids = 0
         
@@ -175,6 +177,7 @@ class GPUBoidManager:
         glBufferSubData(GL_SHADER_STORAGE_BUFFER, idx * BOID_STRUCT_SIZE, BOID_STRUCT_SIZE, bdata)
         
         self.sync_indirect_buffer()
+        print(f"[GPU BOID] Added boid at index {idx} (type {boid_type})")
         return idx
 
     def sync_indirect_buffer(self, index_count=0):
@@ -182,7 +185,24 @@ class GPUBoidManager:
         if not self.indirect_buffer: return
         # We need to know the index_count of the mesh being rendered
         # but for now we'll assume the renderer passes it or we cache it.
-        # DrawElementsIndirectCommand: {count, instanceCount, firstIndex, baseVertex, baseInstance}
         data = np.array([index_count, self.num_boids, 0, 0, 0], dtype=np.uint32)
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, self.indirect_buffer)
         glBufferSubData(GL_DRAW_INDIRECT_BUFFER, 0, data.nbytes, data)
+
+    def get_boid_pos_vel(self, idx):
+        """Read back position, velocity, and alignment for a single boid."""
+        if idx < 0 or idx >= self.num_boids: return None
+
+        # Ensure the compute shader's SSBO writes are visible to this readback
+        # (without the barrier + finish, on some drivers the readback races the
+        # dispatch and returns zero-filled memory).
+        glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT)
+
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, self.ssbo_boids)
+        arr = (ctypes.c_float * 8)()
+        glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, idx * BOID_STRUCT_SIZE, BOID_STRUCT_SIZE, ctypes.byref(arr))
+
+        pos = [float(arr[0]), float(arr[1]), float(arr[2])]
+        intensity = float(arr[3])
+        vel = [float(arr[4]), float(arr[5]), float(arr[6])]
+        return pos, vel, intensity

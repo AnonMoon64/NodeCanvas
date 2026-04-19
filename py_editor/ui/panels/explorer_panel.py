@@ -12,12 +12,76 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTreeWidget,
     QTreeWidgetItem, QListWidget, QListWidgetItem, QScrollArea, QMenu, QInputDialog, QMessageBox,
-    QFileDialog, QApplication
+    QFileDialog, QApplication, QDialog, QDoubleSpinBox, QDialogButtonBox, QComboBox, QCheckBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData
 from PyQt6.QtGui import QDrag
 
 from py_editor.core.mesh_converter import MeshConverter
+
+class MeshImportDialog(QDialog):
+    """Small popup to set scale/rotation before mesh conversion."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Import Settings")
+        self.setFixedWidth(280)
+        self.setStyleSheet("background-color: #252526; color: #eee; border: 1px solid #444;")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(10)
+
+        SPIN_SS = "background: #1e1e1e; border: 1px solid #333; color: #4fc3f7; padding: 2px;"
+
+        def add_row(label):
+            row = QHBoxLayout()
+            lbl = QLabel(label); lbl.setFixedWidth(80)
+            row.addWidget(lbl)
+            return row
+
+        # Scale
+        scale_row = add_row("Global Scale:")
+        self.scale_spin = QDoubleSpinBox()
+        self.scale_spin.setRange(0.00001, 10000.0); self.scale_spin.setValue(1.0); self.scale_spin.setDecimals(5)
+        self.scale_spin.setStyleSheet(SPIN_SS)
+        scale_row.addWidget(self.scale_spin)
+        layout.addLayout(scale_row)
+
+        # Up-axis preset — the common "upside-down" source is a Z-up FBX
+        # being dropped into our Y-up scene. Choosing Z-up bakes a -90° X
+        # rotation into the mesh so the model stands upright.
+        ax_row = add_row("Up Axis (source):")
+        self.up_axis = QComboBox()
+        self.up_axis.addItems(["Y-up (default)", "Z-up → rotate -90° X", "-Z-up → rotate +90° X"])
+        self.up_axis.setStyleSheet(SPIN_SS)
+        ax_row.addWidget(self.up_axis)
+        layout.addLayout(ax_row)
+
+        self.flip_chk = QCheckBox("Flip upside-down (extra 180° around X)")
+        layout.addWidget(self.flip_chk)
+
+        layout.addWidget(QLabel("Extra Rotation (Euler XYZ Degrees):"))
+        h = QHBoxLayout()
+        self.rx = QDoubleSpinBox(); self.ry = QDoubleSpinBox(); self.rz = QDoubleSpinBox()
+        for s in [self.rx, self.ry, self.rz]:
+            s.setRange(-360, 360); s.setStyleSheet(SPIN_SS)
+        h.addWidget(self.rx); h.addWidget(self.ry); h.addWidget(self.rz)
+        layout.addLayout(h)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_values(self):
+        # Compose Up-axis preset + flip + manual offsets into a single XYZ tuple.
+        rx, ry, rz = self.rx.value(), self.ry.value(), self.rz.value()
+        idx = self.up_axis.currentIndex()
+        if idx == 1:    # Z-up → rotate -90° around X
+            rx += -90.0
+        elif idx == 2:  # -Z-up → +90°
+            rx += 90.0
+        if self.flip_chk.isChecked():
+            rx += 180.0
+        return self.scale_spin.value(), (rx, ry, rz)
 
 class CollapsibleSection(QWidget):
     """VS Code-style collapsible section with arrow indicator"""
@@ -98,6 +162,8 @@ class FileExplorerWidget(QWidget):
             mime.setText(f"logic:{path_str}")
         elif path.suffix == '.scene':
              mime.setText(f"scene:{path_str}")
+        elif path.suffix == '.spawner':
+             mime.setText(f"spawner:{path_str}")
         else:
              mime.setText(path_str)
              
@@ -138,6 +204,54 @@ class FileExplorerWidget(QWidget):
         except Exception as e:
             item.addChild(QTreeWidgetItem([f"❌ Error: {str(e)}"]))
 
+    def _get_expanded_paths(self):
+        """Recursively gather paths of all expanded items."""
+        expanded = set()
+        def _walk(item):
+            if item.isExpanded():
+                path = item.data(0, Qt.ItemDataRole.UserRole)
+                if path: expanded.add(path)
+                for i in range(item.childCount()):
+                    _walk(item.child(i))
+        
+        for i in range(self.file_tree.topLevelItemCount()):
+            _walk(self.file_tree.topLevelItem(i))
+        return expanded
+
+    def _restore_expanded_state(self, item, expanded_paths):
+        """Recursively re-expand items in the saved set."""
+        if not item: return
+        path = item.data(0, Qt.ItemDataRole.UserRole)
+        if path in expanded_paths:
+            item.setExpanded(True)
+            # Children are populated by the itemExpanded signal
+            for i in range(item.childCount()):
+                self._restore_expanded_state(item.child(i), expanded_paths)
+
+    def _get_expanded_paths(self):
+        """Recursively gather paths of all expanded items."""
+        expanded = set()
+        def _walk(item):
+            if item.isExpanded():
+                path = item.data(0, Qt.ItemDataRole.UserRole)
+                if path: expanded.add(path)
+                for i in range(item.childCount()):
+                    _walk(item.child(i))
+        
+        for i in range(self.file_tree.topLevelItemCount()):
+            _walk(self.file_tree.topLevelItem(i))
+        return expanded
+
+    def _restore_expanded_state(self, item, expanded_paths):
+        """Recursively re-expand items in the saved set."""
+        if not item: return
+        path = item.data(0, Qt.ItemDataRole.UserRole)
+        if path in expanded_paths:
+            item.setExpanded(True)
+            # Children are populated by the itemExpanded signal
+            for i in range(item.childCount()):
+                self._restore_expanded_state(item.child(i), expanded_paths)
+
     def _on_item_double_clicked(self, item):
         path_str = item.data(0, Qt.ItemDataRole.UserRole)
         if not path_str: return
@@ -147,13 +261,15 @@ class FileExplorerWidget(QWidget):
         # Determine type
         if path.suffix == ".prefab":
             self.file_opened.emit(path_str, "prefab")
-        elif path.suffix == ".mat":
+        elif path.suffix == ".material":
             self.file_opened.emit(path_str, "material")
         elif path.suffix == ".logic":
             self.file_opened.emit(path_str, "logic")
         elif path.suffix == ".scene":
             # Open scenes in the Scene editor
             self.file_opened.emit(path_str, "scene")
+        elif path.suffix == ".spawner":
+            self.file_opened.emit(path_str, "spawner")
 
     def _on_context_menu(self, pos):
         item = self.file_tree.itemAt(pos)
@@ -176,6 +292,7 @@ class FileExplorerWidget(QWidget):
         new_logic = None
         new_mat = None
         new_prefab = None
+        new_spawner = None
         refresh_action = None
 
         if not is_root:
@@ -193,16 +310,27 @@ class FileExplorerWidget(QWidget):
             new_logic = menu.addAction("New Logic")
             new_mat = menu.addAction("Create Material")
             new_prefab = menu.addAction("Create Prefab")
+            new_spawner = menu.addAction("Create Spawner")
             menu.addSeparator()
 
         if is_dir:
             if is_root or not any([open_action, rename_action]):
                  # if nothing else was added, add at least refresh
                  pass
-            refresh_action = menu.addAction("Refresh")
+        refresh_action = menu.addAction("Refresh")
 
-        if not is_dir and selected_path.suffix.lower() in ('.obj', '.fbx'):
-            convert_mesh = menu.addAction("Create .mesh")
+        # Context-aware creations
+        create_prefab_from_mesh = None
+        create_material_from_texture = None
+        
+        if not is_dir:
+            ext = selected_path.suffix.lower()
+            if ext in ('.obj', '.fbx'):
+                convert_mesh = menu.addAction("Create .mesh")
+            elif ext == '.mesh':
+                create_prefab_from_mesh = menu.addAction("Create Prefab from Mesh")
+            elif ext in ('.png', '.jpg', '.jpeg', '.tga', '.dds'):
+                create_material_from_texture = menu.addAction("Create Material from Texture")
 
         action = menu.exec(self.file_tree.mapToGlobal(pos))
         if not action: return
@@ -242,12 +370,14 @@ class FileExplorerWidget(QWidget):
             if action == open_action:
                 if selected_path.suffix == ".prefab":
                     self.file_opened.emit(str(selected_path), "prefab")
-                elif selected_path.suffix == ".mat":
+                elif selected_path.suffix == ".material":
                     self.file_opened.emit(str(selected_path), "material")
                 elif selected_path.suffix == ".logic":
                     self.file_opened.emit(str(selected_path), "logic")
                 elif selected_path.suffix == ".scene":
                     self.file_opened.emit(str(selected_path), "scene")
+                elif selected_path.suffix == ".spawner":
+                    self.file_opened.emit(str(selected_path), "spawner")
                 else:
                     try:
                         if os.name == 'nt':
@@ -280,6 +410,14 @@ class FileExplorerWidget(QWidget):
             if action == convert_mesh:
                 self._handle_mesh_conversion(selected_path)
                 return
+            
+            if action == create_prefab_from_mesh:
+                self._handle_create_prefab_from_mesh(selected_path)
+                return
+                
+            if action == create_material_from_texture:
+                self._handle_create_material_from_texture(selected_path)
+                return
 
         # Directory-only actions
         else:
@@ -309,7 +447,7 @@ class FileExplorerWidget(QWidget):
             if action == new_mat:
                 name, ok = QInputDialog.getText(self, "Create Material", "Name:")
                 if not ok or not name: return
-                file_path = dir_path / f"{name}.mat"
+                file_path = dir_path / (f"{name}.material" if not name.endswith(".material") else name)
                 content = {"base_color": [1.0, 1.0, 1.0, 1.0], "roughness": 0.5, "metallic": 0.0}
                 try:
                     with open(file_path, 'w') as f:
@@ -340,7 +478,33 @@ class FileExplorerWidget(QWidget):
                     QMessageBox.critical(self, "Error", f"Failed to create prefab: {e}")
                 return
 
+            if action == new_spawner:
+                name, ok = QInputDialog.getText(self, "Create Spawner", "Name:")
+                if not ok or not name: return
+                file_path = dir_path / f"{name}.spawner"
+                content = {
+                    "type": "spawner",
+                    "prefabs": [],
+                    "settings": {
+                        "count": 5,
+                        "radius": 10.0,
+                        "min_offset": [0.0, 0.0, 0.0],
+                        "max_offset": [0.0, 0.0, 0.0],
+                        "min_tint": [1.0, 1.0, 1.0, 1.0],
+                        "max_tint": [1.0, 1.0, 1.0, 1.0],
+                        "find_ground": False
+                    }
+                }
+                try:
+                    with open(file_path, 'w') as f:
+                        json.dump(content, f, indent=4)
+                    self.refresh()
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to create spawner: {e}")
+                return
+
             if action == refresh_action:
+
                 self.refresh()
                 return
 
@@ -349,19 +513,79 @@ class FileExplorerWidget(QWidget):
         if not dest_path: return
         
         try:
+            diag = MeshImportDialog(self)
+            if not diag.exec():
+                return
+            
+            scale, rot = diag.get_values()
+            
             if src_path.suffix.lower() == '.obj':
-                MeshConverter.obj_to_mesh(str(src_path), dest_path)
+                MeshConverter.obj_to_mesh(str(src_path), dest_path, scale=scale, rotation=rot)
                 QMessageBox.information(self, "Success", f"Converted to: {Path(dest_path).name}")
             elif src_path.suffix.lower() == '.fbx':
                 try:
-                    MeshConverter.fbx_to_mesh(str(src_path), dest_path)
+                    MeshConverter.fbx_to_mesh(str(src_path), dest_path, scale=scale, rotation=rot)
                     QMessageBox.information(self, "Success", f"Converted FBX to: {Path(dest_path).name}")
                 except Exception as e:
-                    QMessageBox.critical(self, "Error", f"FBX conversion failed: {e}\n\nMake sure Blender is installed and on PATH, or set BLENDER_PATH env var.")
+                    QMessageBox.critical(self, "Error", f"FBX conversion failed: {e}")
             else:
                 QMessageBox.warning(self, "Warning", "Unsupported source format for .mesh conversion.")
             self.refresh()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Conversion failed: {str(e)}")
 
-    def refresh(self): self._populate_tree()
+    def _handle_create_prefab_from_mesh(self, mesh_path):
+        from py_editor.core import paths as asset_paths
+        rel_mesh = asset_paths.to_relative(str(mesh_path))
+        prefab_path = mesh_path.with_suffix(".prefab")
+        
+        # Build minimal prefab
+        content = {
+            "type": "prefab",
+            "root": {
+                "name": mesh_path.stem,
+                "type": "mesh",
+                "mesh_path": rel_mesh,
+                "logic_list": []
+            }
+        }
+        
+        try:
+            with open(prefab_path, 'w') as f:
+                json.dump(content, f, indent=4)
+            self.refresh()
+            QMessageBox.information(self, "Success", f"Created Prefab: {prefab_path.name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to create prefab: {e}")
+
+    def _handle_create_material_from_texture(self, tex_path):
+        from py_editor.core import paths as asset_paths
+        rel_tex = asset_paths.to_relative(str(tex_path))
+        mat_path = tex_path.with_suffix(".material")
+        
+        # Build PBR-ready material
+        content = {
+            "base_color": [1.0, 1.0, 1.0, 1.0],
+            "roughness": 0.5,
+            "metallic": 0.0,
+            "albedo": rel_tex
+        }
+        
+        try:
+            with open(mat_path, 'w') as f:
+                json.dump(content, f, indent=4)
+            self.refresh()
+            QMessageBox.information(self, "Success", f"Created Material: {mat_path.name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to create material: {e}")
+
+    def refresh(self): 
+        expanded = self._get_expanded_paths()
+        self._populate_tree()
+        for i in range(self.file_tree.topLevelItemCount()):
+            self._restore_expanded_state(self.file_tree.topLevelItem(i), expanded)
+
+    def set_root_path(self, path):
+        """Repoint the explorer at a new project root and rebuild the tree."""
+        self.root_path = Path(path)
+        self._populate_tree()

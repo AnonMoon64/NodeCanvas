@@ -178,11 +178,10 @@ class CodeGenDialog(QDialog):
     
     LANGUAGES = ["Python", "C", "C++", "WASM"]
     
-    def __init__(self, parent=None, ir_module=None, canvas=None, ui_data=None, variables=None):
+    def __init__(self, parent=None, ir_module=None, canvas=None, variables=None):
         super().__init__(parent)
         self.ir_module = ir_module
         self.canvas = canvas
-        self.ui_data = ui_data or {}
         self.variables = variables or {}
         self.generated_code = ""
         self.temp_script_path = None
@@ -226,11 +225,6 @@ class CodeGenDialog(QDialog):
         self.include_audio_cb.stateChanged.connect(self.generate_code)
         options_layout.addWidget(self.include_audio_cb)
         
-        self.include_ui_cb = QCheckBox("Include UI")
-        self.include_ui_cb.setChecked(bool(self.ui_data.get('widgets')))
-        self.include_ui_cb.stateChanged.connect(self.generate_code)
-        options_layout.addWidget(self.include_ui_cb)
-        
         self.standalone_cb = QCheckBox("Standalone")
         self.standalone_cb.setChecked(True)
         self.standalone_cb.stateChanged.connect(self.generate_code)
@@ -260,25 +254,8 @@ class CodeGenDialog(QDialog):
             }
         """)
         code_group_layout.addWidget(self.code_preview)
-        splitter.addWidget(code_group)
+        layout.addWidget(code_group)
         
-        # UI code preview (if UI exists)
-        if self.ui_data:
-            ui_group = QGroupBox("UI Code (PyQt6)")
-            ui_group_layout = QVBoxLayout(ui_group)
-            self.ui_code_preview = QTextEdit()
-            self.ui_code_preview.setFont(QFont("Consolas", 10))
-            self.ui_code_preview.setStyleSheet("""
-                QTextEdit {
-                    background-color: #1e1e1e;
-                    color: #9cdcfe;
-                    border: 1px solid #333;
-                }
-            """)
-            ui_group_layout.addWidget(self.ui_code_preview)
-            splitter.addWidget(ui_group)
-        
-        code_layout.addWidget(splitter)
         
         # Export buttons
         export_layout = QHBoxLayout()
@@ -371,7 +348,6 @@ class CodeGenDialog(QDialog):
             lang = self.lang_combo.currentText()
             func_name = self.func_name_edit.text() or "execute_graph"
             include_audio = self.include_audio_cb.isChecked()
-            include_ui = self.include_ui_cb.isChecked()
             standalone = self.standalone_cb.isChecked()
             
             # Import from clean backends API
@@ -385,8 +361,6 @@ class CodeGenDialog(QDialog):
             config = CodeGenConfig(
                 function_name=func_name,
                 include_audio=include_audio,
-                include_ui=include_ui,
-                ui_data=self.ui_data if include_ui else None,
                 variables=self.variables,
                 standalone=standalone
             )
@@ -406,81 +380,10 @@ class CodeGenDialog(QDialog):
             
             self.code_preview.setText(self.generated_code)
             
-            # Generate UI code if available
-            if hasattr(self, 'ui_code_preview') and include_ui:
-                ui_code = self._generate_ui_code()
-                self.ui_code_preview.setText(ui_code)
-            
         except Exception as e:
             import traceback
             self.code_preview.setText(f"# Error generating code:\n# {str(e)}\n# {traceback.format_exc()}")
     
-    def _generate_ui_code(self) -> str:
-        """Generate PyQt6 UI code from ui_data"""
-        if not self.ui_data:
-            return "# No UI data available"
-        
-        widgets = self.ui_data.get('widgets', [])
-        screens = self.ui_data.get('screens', {})
-        
-        lines = [
-            '"""Generated UI Code - NodeCanvas"""',
-            'from PyQt6.QtWidgets import *',
-            'from PyQt6.QtCore import Qt, pyqtSignal',
-            'from PyQt6.QtGui import QPixmap',
-            '',
-            'class GeneratedUI(QWidget):',
-            '    """Auto-generated UI from NodeCanvas UI Builder"""',
-            '    ',
-            '    button_clicked = pyqtSignal(str)  # Emits button ID',
-            '    slider_changed = pyqtSignal(str, int)  # slider ID, value',
-            '    ',
-            '    def __init__(self, parent=None):',
-            '        super().__init__(parent)',
-            '        self.widgets = {}',
-            '        self.setup_ui()',
-            '    ',
-            '    def setup_ui(self):',
-            '        self.setWindowTitle("NodeCanvas App")',
-            f'        self.resize({self.ui_data.get("form", {}).get("width", 800)}, '
-            f'{self.ui_data.get("form", {}).get("height", 600)})',
-            '        ',
-        ]
-        
-        # Generate widget creation code
-        for widget in widgets:
-            wid = widget.get('id', 0)
-            wtype = widget.get('type', 'Label')
-            props = widget.get('properties', {})
-            pos = widget.get('pos', [0, 0])
-            
-            if wtype == 'Button':
-                lines.append(f'        self.widgets[{wid}] = QPushButton("{props.get("text", "Button")}", self)')
-                lines.append(f'        self.widgets[{wid}].setGeometry({int(pos[0]+400)}, {int(pos[1]+300)}, {props.get("width", 100)}, {props.get("height", 32)})')
-                btn_id = props.get('buttonId', '')
-                lines.append(f'        self.widgets[{wid}].clicked.connect(lambda: self.button_clicked.emit("{btn_id}"))')
-            elif wtype == 'Label':
-                lines.append(f'        self.widgets[{wid}] = QLabel("{props.get("text", "Label")}", self)')
-                lines.append(f'        self.widgets[{wid}].setGeometry({int(pos[0]+400)}, {int(pos[1]+300)}, {props.get("width", 100)}, {props.get("height", 30)})')
-            elif wtype == 'Slider':
-                lines.append(f'        self.widgets[{wid}] = QSlider(Qt.Orientation.Horizontal, self)')
-                lines.append(f'        self.widgets[{wid}].setGeometry({int(pos[0]+400)}, {int(pos[1]+300)}, {props.get("width", 150)}, 30)')
-                lines.append(f'        self.widgets[{wid}].setRange({props.get("min", 0)}, {props.get("max", 100)})')
-                slider_id = props.get('sliderId', '')
-                lines.append(f'        self.widgets[{wid}].valueChanged.connect(lambda v: self.slider_changed.emit("{slider_id}", v))')
-            lines.append('')
-        
-        lines.extend([
-            '',
-            'if __name__ == "__main__":',
-            '    import sys',
-            '    app = QApplication(sys.argv)',
-            '    window = GeneratedUI()',
-            '    window.show()',
-            '    sys.exit(app.exec())',
-        ])
-        
-        return '\n'.join(lines)
     
     def copy_to_clipboard(self):
         """Copy generated code to clipboard"""
@@ -549,7 +452,6 @@ class CodeGenDialog(QDialog):
         
         lang = self.lang_combo.currentText().lower()
         func_name = self.func_name_edit.text() or "execute_graph"
-        include_gui = self.include_ui_cb.isChecked()
         
         self.progress_text.clear()
         self.progress_text.append(f"Building {lang.upper()} app with full build system...")
@@ -577,10 +479,10 @@ class CodeGenDialog(QDialog):
             
             # Create build config
             config = BuildConfig(
-                target=lang if lang != 'c++' else 'cpp',
+                target=lang if lang != 'cpp' else 'cpp',
                 output_dir=output_dir,
                 app_name=func_name + "_app",
-                include_gui=include_gui,
+                include_gui=False,
                 include_assets=True,
                 single_exe=self.onefile_cb.isChecked(),
                 debug=False
@@ -594,7 +496,7 @@ class CodeGenDialog(QDialog):
                     builder = BuildSystem(config)
                     result_path = builder.build(
                         self.ir_module,
-                        ui_data=self.ui_data,
+                        ui_data=None,
                         variables=self.variables,
                         composite_templates=composite_templates,
                         project_root=project_root

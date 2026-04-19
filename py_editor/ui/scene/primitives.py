@@ -17,7 +17,7 @@ class PrimitiveTree(QTreeWidget):
     def _populate(self):
         categories = {
             "Shapes": ["Cube", "Sphere", "Cylinder", "Plane"],
-            "Environment": ["Landscape", "Ocean", "Ocean World", "Cloud Layer",
+            "Environment": ["Landscape (Deprecated)", "Ocean", "Ocean World", "Cloud Layer",
                             "Atmosphere", "Weather", "Universe",
                             "Voxel World Flat", "Voxel World Round"],
             "Lights": ["Point Light", "Directional Light"],

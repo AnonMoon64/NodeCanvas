@@ -46,6 +46,44 @@ class SceneOutliner(QWidget):
         
         self._objects = []
         self._updating = False
+        self._syncing_selection = False
+
+    def select_objects(self, objects):
+        """Update visual selection without rebuilding the whole tree."""
+        if self._updating: return
+        self._syncing_selection = True
+        self.tree.blockSignals(True)
+        
+        # Clear selection first
+        self.tree.clearSelection()
+        
+        if not objects:
+            self.tree.blockSignals(False)
+            self._syncing_selection = False
+            return
+
+        selected_ids = {o.id for o in objects if o}
+        
+        # Iterator to find items
+        root = self.tree.invisibleRootItem()
+        stack = [root.child(i) for i in range(root.childCount())]
+        
+        while stack:
+            item = stack.pop()
+            obj = item.data(0, Qt.ItemDataRole.UserRole)
+            if obj and obj.id in selected_ids:
+                item.setSelected(True)
+                # Auto-expand parents
+                p = item.parent()
+                while p:
+                    p.setExpanded(True)
+                    p = p.parent()
+            
+            for i in range(item.childCount()):
+                stack.append(item.child(i))
+                
+        self.tree.blockSignals(False)
+        self._syncing_selection = False
 
     def set_objects(self, objects):
         if self._updating: return
@@ -61,7 +99,10 @@ class SceneOutliner(QWidget):
         
         # 1. Create all items
         for obj in objects:
-            item = QTreeWidgetItem([f"{self._get_icon(obj.obj_type)} {obj.name}"])
+            label = obj.name
+            if obj.obj_type == 'landscape' and "(Deprecated)" not in label:
+                label = f"{label} (Deprecated)"
+            item = QTreeWidgetItem([f"{self._get_icon(obj.obj_type)} {label}"])
             item.setData(0, Qt.ItemDataRole.UserRole, obj)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)
             items[obj.id] = item
@@ -151,11 +192,12 @@ class SceneOutliner(QWidget):
             'atmosphere': '🌌', 'universe': '🌌', 'voxel_world': '🏔️',
             'cloud_layer': '☁', 'clouds': '☁',
             'camera': '🎥', 'light_point': '💡', 'light_directional': '☀',
+            'prefab': '📦',
         }
         return icons.get(otype, '📄')
 
     def _on_selection_changed(self):
-        if self._updating: return
+        if self._updating or self._syncing_selection: return
         items = self.tree.selectedItems()
         if not items:
             self.object_selected.emit(None)

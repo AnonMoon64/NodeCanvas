@@ -1,0 +1,11 @@
+{
+    "name": "GPU Bird",
+    "type": "ai_gpu_bird",
+    "inherits": "base.controller",
+    "description": "GPU-accelerated bird flocking via compute shader boids with higher speed and Y-axis freedom.",
+    "params": {
+        "speed": 8.0,
+        "wander_range": 50.0,
+        "readback_interval": 2
+    }
+}

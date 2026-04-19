@@ -40,6 +40,7 @@ class SceneViewport(QOpenGLWidget):
     object_selected = pyqtSignal(object)
     object_dropped = pyqtSignal(str, float, float, int, int, str) # logic_path as last arg
     object_moved = pyqtSignal()
+    objects_changed = pyqtSignal()
     state_about_to_change = pyqtSignal()
     state_changed = pyqtSignal()
 
@@ -48,7 +49,7 @@ class SceneViewport(QOpenGLWidget):
             fmt = QSurfaceFormat()
             fmt.setDepthBufferSize(24)
             fmt.setSamples(4)
-            fmt.setSwapInterval(1)
+            fmt.setSwapInterval(0) # 0 = VSync Off (uncaps framerate), 1 = VSync On
             QSurfaceFormat.setDefaultFormat(fmt)
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -58,6 +59,8 @@ class SceneViewport(QOpenGLWidget):
         self._mode = "3D"
         self._cam3d = Camera3D()
         self._cam2d = Camera2D()
+        self._follow_enabled = False
+        self._follow_target = None
 
         self._lmb = False
         self._rmb = False
@@ -202,6 +205,10 @@ class SceneViewport(QOpenGLWidget):
         # Track generation in progress to avoid duplicate threads
         self._voxel_generation_in_progress = set()
         self._voxel_gen_lock = threading.Lock()
+        # Static-batch cache for spawner children (one draw call per mesh_path)
+        from py_editor.ui.scene.spawner_batcher import SpawnerBatchCache, ChunkSpawnBatchCache
+        self._spawner_batches = SpawnerBatchCache()
+        self._chunk_spawn_batches = ChunkSpawnBatchCache()
 
     def get_selected_objects(self):
         return [o for o in self.scene_objects if o.selected]
@@ -219,6 +226,8 @@ class SceneViewport(QOpenGLWidget):
 
     def load_scene_data(self, data: dict):
         """Load scene objects from a data dictionary (from export_scene_data)."""
+        from py_editor.core import paths as _ap
+        data = _ap.resolve_on_load(data)
         self.scene_objects.clear()
         nodes = data.get("nodes", data.get("objects", []))
         
@@ -274,7 +283,7 @@ class SceneViewport(QOpenGLWidget):
 
     def _tick(self):
         now = time.perf_counter()
-        dt = now - self._last_time
+        dt = max(now - self._last_time, 0.001) # Avoid zero-delta issues
         self._last_time = now
 
         if self._mode == "3D" and self._rmb:
@@ -304,32 +313,12 @@ class SceneViewport(QOpenGLWidget):
             
         self.update()
         
-        # Update Editor-time Controllers
-        if not self.is_play_mode:
-            self._sync_editor_controllers()
-            dt_sim = min(dt, 0.1)
-            for ctrl in self._editor_controllers.values():
-                try:
-                    ctrl.update(dt_sim)
-                except Exception: pass
-            # Update controller-derived physics (velocity/acceleration) and resolve collisions
-            for ctrl in self._editor_controllers.values():
-                try:
-                    ctrl.update_physics(dt_sim)
-                except Exception:
-                    pass
-            try:
-                from py_editor.core.physics import resolve_collisions
-                resolve_collisions(self.scene_objects, dt_sim)
-            except Exception:
-                pass
-
-        # GPU Boid simulation tick
-        if hasattr(self, 'boid_mgr'):
-            # Use current universe position as dynamic target if any
-            universe_obj = next((o for o in self.scene_objects if o.obj_type == 'universe'), None)
-            target = universe_obj.position if universe_obj else (0,0,0)
-            self.boid_mgr.update(dt, self._elapsed_time, target)
+        # Accumulate sim dt for paintGL — controller updates, GPU boid sim,
+        # and readbacks all issue GL calls that require the widget's GL context
+        # to be current. QTimer fires outside paintGL so calling them here
+        # silently corrupts the heap on Windows (0xc0000374) and leaves boids
+        # pinned at (0,0,0). paintGL consumes _pending_sim_dt each frame.
+        self._pending_sim_dt = getattr(self, '_pending_sim_dt', 0.0) + min(dt, 0.1)
         
         self.update()
 
@@ -361,8 +350,19 @@ class SceneViewport(QOpenGLWidget):
         if not self._pending_voxel_chunks:
             return
 
-        keys = list(self._pending_voxel_chunks.keys())
+        # Per-frame budget: cap BOTH chunk count and total vertex bytes.
+        # Blocky chunks can be 50-100× the vertex count of smooth ones, so a
+        # fixed 4-chunks-per-frame was still enough to spike to 6 fps. Byte-cap
+        # at ~4MB/frame (≈130k interleaved verts) keeps the GL upload bounded.
+        MAX_CHUNKS = 4
+        MAX_BYTES = 4 * 1024 * 1024
+        uploaded_bytes = 0
+        uploaded_chunks = 0
+        keys_all = list(self._pending_voxel_chunks.keys())
+        keys = keys_all[:MAX_CHUNKS]
         for key in keys:
+            if uploaded_chunks >= MAX_CHUNKS or uploaded_bytes >= MAX_BYTES:
+                break
             data = None
             try:
                 data = self._pending_voxel_chunks.pop(key)
@@ -376,9 +376,22 @@ class SceneViewport(QOpenGLWidget):
                 continue
             if not data:
                 continue
-            verts, idx, norms = data
+            colors = None
+            spawns = []
+            if len(data) == 5:
+                verts, idx, norms, colors, spawns = data
+            elif len(data) == 4:
+                verts, idx, norms, colors = data
+            else:
+                verts, idx, norms = data
             try:
-                new_vao = self._create_voxel_vao(verts, idx, norms)
+                new_vao = self._create_voxel_vao(verts, idx, norms, colors)
+                new_vao['verts_cpu'] = verts
+                new_vao['idx_cpu']   = idx.reshape(-1, 3)
+                if spawns:
+                    new_vao['spawns'] = spawns
+                uploaded_bytes += int(verts.nbytes) + int(idx.nbytes)
+                uploaded_chunks += 1
             except Exception as e:
                 print(f"[VOXEL] Failed to create VAO for {key}: {e}")
                 continue
@@ -398,6 +411,11 @@ class SceneViewport(QOpenGLWidget):
                     glDeleteBuffers(1, [old['ibo']])
                 except Exception:
                     pass
+                if old.get('cvbo') is not None:
+                    try:
+                        glDeleteBuffers(1, [old['cvbo']])
+                    except Exception:
+                        pass
 
             self.mesh_cache[key] = new_vao
 
@@ -442,9 +460,22 @@ class SceneViewport(QOpenGLWidget):
                 for o in self.scene_objects:
                     o.selected = (o == found)
             
+            # Double click to follow
+            if found:
+                now = time.time()
+                if hasattr(self, '_last_click_time') and now - self._last_click_time < 0.3:
+                    if self._follow_target == found:
+                        self._follow_enabled = not self._follow_enabled
+                    else:
+                        self._follow_enabled = True
+                        self._follow_target = found
+                    print(f"[VIEWPORT] Camera Follow: {'ON' if self._follow_enabled else 'OFF'} for {found.name}")
+                self._last_click_time = now
+
             new_sel = [o for o in self.scene_objects if o.selected]
             self.sync_ui_to_selection()
             self.object_selected.emit(new_sel)
+            self.update()
         elif event.button() == Qt.MouseButton.RightButton:
             self._rmb = True
             self._last_mouse = event.position()
@@ -555,12 +586,58 @@ class SceneViewport(QOpenGLWidget):
             self._fps_label.move(w - 360, 10)
 
     def paintGL(self):
+        # Run controller + GPU boid sim here so the widget's GL context is
+        # guaranteed current. See note in _tick on why this can't live there.
+        dt_sim = getattr(self, '_pending_sim_dt', 0.0)
+        self._pending_sim_dt = 0.0
+        if dt_sim > 0.0:
+            try:
+                self._sync_editor_controllers()
+                for ctrl in self._editor_controllers.values():
+                    try: ctrl.update(dt_sim)
+                    except Exception: pass
+                for ctrl in self._editor_controllers.values():
+                    try: ctrl.update_physics(dt_sim)
+                    except Exception: pass
+                try:
+                    from py_editor.core.physics import resolve_collisions, resolve_terrain_collision, integrate_gravity
+                    integrate_gravity(self.scene_objects, dt_sim)
+                    resolve_collisions(self.scene_objects, dt_sim)
+                    # Ground / terrain / mesh-AABB collision
+                    vox_objs  = [o for o in self.scene_objects if o.obj_type == 'voxel_world']
+                    land_objs = [o for o in self.scene_objects if o.obj_type == 'landscape']
+                    resolve_terrain_collision(
+                        self.scene_objects, self.mesh_cache,
+                        voxel_objects=vox_objs,
+                        landscape_objects=land_objs)
+                except Exception: pass
+                if hasattr(self, 'boid_mgr'):
+                    universe_obj = next((o for o in self.scene_objects if o.obj_type == 'universe'), None)
+                    target = universe_obj.position if universe_obj else (0, 0, 0)
+                    self.boid_mgr.update(dt_sim, self._elapsed_time, target)
+            except Exception as e:
+                if getattr(self, '_last_sim_err', None) != str(e):
+                    print(f"[SIM] {e}")
+                    self._last_sim_err = str(e)
+
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         glEnable(GL_CULL_FACE)
         glCullFace(GL_BACK)
+        try: glDisable(GL_FOG)
+        except Exception: pass
+        
+        # Global state reset for stability
+        glUseProgram(0)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        glBindVertexArray(0)
+        for i in range(8):
+            glActiveTexture(GL_TEXTURE0 + i)
+            glBindTexture(GL_TEXTURE_2D, 0)
+        glActiveTexture(GL_TEXTURE0)
+        
         w, h = self.width(), self.height()
         if w < 1 or h < 1: return
 
@@ -571,6 +648,25 @@ class SceneViewport(QOpenGLWidget):
             pass
 
         if self._mode == "3D":
+            # --- Camera Follow Logic ---
+            if self._follow_enabled and self._follow_target:
+                target = self._follow_target
+                pos = target.position
+                
+                # If we don't have an offset yet, calculate it
+                if not hasattr(self, '_follow_offset') or self._last_follow_id != target.id:
+                    self._follow_offset = _sub(self._cam3d.pos, pos)
+                    self._last_follow_id = target.id
+                
+                # Maintain the offset (Smooth follow)
+                new_pos = _add(pos, self._follow_offset)
+                self._cam3d.pos = [new_pos[0], new_pos[1], new_pos[2]]
+                
+                # Optionally keep looking at it
+                self._cam3d.focus_on(pos, getattr(target, 'radius', 1.0))
+                # Recalculate offset after focus_on as it might change the distance
+                self._follow_offset = _sub(self._cam3d.pos, pos)
+            
             self._cam3d.apply_gl(w / h)
             
             # --- Environment Rendering ---
@@ -602,7 +698,6 @@ class SceneViewport(QOpenGLWidget):
                     from py_editor.ui.procedural_system import draw_landscape_3d
                     draw_landscape_3d(obj, self)
             
-            # 4. Ocean (flat) + Ocean World (spherical)
             # 4. Ocean (flat) + Ocean World (spherical)
             weather_obj = next((o for o in self.scene_objects
                                 if o.obj_type == 'weather' and o.active), None)
@@ -654,12 +749,112 @@ class SceneViewport(QOpenGLWidget):
                 _draw_gizmo(selected_obj.position, selected_axis=self._gizmo_axis,
                             mode=self._gizmo_mode, camera=self._cam3d)
             
+            # --- Underwater post-effect ---
+            try:
+                self._draw_underwater_overlay()
+            except Exception as e:
+                if getattr(self, '_last_uw_err', None) != str(e):
+                    print(f"[RENDER] Underwater overlay: {e}")
+                    self._last_uw_err = str(e)
+
             # --- Viewport Overlay ---
             self._draw_viewport_overlay(w, h)
         else:
             self._cam2d.apply_gl(w, h)
             self._draw_grid_2d()
             self._draw_scene_objects_2d()
+
+    def _draw_underwater_overlay(self):
+        """Seamless underwater tint/fog when the camera dips below an ocean.
+
+        Supports both flat ``ocean`` objects (plane at ``landscape_ocean_level``)
+        and ``ocean_world`` planets (sphere of water around a centre). The
+        depth below the surface drives both the tint strength and an
+        exponential-depth fog, so the transition is smooth rather than
+        flipping on at Y=waterline.
+
+        Uses fixed-function pipeline so it works alongside the compat-profile
+        shaders without needing a dedicated post shader.
+        """
+        cam = self._cam3d.pos
+        cam_y = float(cam[1])
+        depth = 0.0
+        tint = None  # RGB tuple when underwater
+
+        for o in self.scene_objects:
+            if not getattr(o, 'active', False): continue
+            if o.obj_type == 'ocean':
+                lvl = float(getattr(o, 'landscape_ocean_level', 0.0)) + float(o.position[1])
+                # Sample the live FFT displacement at camera XZ so the waterline
+                # tracks actual wave crests/troughs instead of a flat Y plane —
+                # otherwise the overlay snaps on/off when waves roll past the
+                # camera instead of blending seamlessly at the surface.
+                wave_h = 0.0
+                gen = getattr(o, '_fft_gen_cascade0', None)
+                if gen is not None:
+                    try:
+                        wave_h = float(gen.get_height_at(cam[0], cam[2]))
+                    except Exception:
+                        wave_h = 0.0
+                surface_y = lvl + wave_h
+                if cam_y < surface_y:
+                    d = surface_y - cam_y
+                    if d > depth:
+                        depth = d
+                        tint = getattr(o, 'ocean_color', [0.05, 0.25, 0.35, 1.0])
+            elif o.obj_type == 'ocean_world':
+                c = np.array(o.position, dtype=np.float32)
+                r = float(getattr(o, 'ocean_radius',
+                                   getattr(o, 'planet_radius', 100.0)))
+                dist = float(np.linalg.norm(np.array(cam, dtype=np.float32) - c))
+                if dist < r:
+                    d = r - dist
+                    if d > depth:
+                        depth = d
+                        tint = getattr(o, 'ocean_color', [0.04, 0.20, 0.30, 1.0])
+
+        if tint is None or depth <= 0.0:
+            try: glDisable(GL_FOG)
+            except Exception: pass
+            return
+
+        # Exponential saturation: shallow water barely tints, deep water fully
+        # swallows the view. Tuned so 1u depth ≈ 12%, 15u ≈ 80%.
+        tint_alpha = 1.0 - np.exp(-depth / 6.0)
+        tint_alpha = float(np.clip(tint_alpha * 0.85, 0.0, 0.92))
+        tr, tg, tb = float(tint[0]), float(tint[1]), float(tint[2])
+
+        # Distance fog — blends scene geometry with the water colour so far
+        # objects fade out behind a wall of murk.
+        try:
+            glFogi(GL_FOG_MODE, GL_EXP2)
+            glFogfv(GL_FOG_COLOR, (tr, tg, tb, 1.0))
+            glFogf(GL_FOG_DENSITY, float(np.clip(0.008 + depth * 0.0015, 0.008, 0.06)))
+            glEnable(GL_FOG)
+        except Exception:
+            pass
+
+        # Fullscreen tint quad drawn in clip space (no matrix setup needed).
+        glUseProgram(0)
+        glDisable(GL_DEPTH_TEST)
+        glDisable(GL_CULL_FACE)
+        glDisable(GL_LIGHTING)
+        glDisable(GL_TEXTURE_2D)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity()
+        glMatrixMode(GL_MODELVIEW);  glPushMatrix(); glLoadIdentity()
+        glColor4f(tr, tg, tb, tint_alpha)
+        glBegin(GL_QUADS)
+        glVertex3f(-1.0, -1.0, 0.0)
+        glVertex3f( 1.0, -1.0, 0.0)
+        glVertex3f( 1.0,  1.0, 0.0)
+        glVertex3f(-1.0,  1.0, 0.0)
+        glEnd()
+        glMatrixMode(GL_PROJECTION); glPopMatrix()
+        glMatrixMode(GL_MODELVIEW);  glPopMatrix()
+        glColor4f(1.0, 1.0, 1.0, 1.0)
+        glEnable(GL_DEPTH_TEST)
 
     def _draw_viewport_overlay(self, w, h):
         # Ensure 2D overlay isn't culled or depth-tested against 3D scene
@@ -682,6 +877,13 @@ class SceneViewport(QOpenGLWidget):
         painter.end()
 
     def _draw_onscreen_logs(self, painter, w, h):
+        # Add a warning if any landscape is in the scene
+        has_landscape = any(o.obj_type == 'landscape' for o in self.scene_objects)
+        if has_landscape:
+            painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            painter.setPen(QColor(255, 80, 80))
+            painter.drawText(20, 30, "⚠️ WARNING: Landscape primitive is DEPRECATED. Use Voxel World instead.")
+
         if not self._screen_logs: return
         
         painter.setFont(QFont("Consolas", 10))
@@ -843,19 +1045,30 @@ class SceneViewport(QOpenGLWidget):
                             col = list(obj.color); col[3] = getattr(obj, 'alpha', 1.0)
                             active_shader.set_uniform_v4("base_color", *col)
                             
-                            if s_name == "PBR Material":
+                            if "pbr_material" in s_name.lower() or s_name == "PBR Material":
                                 active_shader.set_uniform_v4("u_base_color", *col)
                                 active_shader.set_uniform_f("u_metallic", getattr(obj, 'pbr_metallic', 0.0))
                                 active_shader.set_uniform_f("u_roughness", getattr(obj, 'pbr_roughness', 0.5))
                                 active_shader.set_uniform_v2("u_tiling", *(getattr(obj, 'pbr_tiling', [1.0, 1.0])))
                                 active_shader.set_uniform_v3("cam_pos", *self._cam3d.pos)
 
+                            # Upload all custom shader parameters from obj.shader_params
+                            params = getattr(obj, 'shader_params', {})
+                            for k, v in params.items():
+                                if isinstance(v, (int, float)):
+                                    active_shader.set_uniform_f(k, float(v))
+                                elif isinstance(v, (list, tuple)) and len(v) == 4:
+                                    active_shader.set_uniform_v4(k, *v)
+
                             if obj.obj_type in ('cube', 'plane'): _draw_wireframe_cube()
                             elif obj.obj_type == 'sphere': _draw_wireframe_sphere()
                             elif obj.obj_type == 'mesh' and obj.mesh_path:
                                 self._draw_custom_mesh(obj, shader_active=True)
                             elif obj.obj_type == 'voxel_world':
-                                self._draw_voxel_world(obj, shader_active=True)
+                                self._draw_voxel_world(obj, shader_active=True, 
+                                                       sun_dir=sun_direction, 
+                                                       sun_color=sun_color, 
+                                                       amb_color=amb_color)
                             active_shader.stop()
                         else:
                             if obj.obj_type in ('cube', 'plane'): _draw_wireframe_cube()
@@ -863,7 +1076,10 @@ class SceneViewport(QOpenGLWidget):
                             elif obj.obj_type == 'mesh' and obj.mesh_path:
                                 self._draw_custom_mesh(obj, shader_active=False)
                             elif obj.obj_type == 'voxel_world':
-                                self._draw_voxel_world(obj, shader_active=False)
+                                self._draw_voxel_world(obj, shader_active=False,
+                                                       sun_dir=sun_direction, 
+                                                       sun_color=sun_color, 
+                                                       amb_color=amb_color)
 
                     # Highlight
                     if obj.selected and obj.visible:
@@ -888,7 +1104,30 @@ class SceneViewport(QOpenGLWidget):
                 # RENDER CHILDREN
                 children = [o for o in self.scene_objects if getattr(o, 'parent_id', None) == obj.id]
                 if children:
-                    render_hierarchy(children, sun_direction)
+                    if getattr(obj, 'obj_type', None) == 'spawner':
+                        # Static-batch children that share a mesh into one draw call.
+                        batches, unbatched = self._spawner_batches.get_batches(obj, children)
+                        if batches:
+                            active_shader = get_shader(getattr(obj, 'shader_name', 'Standard'))
+                            if active_shader:
+                                active_shader.use()
+                                try: glVertexAttrib4f(3, 0.0, 0.0, 0.0, 0.0)
+                                except Exception: pass
+                                active_shader.set_uniform_f("time", self._elapsed_time)
+                                active_shader.set_uniform_v3("sunDir", *sun_direction)
+                                active_shader.set_uniform_v3("sunColor", *sun_color)
+                                active_shader.set_uniform_v3("ambientColor", *amb_color)
+                                active_shader.set_uniform_v4("base_color", 1.0, 1.0, 1.0, 1.0)
+                                for b in batches:
+                                    b.draw()
+                                active_shader.stop()
+                            else:
+                                for b in batches:
+                                    b.draw()
+                        if unbatched:
+                            render_hierarchy(unbatched, sun_direction)
+                    else:
+                        render_hierarchy(children, sun_direction)
                 
                 glPopMatrix()
 
@@ -1008,7 +1247,7 @@ class SceneViewport(QOpenGLWidget):
 
     def dragEnterEvent(self, event):
         text = event.mimeData().text()
-        if text.startswith("prim:") or text.startswith("logic:") or any(text.lower().endswith(ext) for ext in ('.obj', '.fbx', '.mesh')):
+        if text.startswith("prim:") or text.startswith("logic:") or any(text.lower().endswith(ext) for ext in ('.obj', '.fbx', '.mesh', '.prefab', '.spawner')):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
@@ -1022,18 +1261,34 @@ class SceneViewport(QOpenGLWidget):
         if text.startswith("prim:"):
             prim_type = text[5:]
             self.object_dropped.emit(prim_type, wx, wz, int(mx), int(my), "")
+            self.objects_changed.emit()
             event.acceptProposedAction()
-        elif any(text.lower().endswith(ext) for ext in ('.obj', '.fbx', '.mesh')):
+        elif any(text.lower().endswith(ext) for ext in ('.obj', '.fbx', '.mesh', '.prefab', '.spawner')):
+            # Strip type prefixes (e.g., 'spawner:', 'material:') if present
+            if ":" in text and not (len(text) > 1 and text[1] == ":" and text[2] == "\\"):
+                # If there's a colon but it's not a Windows drive path (e.g. C:\)
+                if text.count(":") > 1: # 'spawner:C:\path' case
+                    text = text.split(":", 1)[1]
+                elif not (text[1] == ":" or text[1] == "/"): # 'material:path' case
+                    text = text.split(":", 1)[1]
+
             path = Path(text)
             if path.suffix.lower() in ('.obj', '.fbx'):
-                # Auto-convert FBX / OBJ → .mesh on drop, sidecar .mat written too
+                # Auto-convert FBX / OBJ → .mesh on drop. Show import dialog so
+                # the user can pick up-axis / scale / rotation before baking.
                 mesh_path = path.with_suffix('.mesh')
                 try:
+                    from py_editor.ui.panels.explorer_panel import MeshImportDialog
+                    scale, rot = 1.0, (0.0, 0.0, 0.0)
+                    dlg = MeshImportDialog(self)
+                    dlg.setWindowTitle(f"Import {path.name}")
+                    if dlg.exec():
+                        scale, rot = dlg.get_values()
                     self.add_screen_log(f"Converting {path.name} → .mesh …", Qt.GlobalColor.yellow)
                     if path.suffix.lower() == '.fbx':
-                        MeshConverter.fbx_to_mesh(str(path), str(mesh_path))
+                        MeshConverter.fbx_to_mesh(str(path), str(mesh_path), scale=scale, rotation=rot)
                     else:
-                        MeshConverter.obj_to_mesh(str(path), str(mesh_path))
+                        MeshConverter.obj_to_mesh(str(path), str(mesh_path), scale=scale, rotation=rot)
                     self.add_screen_log(f"Converted → {mesh_path.name}", Qt.GlobalColor.green)
                     self.object_dropped.emit("mesh", wx, wz, int(mx), int(my), str(mesh_path))
                 except Exception as e:
@@ -1041,6 +1296,11 @@ class SceneViewport(QOpenGLWidget):
                     print(f"[VIEWPORT] Auto-convert failed for {path.name}: {e}")
             elif path.suffix.lower() == '.mesh':
                 self.object_dropped.emit("mesh", wx, wz, int(mx), int(my), str(path))
+            elif path.suffix.lower() == '.prefab':
+                self.object_dropped.emit("prefab", wx, wz, int(mx), int(my), str(path))
+            elif path.suffix.lower() == '.spawner':
+                self.object_dropped.emit("spawner", wx, wz, int(mx), int(my), str(path))
+            self.objects_changed.emit()
             event.acceptProposedAction()
         elif text.startswith("logic:"):
             logic_path = text[6:]
@@ -1054,6 +1314,7 @@ class SceneViewport(QOpenGLWidget):
                 self.object_dropped.emit("logic", wx, wz, int(mx), int(my), logic_path)
                 print(f"[VIEWPORT] Created Logic Actor from {Path(logic_path).name}")
             event.acceptProposedAction()
+            self.objects_changed.emit()
             self.update()
     def add_screen_log(self, text, color=Qt.GlobalColor.cyan):
         """Add a UE5-style on-screen log message."""
@@ -1114,14 +1375,33 @@ class SceneViewport(QOpenGLWidget):
         path = obj.mesh_path
         if not path: return
         
+        # Invalidate cache if the .mesh file on disk has been rewritten
+        # (e.g. user re-ran FBX→.mesh conversion with a new rotation).
+        try:
+            import os as _os
+            mt = _os.path.getmtime(path)
+        except OSError:
+            mt = None
+        cached = self.mesh_cache.get(path)
+        if cached is not None and mt is not None and cached.get('mtime') != mt:
+            try:
+                from OpenGL.GL import glDeleteVertexArrays, glDeleteBuffers
+                if cached.get('vao'): glDeleteVertexArrays(1, [cached['vao']])
+                if cached.get('vbo'): glDeleteBuffers(1, [cached['vbo']])
+                if cached.get('ibo'): glDeleteBuffers(1, [cached['ibo']])
+            except Exception:
+                pass
+            self.mesh_cache.pop(path, None)
+            print(f"[VIEWPORT] Mesh changed on disk, reloading: {Path(path).name}")
+
         if path not in self.mesh_cache:
             self._load_mesh_to_gpu(path)
-        
+
         mesh = self.mesh_cache.get(path)
         if not mesh: return
         
         # Texture handle
-        if obj.shader_name == "PBR Material":
+        if "pbr_material" in (obj.shader_name or "").lower() or obj.shader_name == "PBR Material":
             self._bind_pbr_textures(obj, shader_active)
         else:
             tex_id = 0
@@ -1132,17 +1412,30 @@ class SceneViewport(QOpenGLWidget):
 
             if tex_id:
                 glEnable(GL_TEXTURE_2D)
+                glActiveTexture(GL_TEXTURE0)
                 glBindTexture(GL_TEXTURE_2D, tex_id)
-                if not shader_active: glColor4f(1, 1, 1, 1)
+                if not shader_active: 
+                    glColor4f(1, 1, 1, 1)
+                else:
+                    # Supply uniforms to custom shaders (Standard, Fish, etc)
+                    prog = get_shader(obj.shader_name)
+                    if prog:
+                        prog.set_uniform_i("u_tex0", 0)
+                        prog.set_uniform_f("u_has_tex", 1.0)
             elif not shader_active:
                 glColor4f(*obj.color)
+            else:
+                # If shader is active but no texture, ensure shader knows
+                prog = get_shader(obj.shader_name)
+                if prog:
+                    prog.set_uniform_f("u_has_tex", 0.0)
 
         glBindVertexArray(mesh['vao'])
         glDrawElements(GL_TRIANGLES, mesh['count'], GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
         
         # Cleanup textures
-        if obj.shader_name == "PBR Material":
+        if "pbr_material" in (obj.shader_name or "").lower() or obj.shader_name == "PBR Material":
             for i in range(6):
                 glActiveTexture(GL_TEXTURE0 + i)
                 glBindTexture(GL_TEXTURE_2D, 0)
@@ -1199,8 +1492,24 @@ class SceneViewport(QOpenGLWidget):
             glEnableVertexAttribArray(8)
             
             glBindVertexArray(0)
-            self.mesh_cache[path] = {'vao': vao, 'vbo': vbo, 'ibo': ibo, 'count': len(i_data)}
-            print(f"[VIEWPORT] Loaded mesh: {Path(path).name}")
+
+            # Compute AABB from vertex positions (stride 8, positions at [0:3])
+            import numpy as _np
+            pos = v_data.reshape(-1, 8)[:, :3]   # Nx3 positions
+            aabb_min = pos.min(axis=0).tolist()
+            aabb_max = pos.max(axis=0).tolist()
+
+            import os as _os
+            try:
+                mt = _os.path.getmtime(path)
+            except OSError:
+                mt = None
+            self.mesh_cache[path] = {
+                'vao': vao, 'vbo': vbo, 'ibo': ibo, 'count': len(i_data),
+                'aabb': (aabb_min, aabb_max), 'mtime': mt,
+            }
+            print(f"[VIEWPORT] Loaded mesh: {Path(path).name} "
+                  f"AABB [{[round(v,2) for v in aabb_min]}] – [{[round(v,2) for v in aabb_max]}]")
         except Exception as e:
             print(f"[VIEWPORT ERROR] Failed to load mesh {path}: {e}")
             self.mesh_cache[path] = None
@@ -1263,8 +1572,47 @@ class SceneViewport(QOpenGLWidget):
     def _get_view_matrix(self):
         from OpenGL.GL import glGetFloatv, GL_MODELVIEW_MATRIX
         return glGetFloatv(GL_MODELVIEW_MATRIX)
+    def _maybe_respawn_moved_spawners(self):
+        """Detect spawners that have been dragged and respawn them once the
+        user has stopped moving (position stable for ~0.4s). This keeps the
+        shoal aligned with the spawner without thrashing mid-drag."""
+        import time as _t
+        tracker = getattr(self, '_spawner_pos_track', None)
+        if tracker is None:
+            tracker = {}
+            self._spawner_pos_track = tracker
+
+        now = _t.time()
+        live_ids = set()
+        for obj in self.scene_objects:
+            if getattr(obj, 'obj_type', None) != 'spawner':
+                continue
+            live_ids.add(obj.id)
+            pos = tuple(obj.position)
+            entry = tracker.get(obj.id)
+            if entry is None:
+                tracker[obj.id] = {'pos': pos, 'last_move': 0.0, 'pending': False}
+                continue
+            if pos != entry['pos']:
+                entry['pos'] = pos
+                entry['last_move'] = now
+                entry['pending'] = True
+            elif entry['pending'] and (now - entry['last_move']) > 0.4:
+                entry['pending'] = False
+                try:
+                    from py_editor.ui.scene.object_system import respawn_spawner
+                    respawn_spawner(obj, self.scene_objects)
+                except Exception as e:
+                    print(f"[SPAWNER] Auto-respawn failed: {e}")
+
+        # Drop trackers for spawners that no longer exist.
+        for oid in list(tracker.keys()):
+            if oid not in live_ids:
+                del tracker[oid]
+
     def _sync_editor_controllers(self):
         """Ensure all objects with AI/Player controllers have them active in the editor."""
+        self._maybe_respawn_moved_spawners()
         active_ids = {obj.id for obj in self.scene_objects if getattr(obj, 'controller_type', 'None') != 'None'}
         
         # Cleanup
@@ -1273,23 +1621,31 @@ class SceneViewport(QOpenGLWidget):
                 del self._editor_controllers[oid]
         
         # Create & Update Flock
-        current_ai_controllers = [c for c in self._editor_controllers.values() if isinstance(c, AIController)]
+        def is_ai(c): return "AI" in c.__class__.__name__
+        current_ai_controllers = [c for c in self._editor_controllers.values() if is_ai(c)]
         for obj in self.scene_objects:
             if obj.id not in self._editor_controllers and getattr(obj, 'controller_type', 'None') != 'None':
                 ctype = obj.controller_type
-                if ctype == "AI (CPU)": 
-                    ctrl = AIController(obj)
-                    self._editor_controllers[obj.id] = ctrl
-                    current_ai_controllers.append(ctrl)
-                elif ctype == "Player": self._editor_controllers[obj.id] = PlayerController(obj)
-                elif ctype == "AI (GPU Fish)": self._editor_controllers[obj.id] = AIGPUFishController(obj)
-                elif ctype == "AI (GPU Bird)": self._editor_controllers[obj.id] = AIGPUBirdController(obj)
+                try:
+                    from py_editor.core.controller_manager import create_controller
+                    ctrl = create_controller(ctype, obj)
+                    if ctrl:
+                        # Let the controller resolve parent objects when
+                        # converting world↔local positions (e.g. fish parented
+                        # under a spawner).
+                        try: obj._scene_objects_ref = self.scene_objects
+                        except Exception: pass
+                        self._editor_controllers[obj.id] = ctrl
+                        if is_ai(ctrl):
+                            current_ai_controllers.append(ctrl)
+                except Exception as e:
+                    print(f"[SCENE_VIEW] Error creating controller {ctype}: {e}")
         
         # Synchronize flock for all AI
         for ctrl in current_ai_controllers:
             ctrl.flock = current_ai_controllers
 
-    def _draw_voxel_world(self, obj, shader_active=False):
+    def _draw_voxel_world(self, obj, shader_active=False, sun_dir=None, sun_color=None, amb_color=None):
         """Chunk-streamed voxel world with full-planet camera-distance LOD.
 
         Seam fixes:
@@ -1384,33 +1740,37 @@ class SceneViewport(QOpenGLWidget):
             chunk_vox_size = float(max(block_size * 8.0,
                                        world_span / target_chunks_across))
         else:
-            # Flat mode: single-LOD streaming around the camera when infinite is on.
-            # Single LOD avoids T-junction seams at chunk boundaries entirely.
+            # Flat mode: multi-LOD camera-centered ring so the world extends to
+            # the horizon on zoom-out without looking like a square box.
             extent   = None
             infinite = bool(getattr(obj, 'voxel_infinite_flat', True))
-            # Flat chunks: ≥64u wide → ~64 columns × 3 y-layers ≈ 200 chunks in
-            # infinite mode (many end up empty above/below terrain and stream fast).
             chunk_vox_size = float(max(block_size * 32.0, 64.0))
 
             if infinite:
-                horiz_extent = 250.0   # ±250u around camera (≈500u view diameter)
-                vert_extent  = 80.0    # ±80u vertical (fits Mountains + Continents)
-                
-                # Infinite streaming: The grid MUST center on the camera,
-                # NOT the object origin, otherwise we can only see terrain at 0,0,0.
+                # Grow the ring with camera altitude — far from ground, show more.
+                alt = abs(float(cam_pos[1] - obj_pos[1]))
+                horiz_extent = float(max(300.0, 250.0 + alt * 3.0))
+                horiz_extent = min(horiz_extent, 4000.0)  # hard ceiling
+                vert_extent  = 96.0
+
                 world_min = cam_pos - horiz_extent
                 world_max = cam_pos + horiz_extent
-                # Vertical is relative to the object's surface plane
                 world_min[1] = obj_pos[1] - vert_extent
                 world_max[1] = obj_pos[1] + vert_extent
                 world_span = 2.0 * horiz_extent
+                # Used later to clip the AABB-grid to a circle so the world's
+                # outer silhouette is round, not cubic.
+                _flat_ring_radius = horiz_extent
             else:
                 world_span = 100.0
                 world_min  = obj_pos + np.array([-50, -20, -50], dtype=np.float32)
                 world_max  = obj_pos + np.array([ 50,  20,  50], dtype=np.float32)
+                _flat_ring_radius = None
 
+        biomes       = getattr(obj, 'voxel_biomes', []) or []
         layers_hash = hash(str(layers))
         features_hash = hash(str(features))
+        biomes_hash = hash(str(biomes))
         gp_hash = hash((
             round(float(getattr(obj, 'voxel_world_height',       1.0)),  4),
             round(float(getattr(obj, 'voxel_cave_tunnel_scale', 28.0)),  4),
@@ -1421,7 +1781,8 @@ class SceneViewport(QOpenGLWidget):
             round(float(getattr(obj, 'voxel_cave_max_depth',   512.0)),  4),
         ))
         cache_key = (f"voxel_{obj.id}_{seed}_{v_type}_{v_radius}"
-                     f"_{block_size}_{smooth}_{render_style}_{layers_hash}_{features_hash}_{gp_hash}")
+                     f"_{block_size}_{smooth}_{render_style}"
+                     f"_{layers_hash}_{features_hash}_{biomes_hash}_{gp_hash}")
 
         world_grid_min = np.floor(world_min / chunk_vox_size).astype(int)
         world_grid_max = np.ceil(world_max  / chunk_vox_size).astype(int)
@@ -1451,7 +1812,16 @@ class SceneViewport(QOpenGLWidget):
             dist_planet    = np.linalg.norm(closest_planet - obj_pos, axis=1)  # (N,)
             in_planet      = dist_planet <= extent
         else:
-            in_planet = np.ones(len(IX), dtype=bool)
+            # Circular clip for flat mode: drops corner chunks so the world's
+            # silhouette is round instead of looking like a 500m cube.
+            _ring_r = locals().get('_flat_ring_radius')
+            if _ring_r is not None:
+                chunk_centers_xz = (cmin_all[:, [0, 2]] + cmax_all[:, [0, 2]]) * 0.5
+                cam_xz = cam_pos[[0, 2]]
+                dxz = np.linalg.norm(chunk_centers_xz - cam_xz, axis=1)
+                in_planet = dxz <= _ring_r
+            else:
+                in_planet = np.ones(len(IX), dtype=bool)
 
         # Camera-AABB distance for LOD tier: nearest point on chunk AABB to camera.
         closest_cam = np.clip(cam_pos, cmin_all, cmax_all)
@@ -1485,7 +1855,13 @@ class SceneViewport(QOpenGLWidget):
             # Lowest Tier
             lod_arr[in_planet & (d_ch >= thresh[-1])] = len(thresh)
         else:
-            lod_arr[in_planet] = 0
+            # Flat mode LOD: near chunks full-res, mid half-res, far quarter-res.
+            # Uses horizontal chunk-distance so elevation above the ground doesn't
+            # promote everything to LOD 0 (which is why zoomed-out views stalled).
+            lod_arr[in_planet & (d_ch < 3.0)]                      = 0
+            lod_arr[in_planet & (d_ch >= 3.0) & (d_ch < 7.0)]      = 1
+            lod_arr[in_planet & (d_ch >= 7.0) & (d_ch < 14.0)]     = 2
+            lod_arr[in_planet & (d_ch >= 14.0)]                    = 3
 
         vis = lod_arr >= 0
         if not np.any(vis):
@@ -1505,6 +1881,7 @@ class SceneViewport(QOpenGLWidget):
         # not a mutated version that may arrive after the thread starts.
         layers_snap = list(layers)
         features_snap = list(features)
+        biomes_snap = list(biomes)
         # Per-object generation tuning (world height, cave params). Snapshotted
         # so threads see stable values across the generation lifetime.
         gen_params = {
@@ -1521,6 +1898,14 @@ class SceneViewport(QOpenGLWidget):
         chunk_keys = []
         with self._voxel_gen_lock:
             active_count = len(self._voxel_generation_in_progress)
+
+        # Per-frame new-thread budget. Without this, 10 generator threads can
+        # be spawned in a single frame; the GIL + numpy allocations stall the
+        # main thread hard (the 113→6 fps drop during flat-world loading).
+        # 2/frame drains a 100-chunk backlog in ~0.8s without starving render.
+        new_threads_this_frame = 0
+        NEW_THREAD_BUDGET = 2
+        ACTIVE_THREAD_CAP = 4
 
         for (ix, iy, iz), lod_level in chunk_lods:
             lod_factor = 1 << lod_level               # 1, 2, 4, 8, or 16
@@ -1543,18 +1928,20 @@ class SceneViewport(QOpenGLWidget):
                 # Use a higher base intensity for Flat worlds to overcome terrain noise
                 carve_depth = 10.0 if v_type.lower() == "round" else 18.0
                 
-                # Faster filling but lower limit to prevent UI lag
-                if active_count < 10:
+                # Rate-limit both concurrent threads and per-frame new spawns.
+                if active_count < ACTIVE_THREAD_CAP and new_threads_this_frame < NEW_THREAD_BUDGET:
                     with self._voxel_gen_lock:
                         if chunk_cache_key not in self._voxel_generation_in_progress:
                             self._voxel_generation_in_progress.add(chunk_cache_key)
                             self.mesh_cache[chunk_cache_key] = None   # in-progress marker
                             active_count += 1
+                            new_threads_this_frame += 1
 
                             cmin_loc = np.array([ix, iy, iz], dtype=np.float32) * chunk_vox_size
                             cmax_loc = cmin_loc + chunk_vox_size
 
-                            def _gen_chunk(cmin, cmax, per_res, cck, vs, lsnap, fsnap, gp=gen_params):
+                            def _gen_chunk(cmin, cmax, per_res, cck, vs, lsnap, fsnap,
+                                           gp=gen_params, bsnap=biomes_snap, opy=float(obj_pos[1])):
                                 produced = False
                                 try:
                                     # Each smoothing iteration pulls from one more neighbor
@@ -1562,7 +1949,7 @@ class SceneViewport(QOpenGLWidget):
                                     # cell for surface-nets gradient sampling, otherwise the
                                     # outer cells fall back to edge-padding and their density
                                     # diverges from what the neighboring chunk sees → seams.
-                                    margin = max(3, int(smooth) + 2)
+                                    margin = max(4, int(smooth) + 2)
                                     p_min  = cmin - margin * vs
                                     p_max  = cmax + margin * vs
                                     # per_res + 2*margin + 1 samples → linspace step == vs
@@ -1587,21 +1974,37 @@ class SceneViewport(QOpenGLWidget):
                                         p_offset = (p_min + p_max) * 0.5 - obj_pos
                                         verts_w  = verts_c * p_size + p_offset
 
-                                        # Half-open clip [cmin, cmax) — one chunk owns each tri
-                                        cmin_rel  = cmin - obj_pos
-                                        cmax_rel  = cmax - obj_pos
+                                        # Implement LOD skirts via overlapping clip boundaries
+                                        # Extending the clip bounds by `vs` allows mismatched LOD 
+                                        # edges to intersect slightly rather than leaving a gap.
+                                        clip_min = cmin - obj_pos - vs
+                                        clip_max = cmax - obj_pos + vs
                                         tri_arr   = idx_c.reshape(-1, 3)
                                         centroids = verts_w[tri_arr].mean(axis=1)
-                                        keep      = (np.all(centroids >= cmin_rel, axis=1) &
-                                                     np.all(centroids  < cmax_rel, axis=1))
+                                        keep      = (np.all(centroids >= clip_min, axis=1) &
+                                                     np.all(centroids  < clip_max, axis=1))
                                         idx_out   = tri_arr[keep].flatten()
 
                                         if len(idx_out) > 0:
+                                            verts_w_c = np.ascontiguousarray(verts_w, dtype=np.float32)
+                                            norms_c_c = np.ascontiguousarray(norms_c, dtype=np.float32)
+                                            idx_c_out = np.array(idx_out, dtype=np.uint32)
+                                            colors_c  = np.ascontiguousarray(
+                                                _compute_biome_colors(verts_w_c, opy, norms_c_c, bsnap),
+                                                dtype=np.float32)
+                                            # Deterministic seed per (object_seed, chunk_key) so
+                                            # regenerations reproduce the exact same scatter.
+                                            chunk_spawns = _compute_biome_spawns(
+                                                verts_w_c, idx_c_out, norms_c_c,
+                                                obj_pos, bsnap,
+                                                seed_hash=hash((seed, cck)))
                                             with self._voxel_gen_lock:
                                                 self._pending_voxel_chunks[cck] = (
-                                                    np.ascontiguousarray(verts_w,  dtype=np.float32),
-                                                    np.array(idx_out,              dtype=np.uint32),
-                                                    np.ascontiguousarray(norms_c,  dtype=np.float32),
+                                                    verts_w_c,
+                                                    idx_c_out,
+                                                    norms_c_c,
+                                                    colors_c,
+                                                    chunk_spawns,
                                                 )
                                                 produced = True
                                 except Exception as e:
@@ -1625,11 +2028,29 @@ class SceneViewport(QOpenGLWidget):
 
             chunk_keys.append(chunk_cache_key)
 
-        # ── Non-blocking fallback ──
-        # If the new cache_key has ZERO items ready, render the PREVIOUS successful 
-        # chunks for this object so it doesn't flicker while the first batch cooks.
-        ready_count = sum(1 for ck in chunk_keys if isinstance(self.mesh_cache.get(ck), dict))
-        if ready_count < 1 and hasattr(obj, '_last_chunk_keys'):
+        # ── High-Confidence LOD Switching ──
+        # To prevent "holes" or "flickering" while chunks load in the background,
+        # we only commit to the new chunk set if a high percentage of them are 
+        # already ready. If the new set is too sparse, we keep rendering the 
+        # previous successful set.
+        
+        # Count ready chunks (dict sentinels or full VAOs)
+        num_required = len(chunk_keys)
+        ready_count = 0
+        if num_required > 0:
+            for ck in chunk_keys:
+                d = self.mesh_cache.get(ck)
+                # We count valid dicts (either populated with a VAO OR an empty-box sentinel)
+                if isinstance(d, dict):
+                    ready_count += 1
+        
+        # Switch threshold (e.g., 90%). 
+        # If the move was small, 90% of a 100-chunk set is likely already cached.
+        # If the move was large (teleporting across the world), we fall back 
+        # to the old set until the new landscape "fills in".
+        confidence = (ready_count / num_required) if num_required > 0 else 1.0
+        
+        if confidence < 0.90 and hasattr(obj, '_last_chunk_keys'):
             chunk_keys = obj._last_chunk_keys
         else:
             obj._last_chunk_keys = chunk_keys
@@ -1666,6 +2087,190 @@ class SceneViewport(QOpenGLWidget):
                         pass
             glBindVertexArray(0)
         glEnable(GL_CULL_FACE)
+
+        # ── Biome spawner draws ──
+        # Each chunk's spawns are stored on its VAO entry. We render them as
+        # simple fixed-function primitives (cube/sphere/cone/…) so they follow
+        # the existing shader without per-object state churn. Prefabs are
+        # rendered as bounding cubes — loading the actual prefab mesh on the
+        # render thread would stall, and the prefab streaming system isn't
+        # plumbed through voxel gen yet.
+        try:
+            from py_editor.ui.scene.render_manager import (
+                _draw_wireframe_cube, _draw_wireframe_sphere,
+                _draw_wireframe_plane, _draw_wireframe_cylinder, _draw_wireframe_cone)
+            from py_editor.ui.shader_manager import get_shader
+            glEnable(GL_DEPTH_TEST)
+            # Reset color state so spawns don't inherit "dirty" color from terrain biomes
+            glColor4f(1.0, 1.0, 1.0, 1.0)
+            
+            # Spawn meshes have inconsistent winding — disable culling so all sides show.
+            glDisable(GL_CULL_FACE)
+            
+            # Distance cull — skip spawn batches for chunks beyond this radius.
+            spawn_max_d = float(getattr(obj, 'voxel_spawn_max_distance', 120.0))
+            spawn_max_d2 = spawn_max_d * spawn_max_d
+            
+            # Fix: Source camera position from self._cam3d.pos (self.camera_pos was incorrect)
+            cam_p = np.array(self._cam3d.pos, dtype=np.float32)
+            obj_p = np.array(obj.position, dtype=np.float32)
+
+            last_sn = None
+
+            for ck in chunk_keys:
+                d = self.mesh_cache.get(ck)
+                if not isinstance(d, dict): continue
+                sps = d.get('spawns') or []
+                if not sps: continue
+
+                # Chunk-level distance cull
+                first = sps[0]['pos']
+                dx = (first[0] + obj_p[0]) - cam_p[0]
+                dy = (first[1] + obj_p[1]) - cam_p[1]
+                       # Render instance batches (Prefabs/Meshes)
+                batches, leftovers = self._chunk_spawn_batches.get_batches(ck, sps)
+                for b in batches:
+                    sn = b.shader_name or 'Standard'
+                    mat_path = getattr(b, 'material_path', '')
+                    
+                    s = get_shader(sn)
+                    if not s: continue
+                    
+                    if sn != last_sn:
+                        s.use()
+                        # Pass common Lighting/Environment uniforms
+                        s.set_uniform_v3("sunDir",        *(sun_dir or (0.5, 0.7, 0.2)))
+                        s.set_uniform_v3("sunColor",      *(sun_color or (1, 1, 1)))
+                        s.set_uniform_v3("ambientColor",  *(amb_color or (0.1, 0.1, 0.1)))
+                        s.set_uniform_v3("cam_pos",       *cam_p)
+                        
+                        t_val = getattr(self, '_elapsed_time', 0.0)
+                        s.set_uniform_f("time",   t_val)
+                        s.set_uniform_f("u_time", t_val)
+                        last_sn = sn
+                    else:
+                        # Ensure we are using the right program even if sn hasn't changed
+                        # (in case some other render call changed it)
+                        s.use()
+
+                    # --- Apply material/batch-specific overrides (Must happen per batch) ---
+                    # Reset texture to 0/None initially
+                    s.set_uniform_f("u_has_tex", 0.0)
+                    
+                    if mat_path:
+                        try:
+                            import json
+                            from py_editor.core import paths as _ap
+                            abs_mat = _ap.resolve(mat_path)
+                            with open(abs_mat, 'r') as f:
+                                m_data = json.load(f)
+                            # PBR Texture Auto-Link
+                            tex = m_data.get('albedo') or m_data.get('texture_path')
+                            if tex:
+                                from py_editor.ui.shader_manager import get_texture
+                                tid = get_texture(tex)
+                                if tid:
+                                    from OpenGL.GL import glActiveTexture, glBindTexture, GL_TEXTURE0, GL_TEXTURE_2D
+                                    glActiveTexture(GL_TEXTURE0)
+                                    glBindTexture(GL_TEXTURE_2D, tid)
+                                    s.set_uniform_i("u_tex0", 0)
+                                    s.set_uniform_f("u_has_tex", 1.0)
+                            # Material Properties
+                            for k, v in m_data.items():
+                                if k == 'base_color':
+                                    if len(v) == 3: s.set_uniform_v4(k, v[0], v[1], v[2], 1.0)
+                                    else: s.set_uniform_v4(k, *v)
+                                elif isinstance(v, (int, float)): s.set_uniform_f(k, float(v))
+                                elif isinstance(v, list) and len(v) in (3, 4):
+                                    if len(v) == 3: s.set_uniform_v3(k, *v)
+                                    else: s.set_uniform_v4(k, *v)
+                        except: pass
+                    else:
+                        # Reset to default if no material
+                        if sn == 'Standard':
+                            s.set_uniform_v4("base_color", 1.0, 1.0, 1.0, 1.0)
+                        elif sn == 'grass.shader':
+                            # Restore shader default green
+                            s.set_uniform_v4("base_color", 0.15, 0.45, 0.1, 1.0)
+
+                    # Spawner-specific param overrides
+                    p = getattr(b, 'shader_params', {})
+                    for k, v in p.items():
+                        if isinstance(v, (int, float)): s.set_uniform_f(k, float(v))
+                        elif isinstance(v, list) and len(v) in (3, 4):
+                            if len(v) == 3: s.set_uniform_v3(k, *v)
+                            else: s.set_uniform_v4(k, *v)
+
+                    b.draw()
+
+                # Fallback primitives use the global spawn shader
+                global_sn = getattr(obj, 'shader_name', 'Standard')
+                for sp in leftovers:
+                    # Sync shader for fallback primitives
+                    sn = sp.get('shader_name', global_sn)
+                    mat_path = sp.get('material_path', '')
+                    if sn != last_sn:
+                        s = get_shader(sn)
+                        if s:
+                            s.use()
+                            s.set_uniform_v3("sunDir",        *(sun_dir or (0.5, 0.7, 0.2)))
+                            s.set_uniform_v3("sunColor",      *(sun_color or (1, 1, 1)))
+                            s.set_uniform_v3("ambientColor",  *(amb_color or (0.1, 0.1, 0.1)))
+                            s.set_uniform_v3("cam_pos",       *cam_p)
+                            t_val = getattr(self, '_elapsed_time', 0.0)
+                            s.set_uniform_f("time", t_val); s.set_uniform_f("u_time", t_val)
+                            
+                            if mat_path:
+                                try:
+                                    import json
+                                    with open(mat_path, 'r') as f: m_data = json.load(f)
+                                    tex = m_data.get('albedo') or m_data.get('texture_path')
+                                    if tex:
+                                        from py_editor.ui.shader_manager import get_texture
+                                        tid = get_texture(tex)
+                                        if tid:
+                                            from OpenGL.GL import glActiveTexture, glBindTexture, GL_TEXTURE0, GL_TEXTURE_2D
+                                            glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, tid)
+                                            s.set_uniform_i("u_tex0", 0); s.set_uniform_f("u_has_tex", 1.0)
+                                    for k, v in m_data.items():
+                                        if k == 'base_color':
+                                            if len(v) == 3: s.set_uniform_v4(k, v[0], v[1], v[2], 1.0)
+                                            else: s.set_uniform_v4(k, *v)
+                                        elif isinstance(v, (int, float)): s.set_uniform_f(k, float(v))
+                                except: pass
+                            else:
+                                if sn == 'Standard': s.set_uniform_v4("base_color", 1.0, 1.0, 1.0, 1.0)
+
+                        last_sn = sn
+                    
+                    # Apply spawner-specific params if any
+                    active_s = get_shader(sn)
+                    if active_s:
+                        p = sp.get('shader_params', {})
+                        for k, v in p.items():
+                            if isinstance(v, (int, float)): active_s.set_uniform_f(k, float(v))
+                            elif isinstance(v, (list, tuple)) and len(v) == 4: active_s.set_uniform_v4(k, *v)
+
+                    glPushMatrix()
+                    glTranslatef(*sp['pos'])
+                    glRotatef(sp['rot'][0], 1, 0, 0)
+                    glRotatef(sp['rot'][1], 0, 1, 0)
+                    glRotatef(sp['rot'][2], 0, 0, 1)
+                    glScalef(*sp['scale'])
+
+                    kind = sp.get('kind', 'object:cube')
+                    if kind == 'object:sphere': _draw_wireframe_sphere()
+                    elif kind == 'object:plane': _draw_wireframe_plane()
+                    elif kind == 'object:cylinder': _draw_wireframe_cylinder()
+                    elif kind == 'object:cone': _draw_wireframe_cone()
+                    else: _draw_wireframe_cube()
+                    glPopMatrix()
+            
+            # Cleanup shader state
+            glUseProgram(0)
+            glEnable(GL_CULL_FACE)
+        except Exception as e:
+            print(f"[VOXEL SPAWN] {e}")
 
     def _create_voxel_vao(self, verts, idx, norms, colors=None):
         """Create a VAO for voxel mesh with high-precision gradient normals.
@@ -1705,6 +2310,126 @@ class SceneViewport(QOpenGLWidget):
 
         glBindVertexArray(0)
         return {'vao': vao, 'vbo': vbo, 'ibo': ibo, 'cvbo': cvbo, 'count': len(idx)}
+
+
+def _compute_biome_spawns(verts_w, idx, norms, obj_pos, biomes, seed_hash):
+    """Place spawner instances on surface triangles.
+
+    For every biome × spawner, build a per-triangle probability mask from the
+    spawner's slope/height gates, then pick triangles using a hash-seeded RNG
+    so the same chunk always produces identical spawns (stable across
+    regenerations and cache misses).
+
+    Returns a list of dicts: {'kind', 'prefab_path', 'pos'(3), 'rot'(3), 'scale'(3)}.
+    """
+    spawns_out = []
+    if not biomes or len(idx) == 0 or len(verts_w) == 0:
+        return spawns_out
+
+    try:
+        tri = idx.reshape(-1, 3)
+        v0 = verts_w[tri[:, 0]]
+        v1 = verts_w[tri[:, 1]]
+        v2 = verts_w[tri[:, 2]]
+        centroid = (v0 + v1 + v2) / 3.0
+        # Triangle normal — use face normal (cross of edges) for slope, consistent
+        # across smooth/flat shading.
+        e1 = v1 - v0
+        e2 = v2 - v0
+        fn = np.cross(e1, e2)
+        fn_len = np.linalg.norm(fn, axis=1, keepdims=True) + 1e-8
+        fn_unit = fn / fn_len
+        area = 0.5 * fn_len.squeeze(-1)
+        world_y = centroid[:, 1] + float(obj_pos[1])
+        slope = np.clip(fn_unit[:, 1], 0.0, 1.0)
+    
+        rng = np.random.default_rng(int(seed_hash) & 0x7FFFFFFF)
+
+        for b in biomes:
+            hr = b.get('height_range', [-1e9, 1e9])
+            sr = b.get('slope_range',  [0.0, 1.0])
+            biome_mask = ((world_y >= float(hr[0])) & (world_y <= float(hr[1])) &
+                          (slope   >= float(sr[0])) & (slope   <= float(sr[1])))
+            if not np.any(biome_mask):
+                continue
+            for sp in b.get('spawns', []) or []:
+                density = float(sp.get('density', 0.0))
+                if density <= 0.0: continue
+                
+                # Inherit biome color for instance tinting
+                b_color = b.get('surface', {}).get('color', (1.0, 1.0, 1.0, 1.0))
+                shr = sp.get('height_range',
+                             [float(sp.get('height_min', -1e9)),
+                              float(sp.get('height_max',  1e9))])
+                ssr = sp.get('slope_range',
+                             [float(sp.get('slope_min', 0.0)),
+                              float(sp.get('slope_max', 1.0))])
+                m = (biome_mask &
+                     (world_y >= float(shr[0])) & (world_y <= float(shr[1])) &
+                     (slope   >= float(ssr[0])) & (slope   <= float(ssr[1])))
+                cand = np.where(m)[0]
+                if len(cand) == 0: continue
+                # Area-weighted sampling so bigger tris get proportionally more
+                # spawns — keeps density perceptually uniform.
+                probs = area[cand] * density
+                hits = rng.random(len(cand)) < np.clip(probs, 0.0, 0.95)
+                picks = cand[hits]
+                num_picks = len(picks)
+                if num_picks == 0: continue
+                
+                jitter = float(sp.get('jitter', 0.0))
+                smin = float(sp.get('scale_min', 1.0))
+                smax = max(smin, float(sp.get('scale_max', 1.0)))
+                # Boost fallback scales so primitive spawners aren't micro-tiny
+                if smax <= 0.1: smax = 1.0
+                
+                align = bool(sp.get('align_to_normal', False))
+                kind = sp.get('kind', 'object:cube')
+                prefab_path = sp.get('prefab_path', '')
+                shader_name = sp.get('shader_name', 'Standard')
+
+                # Vectorized computation of barycentric coordinates and positions
+                bary = rng.random((num_picks, 3)).astype(np.float32)
+                bary /= bary.sum(axis=1, keepdims=True)
+                
+                p_arr = (v0[picks] * bary[:, 0:1] + 
+                         v1[picks] * bary[:, 1:2] + 
+                         v2[picks] * bary[:, 2:3])
+                
+                if jitter > 0.0:
+                    edge_lens = np.linalg.norm(v1[picks] - v0[picks], axis=1, keepdims=True)
+                    p_arr += (rng.random((num_picks, 3)).astype(np.float32) - 0.5) * (edge_lens * jitter)
+                    
+                s_arr = rng.uniform(smin, smax, size=num_picks)
+                
+                if align:
+                    n_arr = fn_unit[picks]
+                    yaw_arr = np.degrees(np.arctan2(n_arr[:, 0], n_arr[:, 2]))
+                    pitch_arr = np.degrees(np.arcsin(-n_arr[:, 1])) + 90.0
+                    rot_arr = np.column_stack((pitch_arr, yaw_arr, np.zeros(num_picks)))
+                else:
+                    yaw_arr = rng.uniform(0.0, 360.0, size=num_picks)
+                    rot_arr = np.column_stack((np.zeros(num_picks), yaw_arr, np.zeros(num_picks)))
+
+                # Only iterate at the final packing stage
+                for i in range(num_picks):
+                    s_val = float(s_arr[i])
+                    spawns_out.append({
+                        'kind': kind,
+                        'prefab_path': prefab_path,
+                        'shader_name': shader_name,
+                        'material_path': sp.get('material_path', ''),
+                        'shader_params': sp.get('shader_params', {}),
+                        'pos':   [float(p_arr[i, 0]), float(p_arr[i, 1]), float(p_arr[i, 2])],
+                        'rot':   [float(rot_arr[i, 0]), float(rot_arr[i, 1]), float(rot_arr[i, 2])],
+                        'scale': [s_val, s_val, s_val],
+                        'color': b_color,
+                    })
+                
+    except Exception as e:
+        print(f"[BIOME SPAWNER ERROR] Vectorization math fault: {e}")
+
+    return spawns_out
 
 
 def _compute_biome_colors(verts_w, obj_pos_y, normals, biomes):

@@ -4,6 +4,7 @@ properties_panel.py
 The Right-side properties inspector with a unified layout.
 """
 from pathlib import Path
+from functools import partial
 from typing import Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
@@ -18,7 +19,8 @@ from py_editor.ui.shared_styles import (
     PROPS_SS, SPIN_SS, COMBO_SS, BTN_SS, LIST_SS, LABEL_SS
 )
 from py_editor.ui.scene.object_system import SceneObject
-from py_editor.ui.shader_manager import SHADER_REGISTRY
+from py_editor.ui.shader_manager import get_shader, get_shader_list
+from py_editor.core import paths as asset_paths
 
 class MaterialSlotWidget(QFrame):
     """A drop zone for material assets."""
@@ -39,11 +41,20 @@ class MaterialSlotWidget(QFrame):
         self.btn = QPushButton("...")
         self.btn.setFixedSize(24, 20)
         self.btn.setStyleSheet("background: #333; border: 1px solid #555; border-radius: 2px; color: #ccc;")
+        self.btn.clicked.connect(self._on_browse)
         layout.addWidget(self.btn)
         
-    def set_material(self, name):
-        self.label.setText(name if name else "None")
-        self.label.setStyleSheet(f"border: none; background: transparent; color: {'#4fc3f7' if name else '#888'}; font-size: 11px;")
+    def _on_browse(self):
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Select Material", "", "Material Files (*.material)")
+        if path:
+            # Emit with mat: prefix if expected by drop logic, though update_obj_prop usually takes raw path
+            self.material_dropped.emit(path)
+
+    def set_material(self, path):
+        name = Path(path).name if path else "None"
+        self.label.setText(name)
+        self.label.setStyleSheet(f"border: none; background: transparent; color: {'#4fc3f7' if path else '#888'}; font-size: 11px;")
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasText() and event.mimeData().text().startswith("mat:"):
@@ -74,9 +85,19 @@ class TextureSlotWidget(QFrame):
         self.btn = QPushButton("...")
         self.btn.setFixedSize(24, 20)
         self.btn.setStyleSheet("background: #333; border: 1px solid #555; border-radius: 2px; color: #ccc;")
+        self.btn.clicked.connect(self._on_browse)
         layout.addWidget(self.btn)
         
+    def _on_browse(self):
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Select Texture", "", "Textures (*.png *.jpg *.jpeg *.tga)")
+        if path:
+            self.texture_dropped.emit(path)
+        
     def set_texture(self, path):
+        # Prevent crashes if a non-string (e.g. roughness float) is passed
+        if path and not isinstance(path, str):
+            path = None
         name = Path(path).name if path else "None"
         self.label.setText(name)
         self.label.setStyleSheet(f"border: none; background: transparent; color: {'#4fc3f7' if path else '#888'}; font-size: 11px;")
@@ -89,6 +110,69 @@ class TextureSlotWidget(QFrame):
     def dropEvent(self, event: QDropEvent):
         text = event.mimeData().text()
         self.texture_dropped.emit(text)
+        event.acceptProposedAction()
+
+class MeshSlotWidget(QFrame):
+    """A drop zone for mesh assets (.mesh)."""
+    mesh_dropped = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setFixedHeight(24)
+        self.setStyleSheet("background: #1e1e1e; border: 1px dashed #444; border-radius: 3px;")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 4, 0)
+        
+        self.label = QLabel("None")
+        self.label.setStyleSheet("border: none; background: transparent; color: #888; font-size: 11px;")
+        layout.addWidget(self.label)
+        layout.addStretch()
+        self.btn = QPushButton("...")
+        self.btn.setFixedSize(24, 20)
+        self.btn.setStyleSheet("background: #333; border: 1px solid #555; border-radius: 2px; color: #ccc;")
+        self.btn.clicked.connect(self._on_browse)
+        layout.addWidget(self.btn)
+        
+    def _on_browse(self):
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Select Mesh", "", "Mesh Files (*.mesh)")
+        if path:
+            self.mesh_dropped.emit(path)
+        
+    def set_mesh(self, path):
+        name = Path(path).name if path else "None"
+        self.label.setText(name)
+        self.label.setStyleSheet(f"border: none; background: transparent; color: {'#4fc3f7' if path else '#888'}; font-size: 11px;")
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        text = event.mimeData().text().lower()
+        if text.endswith('.mesh'):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent):
+        text = event.mimeData().text()
+        self.mesh_dropped.emit(text)
+        event.acceptProposedAction()
+
+class PrefabListWidget(QListWidget):
+    """A drop zone for prefab files."""
+    prefab_dropped = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setStyleSheet(LIST_SS)
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        text = event.mimeData().text()
+        if text.lower().endswith('.prefab') or text.startswith('prefab:'):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent):
+        text = event.mimeData().text()
+        if text.startswith('prefab:'): text = text[7:]
+        self.prefab_dropped.emit(text)
         event.acceptProposedAction()
 
 class PropertySlider(QWidget):
@@ -203,7 +287,9 @@ class ObjectPropertiesPanel(QWidget):
         "Deep Ocean":    {"range": [-1000.0, -5.0], "color": [0.05, 0.1,  0.3,  1.0], "rough": 0.1},
         "Shallow Water": {"range": [-5.0,    0.0],  "color": [0.1,  0.4,  0.6,  1.0], "rough": 0.2},
         "Beach":         {"range": [0.0,     2.0],  "color": [0.85, 0.8,  0.65, 1.0], "rough": 0.9},
-        "Grassland":     {"range": [2.0,     15.0], "color": [0.25, 0.4,  0.1,  1.0], "rough": 0.8},
+        "Grassland":     {"range": [2.0,     15.0], "color": [0.25, 0.4,  0.1,  1.0], "rough": 0.8, "spawns": [
+            {"kind": "object:cube", "density": 0.15, "shader_name": "shaders/grass.shader", "scale_min": 0.6, "scale_max": 1.4, "jitter": 0.4}
+        ]},
         "Desert":        {"range": [0.0,     1000.0],"color": [0.9,  0.8,  0.5,  1.0], "rough": 1.0},
         "Snow Cap":      {"range": [45.0,    1000.0],"color": [0.95, 0.95, 1.0,  1.0], "rough": 0.3},
         "Mars Dust":     {"range": [-1000.0, 1000.0],"color": [0.8,  0.3,  0.1,  1.0], "rough": 0.9},
@@ -218,14 +304,26 @@ class ObjectPropertiesPanel(QWidget):
         self._row_map = {} # widget -> row_container mapping for visibility toggle
         self._regen_timer = None # For throttling rapid changes
         # Main layout contains a scroll area so the properties panel stays fixed size
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0,0,0,0)
-        main_layout.setSpacing(0)
-
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # Standalone editing header
+        self.header_widget = QFrame()
+        self.header_widget.setFixedHeight(30)
+        self.header_widget.setStyleSheet("background-color: #3e3e42; border-bottom: 1px solid #555;")
+        self.header_layout = QHBoxLayout(self.header_widget)
+        self.header_layout.setContentsMargins(10, 0, 10, 0)
+        self.header_label = QLabel("PROPERTIES")
+        self.header_label.setStyleSheet("color: #4fc3f7; font-weight: bold; font-size: 11px; text-transform: uppercase;")
+        self.header_layout.addWidget(self.header_label)
+        self.header_layout.addStretch()
+        layout.addWidget(self.header_widget)
+        
         self._scroll = QScrollArea(self)
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        main_layout.addWidget(self._scroll)
+        layout.addWidget(self._scroll)
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -295,9 +393,8 @@ class ObjectPropertiesPanel(QWidget):
         layout.addWidget(scale_group)
         
         # Initialize Sub-UIs
-        self._init_material_ui(layout)
+        self._init_mesh_mat_ui(layout)
         self._init_pbr_ui(layout)
-        self._init_mesh_ui(layout)
         
         self.save_btn = QPushButton("💾 SAVE PREFAB")
         self.save_btn.setStyleSheet(BTN_SS + "background-color: #2e7d32; font-weight: bold; margin-top: 10px;")
@@ -386,6 +483,7 @@ class ObjectPropertiesPanel(QWidget):
         self._init_camera_ui(layout)
         self._init_shader_ui(layout)
         self._init_logic_ui(layout)
+        self._init_spawner_ui(layout)
         
         layout.addStretch()
 
@@ -394,37 +492,170 @@ class ObjectPropertiesPanel(QWidget):
         # Ensure it starts empty
         self.set_objects([])
 
-    def _init_material_ui(self, layout):
-        self.mat_group = QGroupBox("Material")
-        self.mat_group.setStyleSheet(PROPS_SS)
-        mg = QVBoxLayout(self.mat_group)
+    def _init_mesh_mat_ui(self, layout):
+        self.mesh_mat_group = QGroupBox("Mesh & Material")
+        self.mesh_mat_group.setStyleSheet(PROPS_SS)
+        mg = QVBoxLayout(self.mesh_mat_group)
         mg.setContentsMargins(10, 14, 10, 10); mg.setSpacing(6)
         
+        # 1. Mesh Source
+        self.mesh_slot = MeshSlotWidget()
+        self.mesh_slot.mesh_dropped.connect(lambda p: self.update_obj_prop('mesh_path', p))
+        self._add_property_row(mg, "Mesh Source", self.mesh_slot)
+        
+        # 2. Material Asset
+        self.mat_slot = MaterialSlotWidget()
+        self.mat_slot.material_dropped.connect(lambda p: self.update_obj_prop('material_path', p))
+        self._add_property_row(mg, "Material (.material)", self.mat_slot)
+        
+        # 3. Base Color / Preset (Legacy)
         self.mat_preset = QComboBox()
         self.mat_preset.addItems(['Plastic', 'Glass', 'Metal', 'Water', 'Custom'])
         self.mat_preset.setStyleSheet(COMBO_SS)
-        self._add_property_row(mg, "Preset", self.mat_preset)
+        self.mat_preset_row = self._add_property_row(mg, "Preset", self.mat_preset)
         
-        self.mat_slot = MaterialSlotWidget()
-        self._add_property_row(mg, "Asset", self.mat_slot)
-        layout.addWidget(self.mat_group)
-
-    def _init_mesh_ui(self, layout):
-        self.mesh_group = QGroupBox("Mesh Data")
-        self.mesh_group.setStyleSheet(PROPS_SS)
-        mg = QVBoxLayout(self.mesh_group)
-        mg.setContentsMargins(10, 14, 10, 10); mg.setSpacing(6)
-        
-        self.mesh_path_label = QLineEdit()
-        self.mesh_path_label.setReadOnly(True)
-        self.mesh_path_label.setStyleSheet("background: #1e1e1e; color: #4fc3f7; border: 1px solid #333; font-size: 10px;")
-        self._add_property_row(mg, "Source", self.mesh_path_label)
-        
+        # 4. Legacy Texture
         self.tex_slot = TextureSlotWidget()
         self.tex_slot.texture_dropped.connect(lambda p: self.update_obj_prop('texture_path', p))
-        self._add_property_row(mg, "Texture", self.tex_slot)
+        self.tex_slot_row = self._add_property_row(mg, "Custom Tex", self.tex_slot)
+        
+        # 5. Opacity
+        self.opacity_slider = PropertySlider(1.0, 0.0, 1.0)
+        self.opacity_slider.valueChanged.connect(lambda v: self.update_obj_prop('alpha', v))
+        self._add_property_row(mg, "Opacity", self.opacity_slider)
+        
+        layout.addWidget(self.mesh_mat_group)
+        self.mesh_group = self.mesh_mat_group
+        self.mat_group = self.mesh_mat_group
         
         layout.addWidget(self.mesh_group)
+
+    def _init_spawner_ui(self, layout):
+        self.spawner_group = QGroupBox("Spawner Settings")
+        self.spawner_group.setStyleSheet(PROPS_SS)
+        sg = QVBoxLayout(self.spawner_group)
+        sg.setContentsMargins(10, 14, 10, 10); sg.setSpacing(6)
+
+        self.spawn_count = QSpinBox()
+        self.spawn_count.setStyleSheet(SPIN_SS); self.spawn_count.setRange(1, 1000)
+        self.spawn_count.valueChanged.connect(lambda v: self.update_obj_prop('spawner_count', v))
+        self._add_property_row(sg, "Count", self.spawn_count)
+
+        self.spawn_radius = PropertySlider(10.0, 0.0, 1000.0)
+        self.spawn_radius.valueChanged.connect(lambda v: self.update_obj_prop('spawner_radius', v))
+        self._add_property_row(sg, "Radius", self.spawn_radius)
+
+        self.spawn_ground = QCheckBox("Find Ground")
+        self.spawn_ground.setStyleSheet(LABEL_SS)
+        self.spawn_ground.toggled.connect(lambda v: self.update_obj_prop('spawner_find_ground', v))
+        sg.addWidget(self.spawn_ground)
+        
+        # Boid Movement Controller Selector
+        sg.addWidget(QLabel("Boid Movement Controller (AI):", styleSheet=LABEL_SS))
+        scp_container = QWidget()
+        scp_layout = QHBoxLayout(scp_container)
+        scp_layout.setContentsMargins(0,0,0,0)
+        
+        self.spawner_controller_picker_lbl = QLabel("None")
+        self.spawner_controller_picker_lbl.setStyleSheet("color: #ccc; border: 1px solid #555; border-radius: 4px; padding: 4px;")
+        
+        btn = QPushButton("Browse...")
+        btn.setStyleSheet(BTN_SS)
+        btn.clicked.connect(self._browse_spawner_controller)
+        
+        scp_layout.addWidget(self.spawner_controller_picker_lbl)
+        scp_layout.addWidget(btn)
+        sg.addWidget(scp_container)
+        
+        # We can add lists/ranges for offset and tint, or assume single value for simple use case
+        # For full UI of array of prefabs:
+        self.prefab_list_widget = PrefabListWidget()
+        self.prefab_list_widget.setFixedHeight(80)
+        self.prefab_list_widget.prefab_dropped.connect(self._on_add_spawner_prefab)
+        sg.addWidget(QLabel("Prefabs (Drop .prefab files below):", styleSheet=LABEL_SS))
+        sg.addWidget(self.prefab_list_widget)
+        
+        btn_layout = QHBoxLayout()
+        self.add_prefab_btn = QPushButton("Add Prefab...")
+        self.add_prefab_btn.setStyleSheet(BTN_SS + "background: #2d5a27;")
+        self.add_prefab_btn.clicked.connect(self._on_browse_spawner_prefab)
+        
+        self.rem_prefab_btn = QPushButton("Remove Selected")
+        self.rem_prefab_btn.setStyleSheet(BTN_SS)
+        self.rem_prefab_btn.clicked.connect(self._on_remove_spawner_prefab)
+        
+        btn_layout.addWidget(self.add_prefab_btn)
+        btn_layout.addWidget(self.rem_prefab_btn)
+        sg.addLayout(btn_layout)
+
+        self.respawn_btn = QPushButton("Respawn")
+        self.respawn_btn.setStyleSheet(BTN_SS + "background: #3a5a8a;")
+        self.respawn_btn.clicked.connect(self._on_respawn_spawner)
+        sg.addWidget(self.respawn_btn)
+
+        layout.addWidget(self.spawner_group)
+
+    def _on_respawn_spawner(self):
+        if not self._current_objects: return
+        from py_editor.ui.scene.object_system import respawn_spawner
+        # Walk up to the scene view to mutate the shared scene_objects list.
+        sv = self.window()
+        viewport = None
+        for attr in ('viewport', 'scene_view', 'scene_editor'):
+            target = getattr(sv, attr, None)
+            if target is not None:
+                viewport = getattr(target, 'viewport', target)
+                break
+        if viewport is None or not hasattr(viewport, 'scene_objects'):
+            print("[PROPS] Respawn: could not locate viewport.scene_objects")
+            return
+        for spawner in self._current_objects:
+            if getattr(spawner, 'obj_type', None) == 'spawner':
+                respawn_spawner(spawner, viewport.scene_objects)
+        try: viewport.update()
+        except Exception: pass
+
+    def _on_add_spawner_prefab(self, path):
+        if not self._current_objects: return
+        for obj in self._current_objects:
+            if not hasattr(obj, 'spawner_prefabs'):
+                obj.spawner_prefabs = []
+            obj.spawner_prefabs.append(path)
+        self.set_objects(self._current_objects)
+        self.property_changed.emit()
+
+    def _on_remove_spawner_prefab(self):
+        if not self._current_objects: return
+        row = self.prefab_list_widget.currentRow()
+        if row < 0: return
+        for obj in self._current_objects:
+            if row < len(obj.spawner_prefabs):
+                obj.spawner_prefabs.pop(row)
+        self.set_objects(self._current_objects)
+        self.property_changed.emit()
+
+    def _on_browse_spawner_prefab(self):
+        from PyQt6.QtWidgets import QFileDialog
+        from py_editor.core import paths as _ap
+        root = _ap.get_project_root()
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Add Spawner Asset", str(root),
+            "Spawnable Assets (*.prefab *.mesh *.fbx *.obj);;Prefab (*.prefab);;Mesh (*.mesh *.fbx *.obj)")
+        if path:
+            self._on_add_spawner_prefab(path)
+
+    def _browse_spawner_controller(self):
+        from PyQt6.QtWidgets import QFileDialog
+        ctrl_dir = str(Path(__file__).parent.parent.parent.parent / "controllers")
+        path, _ = QFileDialog.getOpenFileName(self, "Select Spawner Controller", ctrl_dir, "Controller Files (*.controller)")
+        if path:
+            self._on_spawner_controller_picked(path)
+
+    def _on_spawner_controller_picked(self, name_or_path):
+        if not self._current_objects: return
+        self.update_obj_prop('spawner_controller_type', name_or_path)
+        self.spawner_controller_picker_lbl.setText(Path(name_or_path).name if '.controller' in name_or_path else name_or_path)
+        self.property_changed.emit()
 
     def _init_pbr_ui(self, layout):
         self.pbr_group = QGroupBox("PBR Material (Megascans)")
@@ -468,10 +699,20 @@ class ObjectPropertiesPanel(QWidget):
 
     def _on_pbr_map_dropped(self, m_type, path):
         if not self._current_objects: return
+        # Immediate UI local update
+        if m_type in self.pbr_slots:
+            self.pbr_slots[m_type].set_texture(path)
+
         for obj in self._current_objects:
             if not hasattr(obj, 'pbr_maps') or obj.pbr_maps is None:
                 obj.pbr_maps = {}
             obj.pbr_maps[m_type] = path
+            
+            # Sync to material for saving
+            if not hasattr(obj, 'material') or not isinstance(obj.material, dict):
+                obj.material = {}
+            obj.material[m_type] = path
+
             # Auto-activate PBR shader when the first map is dropped
             if getattr(obj, 'shader_name', 'Standard') == 'Standard':
                 obj.shader_name = 'PBR Material'
@@ -512,6 +753,10 @@ class ObjectPropertiesPanel(QWidget):
         if found:
             for obj in self._current_objects:
                 obj.pbr_maps.update(found)
+                # Sync to material for saving
+                if not hasattr(obj, 'material') or not isinstance(obj.material, dict):
+                    obj.material = {}
+                obj.material.update(found)
                 obj.shader_name = "PBR Material"
             self.set_objects(self._current_objects)
             self.property_changed.emit()
@@ -539,9 +784,37 @@ class ObjectPropertiesPanel(QWidget):
         if not self._current_objects: return
         for obj in self._current_objects:
             setattr(obj, prop, val)
-        
+            # Sync to material for saving if in material editing mode
+            if hasattr(obj, 'material') and isinstance(obj.material, dict):
+                obj.material[prop] = val
+            
+            # Auto-apply textures from .mat asset
+            if prop == 'material_path' and val and val.endswith('.material'):
+                try:
+                    import json
+                    with open(val, 'r') as f:
+                        data = json.load(f)
+                    tex = data.get('albedo') or data.get('texture_path')
+                    if tex:
+                        obj.texture_path = tex
+                        # Update UI
+                        if hasattr(self, 'tex_slot'): self.tex_slot.set_texture(tex)
+                    # If it's a PBR mat, update maps
+                    if "albedo" in data or "normal" in data:
+                        obj.pbr_maps = data
+                        obj.shader_name = "PBR Material"
+                except Exception as e:
+                    print(f"[PROPERTIES] Failed to auto-apply material {val}: {e}")
+
+        # Immediate UI Feedback
+        if prop == 'mesh_path':
+            self.mesh_slot.set_mesh(val)
+        elif prop == 'texture_path':
+            self.tex_slot.set_texture(val)
+        elif prop == 'material_path':
+            self.mat_slot.set_material(val)
+
         # Throttled regeneration for voxel world settings (freq, amp, seed etc)
-        # to avoid flooding the thread pool during slider drags.
         needs_throttle = prop.startswith('voxel_') or prop in ('sun_color', 'ambient_color')
         if needs_throttle:
             from PyQt6.QtCore import QTimer
@@ -561,12 +834,36 @@ class ObjectPropertiesPanel(QWidget):
         self.property_changed.emit()
 
     def set_objects(self, objs: list[SceneObject]):
-        self._current_objects = objs
         if not objs:
-            self._title.setText("  No Selection")
-            for group in [self.pos_group, self.rot_group, self.scale_group, self.mat_group, self.env_group, self.land_group, self.ocean_group, self.logic_group, self.shader_group, self.mesh_group, self.vox_group, self.cont_group]:
-                group.hide()
+            self.header_label.setText("PROPERTIES")
+            self.header_widget.setStyleSheet("background-color: #3e3e42; border-bottom: 1px solid #555;")
+            self.save_btn.setVisible(False)
+            self._current_prefab_path = None
+            self._current_mat_path = None
+            self._current_spawner_path = None
+            for group in [self.pos_group, self.rot_group, self.scale_group, self.mat_group, self.env_group, self.land_group, self.ocean_group, self.logic_group, self.shader_group, self.mesh_group, self.vox_group, self.cont_group, self.spawner_group]:
+                group.setVisible(False)
             return
+
+        primary = objs[0]
+        
+        # Header update
+        if getattr(self, '_current_mat_path', None):
+            self.header_label.setText(f"Editing Material: {Path(self._current_mat_path).name}")
+            self.header_widget.setStyleSheet("background-color: #2d5a27; border-bottom: 1px solid #555;") # Green tint for standalone
+        elif getattr(self, '_current_prefab_path', None):
+            self.header_label.setText(f"Editing Prefab: {Path(self._current_prefab_path).name}")
+            self.header_widget.setStyleSheet("background-color: #3a5a8a; border-bottom: 1px solid #555;") # Blue tint for standalone
+        elif getattr(self, '_current_spawner_path', None):
+            self.header_label.setText(f"Editing Spawner: {Path(self._current_spawner_path).name}")
+            self.header_widget.setStyleSheet("background-color: #5a3a8a; border-bottom: 1px solid #555;") # Purple tint for standalone
+        else:
+            self.header_label.setText(f"Properties: {primary.name}")
+            self.header_widget.setStyleSheet("background-color: #3e3e42; border-bottom: 1px solid #555;")
+
+        self._updating = True
+        
+        self._current_objects = objs
 
         # If multiple objects selected, show common info or first object's info
         primary = objs[0]
@@ -587,30 +884,50 @@ class ObjectPropertiesPanel(QWidget):
             self._rot_spins[i].setValue(primary.rotation[i])
             self._scale_spins[i].setValue(primary.scale[i])
         
-        self.mat_group.setVisible(primary.obj_type in ('cube', 'sphere', 'plane', 'landscape', 'mesh'))
-        # Show PBR group for mesh/cube objects always — dragging a map in auto-switches the shader
-        self.pbr_group.setVisible(primary.obj_type in ('cube', 'sphere', 'plane', 'mesh'))
+        is_renderable = primary.obj_type in ('cube', 'sphere', 'plane', 'landscape', 'mesh')
+        
+        # Determine if it's PBR mode
+        s_name = getattr(primary, 'shader_name', '')
+        is_pbr = "pbr_material" in s_name.lower() or s_name == "PBR Material"
+        
+        self.mat_group.setVisible(is_renderable)
+        self.shader_group.setVisible(is_renderable)
+        self.pbr_group.setVisible(is_renderable and is_pbr)
+        
+        # Hide legacy features in PBR mode
+        preset_row = getattr(self, 'mat_preset_row', None)
+        if preset_row: preset_row.setVisible(not is_pbr)
+        
+        tex_row = getattr(self, 'tex_slot_row', None)
+        if tex_row: tex_row.setVisible(not is_pbr)
+
         self.env_group.setVisible(primary.obj_type in ('atmosphere', 'universe'))
         self.land_group.setVisible(primary.obj_type == 'landscape')
-        # ocean_world shares the same wave controls as ocean (FFT toggle, cascades, hero, foam…)
         self.ocean_group.setVisible(primary.obj_type in ('ocean', 'ocean_world'))
         self.cam_group.setVisible(primary.obj_type == 'camera')
         self.mesh_group.setVisible(primary.obj_type == 'mesh')
         self.voxel_group.setVisible(primary.obj_type == 'voxel_world')
         self.controller_group.setVisible(primary.obj_type in ('cube', 'sphere', 'mesh', 'voxel_world'))
         self.weather_group.setVisible(primary.obj_type == 'weather')
+        self.spawner_group.setVisible(primary.obj_type == 'spawner')
         
         if self.mat_group.isVisible():
             preset = primary.material.get('preset', 'Custom')
             idx = self.mat_preset.findText(preset)
             if idx != -1: self.mat_preset.setCurrentIndex(idx)
             
-            idx_cont = self.controller_combo.findText(getattr(primary, 'controller_type', 'None'))
-            if idx_cont != -1: self.controller_combo.setCurrentIndex(idx_cont)
             self.opacity_slider.setValue(getattr(primary, 'alpha', 1.0))
             
-            # PBR Sync — always sync when group is visible
-            if self.pbr_group.isVisible():
+        c_type = getattr(primary, 'controller_type', 'None')
+        if hasattr(self, 'controller_picker_lbl'):
+            self.controller_picker_lbl.setText(Path(c_type).name if '.controller' in c_type else c_type)
+            
+        s_c_type = getattr(primary, 'spawner_controller_type', 'None')
+        if hasattr(self, 'spawner_controller_picker_lbl'):
+            self.spawner_controller_picker_lbl.setText(Path(s_c_type).name if '.controller' in s_c_type else s_c_type)
+            
+        # PBR Sync — always sync when group is visible
+        if self.pbr_group.isVisible():
                 pbr_maps = getattr(primary, 'pbr_maps', {})
                 for m_type, slot in self.pbr_slots.items():
                     slot.set_texture(pbr_maps.get(m_type))
@@ -620,12 +937,15 @@ class ObjectPropertiesPanel(QWidget):
                 self.pbr_disp_scale.setValue(getattr(primary, 'pbr_displacement_scale', 0.05))
         
         if self.mesh_group.isVisible():
-            self.mesh_path_label.setText(Path(primary.mesh_path).name if primary.mesh_path else "None")
+            self.mesh_slot.set_mesh(primary.mesh_path if primary.mesh_path else "")
             self.tex_slot.set_texture(primary.texture_path)
-        
+            
         # Shader Sync
-        idx = self.shader_combo.findText(getattr(primary, 'shader_name', 'Standard'))
-        if idx != -1: self.shader_combo.setCurrentIndex(idx)
+        if hasattr(self, 'shader_picker_lbl'):
+            if s_name:
+                self.shader_picker_lbl.setText(Path(s_name).name)
+            else:
+                self.shader_picker_lbl.setText("None")
 
         # ... (remaining sync logic uses 'primary' as reference)
         obj = primary
@@ -651,12 +971,32 @@ class ObjectPropertiesPanel(QWidget):
                 self.star_density.setValue(getattr(obj, 'star_density', 1.0))
                 self.neb_intensity.setValue(getattr(obj, 'nebula_intensity', 0.5))
         elif obj.obj_type == 'landscape':
-            self.land_seed.setValue(getattr(obj, 'landscape_seed', 123))
-            self.land_h_scale.setValue(getattr(obj, 'landscape_height_scale', 30.0))
-            self.land_res.setValue(getattr(obj, 'landscape_resolution', 32))
-            self.land_ocean_lvl.setValue(getattr(obj, 'landscape_ocean_level', 0.0))
-            idx = self.land_type.findText(getattr(obj, 'landscape_type', 'procedural').capitalize())
-            if idx != -1: self.land_type.setCurrentIndex(idx)
+            self.res_spin.setValue(getattr(obj, 'landscape_resolution', 32))
+            self.seed_spin.setValue(getattr(obj, 'landscape_seed', 123))
+            self.hscale_slider.setValue(getattr(obj, 'landscape_height_scale', 150.0))
+            self.ocean_level_slider.setValue(getattr(obj, 'landscape_ocean_level', 0.08))
+            self.ocean_flat_slider.setValue(getattr(obj, 'landscape_ocean_flattening', 0.4))
+            self.tip_smooth_slider.setValue(getattr(obj, 'landscape_tip_smoothing', 0.1))
+            self.spawn_enabled.setChecked(getattr(obj, 'landscape_spawn_enabled', False))
+            self.visualize_climate.setChecked(getattr(obj, 'visualize_climate', False))
+            
+        if obj.obj_type == 'spawner':
+            self.spawn_count.blockSignals(True)
+            self.spawn_count.setValue(getattr(obj, 'spawner_count', 5))
+            self.spawn_count.blockSignals(False)
+            
+            self.spawn_radius.setValue(getattr(obj, 'spawner_radius', 10.0))
+            
+            self.spawn_ground.blockSignals(True)
+            self.spawn_ground.setChecked(getattr(obj, 'spawner_find_ground', False))
+            self.spawn_ground.blockSignals(False)
+            
+            self.prefab_list_widget.clear()
+            for p in getattr(obj, 'spawner_prefabs', []):
+                self.prefab_list_widget.addItem(Path(p).name)
+
+        if obj.obj_type == 'weather':
+            pass
         elif obj.obj_type in ('ocean', 'ocean_world'):
             self.ocean_speed.setValue(getattr(obj, 'ocean_wave_speed', 5.0))
             self.ocean_intensity.setValue(getattr(obj, 'ocean_wave_intensity', 1.0))
@@ -717,6 +1057,7 @@ class ObjectPropertiesPanel(QWidget):
             self.vox_detail_combo.blockSignals(False)
             self.vox_seed.setValue(getattr(obj, 'voxel_seed', 123))
             self.vox_world_height.setValue(float(getattr(obj, 'voxel_world_height', 1.0)))
+            self.vox_spawn_dist.setValue(float(getattr(obj, 'voxel_spawn_max_distance', 120.0)))
             idx = self.vox_type.findText(getattr(obj, 'voxel_type', 'Round'))
             if idx != -1: self.vox_type.setCurrentIndex(idx)
             # Infinite-flat checkbox (sync state + hide for Round mode)
@@ -735,6 +1076,7 @@ class ObjectPropertiesPanel(QWidget):
             self.vox_max_chunk_res.blockSignals(True)
             self.vox_max_chunk_res.setValue(int(getattr(obj, 'voxel_max_single_chunk_res', 128)))
             self.vox_max_chunk_res.blockSignals(False)
+            self.vox_spawn_dist.setValue(float(getattr(obj, 'voxel_spawn_max_distance', 120.0)))
             # Layers — features (3D volumetric) shown first with a prefix so
             # they can be identified and removed from the same list.
             self.vox_layers_list.clear()
@@ -760,6 +1102,12 @@ class ObjectPropertiesPanel(QWidget):
             self.logic_list_widget.addItem(item)
             
         self._updating = False
+
+        # Refresh shader parameters UI after _updating is False
+        if hasattr(self, 'shader_picker_lbl'):
+            name = getattr(primary, 'shader_name', '')
+            params = getattr(primary, 'shader_params', {})
+            self._update_shader_params_ui(name, params)
         # Physics UI sync
         try:
             self.physics_chk.setChecked(bool(getattr(primary, 'physics_enabled', True)))
@@ -785,7 +1133,7 @@ class ObjectPropertiesPanel(QWidget):
         self.set_objects([obj] if obj else [])
 
     def _init_landscape_ui(self, layout):
-        self.land_group = QGroupBox("Landscape Settings")
+        self.land_group = QGroupBox("Landscape Settings (Deprecated)")
         self.land_group.setStyleSheet(PROPS_SS)
         lg = QVBoxLayout(self.land_group)
         
@@ -1042,27 +1390,116 @@ class ObjectPropertiesPanel(QWidget):
         
     def set_prefab(self, path, data):
         """Enter Prefab Editing mode."""
+        if not data or not isinstance(data, dict):
+            print(f"[PROPERTIES] Invalid prefab data for {path}")
+            return
+            
         root = data.get("root", {})
         obj = SceneObject.from_dict(root)
         obj.name = Path(path).stem
         
         self._updating = True
         self._current_prefab_path = path
+        self._current_mat_path = None
         self.set_objects([obj])
         self.save_btn.setVisible(True)
+        self.save_btn.setText("💾 SAVE PREFAB")
+        self._updating = False
+
+    def set_spawner(self, path, data):
+        if not data or not isinstance(data, dict):
+            print(f"[PROPERTIES] Invalid spawner data for {path}")
+            return
+            
+        obj = SceneObject.from_dict({"type": "spawner", **data.get('settings', {})})
+        obj.spawner_prefabs = data.get("prefabs", [])
+        obj.name = Path(path).stem
+        
+        self._updating = True
+        self._current_spawner_path = path
+        self._current_prefab_path = None
+        self._current_mat_path = None
+        self.set_objects([obj])
+        self.save_btn.setVisible(True)
+        self.save_btn.setText("💾 SAVE SPAWNER")
+        if hasattr(self, 'spawner_group'):
+            self.spawner_group.setVisible(True)
+            self.spawner_group.setFlat(False)
+        self._updating = False
+
+    def set_standalone_material(self, path, data):
+        """Enter Standalone Material Editing mode."""
+        if not data or not isinstance(data, dict):
+            data = {"base_color": [1,1,1,1]}
+            
+        # Create a proxy sphere to hold the material properties
+        obj = SceneObject(Path(path).stem, "sphere")
+        obj.material = data
+        
+        # If the material dict has PBR maps at the root, move them into pbr_maps
+        has_pbr = False
+        pbr_keys = ["albedo", "normal", "roughness", "metallic", "ao", "displacement"]
+        for k in pbr_keys:
+            if k in data:
+                has_pbr = True
+                # Strictly speaking, only move them if they are likely to be paths (strings)
+                # while scalar values (roughness/metallic as floats) remain handled by their own sliders logic
+                if isinstance(data[k], str):
+                    obj.pbr_maps[k] = data[k]
+        
+        if has_pbr:
+            obj.shader_name = "PBR Material"
+            
+        self._updating = True
+        self._current_prefab_path = None
+        self._current_mat_path = path
+        self.set_objects([obj])
+        
+        self.save_btn.setVisible(True)
+        self.save_btn.setText("💾 SAVE MATERIAL")
         self._updating = False
         
     def _on_save_prefab(self):
-        if not self._current_prefab_path or not self._current_objects: return
+        if not self._current_objects: return
         obj = self._current_objects[0]
-        data = {
-            "type": "prefab",
-            "root": obj.to_dict()
-        }
-        with open(self._current_prefab_path, 'w') as f:
-            import json
-            json.dump(data, f, indent=4)
-        print(f"[PROPERTIES] Saved Prefab: {self._current_prefab_path}")
+        import json
+
+        if getattr(self, '_current_prefab_path', None):
+            data = {"type": "prefab", "root": obj.to_dict()}
+            data = asset_paths.normalize_for_save(data)
+            with open(self._current_prefab_path, 'w') as f:
+                json.dump(data, f, indent=4)
+            print(f"[PROPERTIES] Saved Prefab: {self._current_prefab_path}")
+        elif getattr(self, '_current_spawner_path', None):
+            prefabs_rel = [asset_paths.to_relative(p) if isinstance(p, str) else p for p in obj.spawner_prefabs]
+            data = {
+                "type": "spawner",
+                "prefabs": prefabs_rel,
+                "settings": {
+                    "count": obj.spawner_count,
+                    "radius": obj.spawner_radius,
+                    "min_offset": obj.spawner_min_offset,
+                    "max_offset": obj.spawner_max_offset,
+                    "min_tint": obj.spawner_min_tint,
+                    "max_tint": obj.spawner_max_tint,
+                    "find_ground": obj.spawner_find_ground,
+                    "controller_type": getattr(obj, "spawner_controller_type", "None")
+                }
+            }
+            data = asset_paths.normalize_for_save(data)
+            with open(self._current_spawner_path, 'w') as f:
+                json.dump(data, f, indent=4)
+            print(f"[PROPERTIES] Saved Spawner: {self._current_spawner_path}")
+        elif getattr(self, '_current_mat_path', None) and self._current_mat_path:
+            # Save material (PBR maps or basic material dict)
+            data = dict(obj.material)
+            if obj.shader_name == "PBR Material":
+                for k, v in obj.pbr_maps.items():
+                    if v: data[k] = v
+            data = asset_paths.normalize_for_save(data)
+            with open(self._current_mat_path, 'w') as f:
+                json.dump(data, f, indent=4)
+            print(f"[PROPERTIES] Saved Material: {self._current_mat_path}")
 
     def _on_tint_clicked(self):
         if not self._current_objects: return
@@ -1079,11 +1516,22 @@ class ObjectPropertiesPanel(QWidget):
         self.shader_group.setStyleSheet(PROPS_SS)
         sg = QVBoxLayout(self.shader_group)
         
-        self.shader_combo = QComboBox()
-        self.shader_combo.addItems(list(SHADER_REGISTRY.keys()))
-        self.shader_combo.setStyleSheet(COMBO_SS)
-        self.shader_combo.currentTextChanged.connect(self._on_shader_name_changed)
-        self._add_property_row(sg, "Shader", self.shader_combo)
+        # Shader Picker
+        picker_container = QWidget()
+        picker_layout = QHBoxLayout(picker_container)
+        picker_layout.setContentsMargins(0,0,0,0)
+        
+        self.shader_picker_lbl = QLabel("None")
+        self.shader_picker_lbl.setStyleSheet("color: #ccc; border: 1px solid #555; border-radius: 4px; padding: 4px;")
+        
+        btn = QPushButton("Browse...")
+        btn.setStyleSheet(BTN_SS)
+        btn.clicked.connect(self._browse_shader)
+        
+        picker_layout.addWidget(self.shader_picker_lbl)
+        picker_layout.addWidget(btn)
+        
+        self._add_property_row(sg, "Shader File", picker_container)
         
         # Shader Parameter Sliders (Context Variable)
         self.shader_params_group = QFrame()
@@ -1093,33 +1541,59 @@ class ObjectPropertiesPanel(QWidget):
         
         layout.addWidget(self.shader_group)
 
+    def _browse_shader(self):
+        from PyQt6.QtWidgets import QFileDialog
+        core_shaders_dir = str(Path(__file__).parent.parent.parent.parent / "shaders")
+        path, _ = QFileDialog.getOpenFileName(self, "Select Shader", core_shaders_dir, "Shader Files (*.shader)")
+        if path:
+
+            self._on_shader_name_changed(path)
+
     def _on_shader_name_changed(self, name):
         if self._updating: return
         self.update_obj_prop('shader_name', name)
+        self.shader_picker_lbl.setText(Path(name).name)
         
         # Initialize defaults if params are missing for this shader
         for obj in self._current_objects:
-            if not obj.shader_params or 'speed' not in obj.shader_params:
-                if name == "Fish Swimming":
+            if not obj.shader_params or ('speed' not in obj.shader_params and 'wave_speed' not in obj.shader_params):
+                if "fish_swimming" in name.lower() or name == "Fish Swimming":
                     obj.shader_params.update({
-                        "speed": 2.0, "freq": 1.5, "intensity": 1.0,
-                        "yaw_amp": 0.2, "side_amp": 0.1, "roll_amp": 0.05, "flag_amp": 0.05,
+                        "speed": 6.0, "freq": 3.0, "intensity": 1.0,
+                        "yaw_amp": 0.4, "side_amp": 0.2, "roll_amp": 0.1, "flag_amp": 0.1,
                         "forward_axis": 0.0
                     })
-                elif name == "Flag Waving":
+                elif "flag_waving" in name.lower() or name == "Flag Waving":
                     obj.shader_params.update({"wave_speed": 3.0, "wave_amplitude": 0.1})
+            
+        self.property_changed.emit()
         
         # Refresh params UI based on first obj
         if self._current_objects:
             self._update_shader_params_ui(name, getattr(self._current_objects[0], 'shader_params', {}))
+
+    def _browse_controller(self):
+        from PyQt6.QtWidgets import QFileDialog
+        ctrl_dir = str(Path(__file__).parent.parent.parent.parent / "controllers")
+        path, _ = QFileDialog.getOpenFileName(self, "Select Controller File", ctrl_dir, "Controller Files (*.controller)")
+        if path:
+            self._on_controller_picked(path)
+
+    def _on_controller_picked(self, name_or_path):
+        if self._updating: return
+        self.update_obj_prop('controller_type', name_or_path)
+        self.controller_picker_lbl.setText(Path(name_or_path).name if '.controller' in name_or_path else name_or_path)
+        self.property_changed.emit()
 
     def _update_shader_params_ui(self, shader_name, params):
         # Clear old
         while self.sp_lay.count():
             child = self.sp_lay.takeAt(0)
             if child.widget(): child.widget().deleteLater()
+            
+        shader_name_lower = shader_name.lower()
         
-        if shader_name == "Fish Swimming":
+        if "fish_swimming" in shader_name_lower or shader_name == "Fish Swimming":
             # Forward Axis Selection
             axis_combo = QComboBox()
             axis_combo.addItems(["X-Forward", "Y-Forward", "Z-Forward"])
@@ -1140,7 +1614,7 @@ class ObjectPropertiesPanel(QWidget):
             self._add_param_slider("Side Amp", "side_amp", params.get("side_amp", 0.1), 0, 1)
             self._add_param_slider("Roll Amp", "roll_amp", params.get("roll_amp", 0.05), 0, 0.5)
             self._add_param_slider("Flag Amp", "flag_amp", params.get("flag_amp", 0.05), 0, 0.5)
-        elif shader_name == "Flag Waving":
+        elif "flag_waving" in shader_name_lower or shader_name == "Flag Waving":
             invert_chk = QCheckBox()
             invert_chk.setChecked(bool(params.get("invert_axis", 0)))
             invert_chk.toggled.connect(lambda c: self.update_shader_param("invert_axis", float(c)))
@@ -1162,6 +1636,7 @@ class ObjectPropertiesPanel(QWidget):
         row.addWidget(lbl); row.addWidget(widget)
         layout.addWidget(container)
         self._row_map[widget] = container
+        return container
 
     def _init_controller_ui(self, layout):
         self.cont_group = QGroupBox("Controller Settings")
@@ -1169,15 +1644,26 @@ class ObjectPropertiesPanel(QWidget):
         self.controller_group = self.cont_group
         lg = QVBoxLayout(self.cont_group)
         
-        self.controller_combo = QComboBox()
-        self.controller_combo.addItems(["None", "Player", "AI (CPU)", "AI (GPU Fish)", "AI (GPU Bird)"])
-        self.controller_combo.setStyleSheet(COMBO_SS)
-        self.controller_combo.currentTextChanged.connect(lambda t: self.update_obj_prop('controller_type', t))
-        self._add_property_row(lg, "Type", self.controller_combo)
+        # Controller Picker (Exact match for Shader Picker UI)
+        picker_container = QWidget()
+        picker_layout = QHBoxLayout(picker_container)
+        picker_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.controller_picker_lbl = QLabel("None")
+        self.controller_picker_lbl.setStyleSheet("color: #ccc; border: 1px solid #555; border-radius: 4px; padding: 4px;")
+        
+        self.browse_ctrl_btn = QPushButton("Browse...")
+        self.browse_ctrl_btn.setStyleSheet(BTN_SS)
+        self.browse_ctrl_btn.clicked.connect(self._browse_controller)
+        
+        picker_layout.addWidget(self.controller_picker_lbl)
+        picker_layout.addWidget(self.browse_ctrl_btn)
+        
+        self._add_property_row(lg, "Controller File", picker_container)
         
         # Physics toggle
         self.physics_chk = QCheckBox("Physics Enabled")
-        self.physics_chk.setChecked(True)
+        self.physics_chk.setChecked(False) # Off by default
         self.physics_chk.toggled.connect(lambda c: self.update_obj_prop('physics_enabled', bool(c)))
         self._add_property_row(lg, "Physics", self.physics_chk)
 
@@ -1319,6 +1805,14 @@ class ObjectPropertiesPanel(QWidget):
         self.vox_prefetch.valueChanged.connect(lambda v: self.update_obj_prop('voxel_prefetch_neighborhood', int(v)))
         self._add_property_row(vg, "Prefetch", self.vox_prefetch)
 
+        # Spawn draw distance — keeps biome spawn density high up close without
+        # paying to render thousands of grass meshes on distant chunks.
+        self.vox_spawn_dist = PropertySlider(120.0, 20.0, 800.0)
+        self.vox_spawn_dist.setToolTip("Max camera distance (meters) at which biome spawns are drawn.")
+        self.vox_spawn_dist.valueChanged.connect(
+            lambda v: self.update_obj_prop('voxel_spawn_max_distance', float(v)))
+        self._add_property_row(vg, "Spawn Distance", self.vox_spawn_dist)
+
         # Max single-chunk resolution threshold
         self.vox_max_chunk_res = QSpinBox()
         self.vox_max_chunk_res.setRange(16, 512)
@@ -1449,6 +1943,13 @@ class ObjectPropertiesPanel(QWidget):
         vbg = QVBoxLayout(self.v_biome_panel)
         vbg.setContentsMargins(0, 5, 0, 0)
 
+        self.vb_material = QComboBox()
+        self.vb_material.addItems(get_shader_list())
+        self.vb_material.setStyleSheet(COMBO_SS)
+        self.vb_material.currentTextChanged.connect(
+            lambda n: self._update_selected_vox_biome('material', str(n)))
+        self._add_property_row(vbg, "Material", self.vb_material)
+
         self.vb_color = ColorPickerButton([0.5, 0.5, 0.5, 1.0])
         self.vb_color.colorChanged.connect(
             lambda c: self._update_selected_vox_biome('color', list(c)))
@@ -1483,6 +1984,114 @@ class ObjectPropertiesPanel(QWidget):
         self.vb_s_max.valueChanged.connect(
             lambda v: self._update_selected_vox_biome('slope_max', float(v)))
         self._add_property_row(vbg, "Slope Max", self.vb_s_max)
+
+        # ---- Spawners sub-panel (per biome) ----
+        spawn_lbl = QLabel("Spawners")
+        spawn_lbl.setStyleSheet(LABEL_SS)
+        vbg.addWidget(spawn_lbl)
+
+        self.vb_spawn_list = QListWidget()
+        self.vb_spawn_list.setStyleSheet(LIST_SS)
+        self.vb_spawn_list.setFixedHeight(70)
+        self.vb_spawn_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.vb_spawn_list.customContextMenuRequested.connect(self._on_vb_spawn_context)
+        self.vb_spawn_list.currentRowChanged.connect(self._on_vb_spawn_selected)
+        vbg.addWidget(self.vb_spawn_list)
+
+        self.vb_spawn_panel = QFrame()
+        self.vb_spawn_panel.setVisible(False)
+        spg = QVBoxLayout(self.vb_spawn_panel)
+        spg.setContentsMargins(0, 2, 0, 0)
+
+        self.vbs_kind = QComboBox()
+        self.vbs_kind.addItems(["object:cube", "object:sphere", "object:plane",
+                                "object:cylinder", "object:cone", "object:mesh",
+                                "prefab"])
+        self.vbs_kind.setStyleSheet(COMBO_SS)
+        self.vbs_kind.currentTextChanged.connect(
+            lambda v: self._update_selected_vb_spawn('kind', str(v)))
+        self._add_property_row(spg, "Kind", self.vbs_kind)
+
+        from PyQt6.QtWidgets import QHBoxLayout
+        vbs_row = QWidget()
+        vbs_rowl = QHBoxLayout(vbs_row)
+        vbs_rowl.setContentsMargins(0, 0, 0, 0); vbs_rowl.setSpacing(4)
+        self.vbs_prefab = QLineEdit()
+        self.vbs_prefab.setPlaceholderText("Pick a .prefab / .mesh / .fbx / .obj…")
+        self.vbs_prefab.editingFinished.connect(
+            lambda: self._update_selected_vb_spawn('prefab_path', self.vbs_prefab.text()))
+        vbs_browse = QPushButton("Browse…")
+        vbs_browse.setStyleSheet(BTN_SS)
+        vbs_browse.clicked.connect(self._on_browse_vb_spawn_asset)
+        vbs_rowl.addWidget(self.vbs_prefab, 1)
+        vbs_rowl.addWidget(vbs_browse)
+        self._add_property_row(spg, "Asset", vbs_row)
+
+        self.vbs_shader = QComboBox()
+        self.vbs_shader.addItems(get_shader_list())
+        self.vbs_shader.setStyleSheet(COMBO_SS)
+        self.vbs_shader.currentTextChanged.connect(
+            lambda v: self._update_selected_vb_spawn('shader_name', str(v)))
+        self._add_property_row(spg, "Shader", self.vbs_shader)
+
+        self.vbs_material = MaterialSlotWidget()
+        self.vbs_material.material_dropped.connect(
+            lambda v: self._update_selected_vb_spawn('material_path', str(v)))
+        self._add_property_row(spg, "Material", self.vbs_material)
+
+        self.vbs_density = PropertySlider(0.05, 0.0, 1.0)
+        self.vbs_density.valueChanged.connect(
+            lambda v: self._update_selected_vb_spawn('density', float(v)))
+        self._add_property_row(spg, "Density", self.vbs_density)
+
+        self.vbs_slope_min = PropertySlider(0.7, 0.0, 1.0)
+        self.vbs_slope_min.valueChanged.connect(
+            lambda v: self._update_selected_vb_spawn('slope_min', float(v)))
+        self._add_property_row(spg, "Slope Min", self.vbs_slope_min)
+
+        self.vbs_slope_max = PropertySlider(1.0, 0.0, 1.0)
+        self.vbs_slope_max.valueChanged.connect(
+            lambda v: self._update_selected_vb_spawn('slope_max', float(v)))
+        self._add_property_row(spg, "Slope Max", self.vbs_slope_max)
+
+        self.vbs_h_min = PropertySlider(-1000.0, -10000.0, 10000.0)
+        self.vbs_h_min.valueChanged.connect(
+            lambda v: self._update_selected_vb_spawn('height_min', float(v)))
+        self._add_property_row(spg, "Height Min", self.vbs_h_min)
+
+        self.vbs_h_max = PropertySlider(1000.0, -10000.0, 10000.0)
+        self.vbs_h_max.valueChanged.connect(
+            lambda v: self._update_selected_vb_spawn('height_max', float(v)))
+        self._add_property_row(spg, "Height Max", self.vbs_h_max)
+
+        self.vbs_scale_min = PropertySlider(0.8, 0.05, 20.0)
+        self.vbs_scale_min.valueChanged.connect(
+            lambda v: self._update_selected_vb_spawn('scale_min', float(v)))
+        self._add_property_row(spg, "Scale Min", self.vbs_scale_min)
+
+        self.vbs_scale_max = PropertySlider(1.2, 0.05, 20.0)
+        self.vbs_scale_max.valueChanged.connect(
+            lambda v: self._update_selected_vb_spawn('scale_max', float(v)))
+        self._add_property_row(spg, "Scale Max", self.vbs_scale_max)
+
+        self.vbs_jitter = PropertySlider(0.3, 0.0, 1.0)
+        self.vbs_jitter.valueChanged.connect(
+            lambda v: self._update_selected_vb_spawn('jitter', float(v)))
+        self._add_property_row(spg, "Jitter", self.vbs_jitter)
+
+        self.vbs_align = QCheckBox("Align to surface normal")
+        self.vbs_align.stateChanged.connect(
+            lambda s: self._update_selected_vb_spawn('align_to_normal', bool(s)))
+        spg.addWidget(self.vbs_align)
+
+        # Dynamic Shader Params Container
+        self.vbs_param_container = QWidget()
+        self.vbs_param_layout = QVBoxLayout(self.vbs_param_container)
+        self.vbs_param_layout.setContentsMargins(0, 5, 0, 0)
+        self.vbs_param_layout.setSpacing(4)
+        spg.addWidget(self.vbs_param_container)
+
+        vbg.addWidget(self.vb_spawn_panel)
 
         vg.addWidget(self.v_biome_panel)
 
@@ -1525,7 +2134,8 @@ class ObjectPropertiesPanel(QWidget):
                 obj.voxel_biomes.append({
                     "name": p_name,
                     "height_range": p['range'], "slope_range": [0.0, 1.0],
-                    "surface": {"color": p['color'], "roughness": p['rough'], "metallic": 0.0}
+                    "surface": {"color": p['color'], "roughness": p['rough'], "metallic": 0.0},
+                    "spawns": p.get('spawns', [])
                 })
         elif action == del_a:
             for obj in self._current_objects:
@@ -1712,6 +2322,9 @@ class ObjectPropertiesPanel(QWidget):
         hrng = b.get('height_range', [0.0, 10.0])
         srng = b.get('slope_range', [0.0, 1.0])
         self._updating = True
+        mat = surf.get('material', 'Standard')
+        mi = self.vb_material.findText(mat)
+        if mi >= 0: self.vb_material.setCurrentIndex(mi)
         self.vb_color.set_color(surf.get('color', [0.5, 0.5, 0.5, 1.0]))
         self.vb_rough.setValue(float(surf.get('roughness', 0.8)))
         self.vb_metallic.setValue(float(surf.get('metallic', 0.0)))
@@ -1719,6 +2332,11 @@ class ObjectPropertiesPanel(QWidget):
         self.vb_h_max.setValue(float(hrng[1]))
         self.vb_s_min.setValue(float(srng[0]))
         self.vb_s_max.setValue(float(srng[1]))
+        # Spawn list
+        self.vb_spawn_list.clear()
+        for sp in b.get('spawns', []):
+            self.vb_spawn_list.addItem(sp.get('kind', 'object:cube'))
+        self.vb_spawn_panel.setVisible(False)
         self._updating = False
         self.v_biome_panel.setVisible(True)
 
@@ -1730,7 +2348,7 @@ class ObjectPropertiesPanel(QWidget):
             biomes = getattr(obj, 'voxel_biomes', [])
             if row >= len(biomes): continue
             b = biomes[row]
-            if key in ('color', 'roughness', 'metallic'):
+            if key in ('color', 'roughness', 'metallic', 'material'):
                 b.setdefault('surface', {})[key] = val
             elif key == 'height_min':
                 hr = b.setdefault('height_range', [0.0, 10.0]); hr[0] = val
@@ -1747,6 +2365,195 @@ class ObjectPropertiesPanel(QWidget):
         self._regen_timer.setSingleShot(True)
         self._regen_timer.timeout.connect(self.property_changed.emit)
         self._regen_timer.start(150)
+
+    def _on_vb_spawn_context(self, pos):
+        if not self._current_objects: return
+        brow = self.vox_biomes_list.currentRow()
+        if brow < 0: return
+        obj = self._current_objects[0]
+        biomes = getattr(obj, 'voxel_biomes', [])
+        if brow >= len(biomes): return
+        menu = QMenu(self)
+        menu.setStyleSheet("background:#252526; color:#ccc;")
+        add = menu.addAction("Add Spawner")
+        row = self.vb_spawn_list.currentRow()
+        delete = menu.addAction("Remove") if row >= 0 else None
+        action = menu.exec(self.vb_spawn_list.mapToGlobal(pos))
+        if not action: return
+        for o in self._current_objects:
+            bio = getattr(o, 'voxel_biomes', [])
+            if brow >= len(bio): continue
+            spawns = bio[brow].setdefault('spawns', [])
+            if action == add:
+                spawns.append({
+                    'kind': 'object:cube', 'prefab_path': '',
+                    'density': 0.05,
+                    'slope_min': 0.7, 'slope_max': 1.0,
+                    'height_min': -1000.0, 'height_max': 1000.0,
+                    'scale_min': 0.8, 'scale_max': 1.2,
+                    'shader_name': 'Standard',
+                    'jitter': 0.3, 'align_to_normal': False,
+                })
+            elif delete is not None and action == delete:
+                if 0 <= row < len(spawns): spawns.pop(row)
+        self.set_objects(self._current_objects)
+        self.property_changed.emit()
+
+    def _on_vb_spawn_selected(self, row):
+        if row < 0 or not self._current_objects:
+            self.vb_spawn_panel.setVisible(False); return
+        brow = self.vox_biomes_list.currentRow()
+        if brow < 0:
+            self.vb_spawn_panel.setVisible(False); return
+        obj = self._current_objects[0]
+        biomes = getattr(obj, 'voxel_biomes', [])
+        if brow >= len(biomes):
+            self.vb_spawn_panel.setVisible(False); return
+        spawns = biomes[brow].get('spawns', [])
+        if row >= len(spawns):
+            self.vb_spawn_panel.setVisible(False); return
+        s = spawns[row]
+        self._updating = True
+        ki = self.vbs_kind.findText(s.get('kind', 'object:cube'))
+        if ki >= 0: self.vbs_kind.setCurrentIndex(ki)
+        self.vbs_prefab.setText(s.get('prefab_path', ''))
+        self.vbs_density.setValue(float(s.get('density', 0.05)))
+        self.vbs_slope_min.setValue(float(s.get('slope_min', 0.7)))
+        self.vbs_slope_max.setValue(float(s.get('slope_max', 1.0)))
+        self.vbs_h_min.setValue(float(s.get('height_min', -1000.0)))
+        self.vbs_h_max.setValue(float(s.get('height_max', 1000.0)))
+        self.vbs_scale_min.setValue(float(s.get('scale_min', 0.8)))
+        self.vbs_scale_max.setValue(float(s.get('scale_max', 1.2)))
+        self.vbs_jitter.setValue(float(s.get('jitter', 0.3)))
+        si = self.vbs_shader.findText(s.get('shader_name', 'Standard'))
+        if si >= 0: self.vbs_shader.setCurrentIndex(si)
+        self.vbs_material.set_material(s.get('material_path', ''))
+        self.vbs_align.setChecked(bool(s.get('align_to_normal', False)))
+        self._refresh_vbs_params(s)
+        self._updating = False
+        self.vb_spawn_panel.setVisible(True)
+
+    def _on_browse_vb_spawn_asset(self):
+        from PyQt6.QtWidgets import QFileDialog
+        from py_editor.core import paths as _ap
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Pick Biome Spawn Asset", str(_ap.get_project_root()),
+            "Spawnable Assets (*.prefab *.mesh *.fbx *.obj);;Prefab (*.prefab);;Mesh (*.mesh *.fbx *.obj)")
+        if not path:
+            return
+        ext = Path(path).suffix.lower()
+        # Auto-pick kind to match the file type so spawn rendering works.
+        if ext == '.prefab':
+            kind = 'prefab'
+        elif ext in ('.mesh', '.fbx', '.obj'):
+            kind = 'object:mesh'
+        else:
+            kind = self.vbs_kind.currentText()
+        rel = _ap.to_relative(path)
+        self.vbs_prefab.setText(rel)
+        self._updating = True
+        self.vbs_kind.setCurrentText(kind)
+        self._updating = False
+        self._update_selected_vb_spawn('kind', kind)
+        self._update_selected_vb_spawn('prefab_path', rel)
+
+    def _update_selected_vb_spawn(self, key, val):
+        if self._updating or not self._current_objects: return
+        brow = self.vox_biomes_list.currentRow()
+        srow = self.vb_spawn_list.currentRow()
+        if brow < 0 or srow < 0: return
+        for obj in self._current_objects:
+            biomes = getattr(obj, 'voxel_biomes', [])
+            if brow >= len(biomes): continue
+            spawns = biomes[brow].get('spawns', [])
+            if srow >= len(spawns): continue
+            spawns[srow][key] = val
+        
+        # UI Refresh for specific keys
+        if key == 'material_path':
+            self.vbs_material.set_material(val)
+        elif key == 'prefab_path':
+            self.vbs_prefab.setText(val)
+        from PyQt6.QtCore import QTimer
+        if self._regen_timer: self._regen_timer.stop()
+        self._regen_timer = QTimer()
+        self._regen_timer.setSingleShot(True)
+        self._regen_timer.timeout.connect(self.property_changed.emit)
+        self._regen_timer.start(150)
+        
+        if key == 'shader_name':
+            # Refresh params if shader changed
+            brow = self.vox_biomes_list.currentRow()
+            srow = self.vb_spawn_list.currentRow()
+            obj = self._current_objects[0]
+            s = obj.voxel_biomes[brow]['spawns'][srow]
+            self._refresh_vbs_params(s)
+
+    def _refresh_vbs_params(self, spawn_dict):
+        """Build dynamic UI for shader uniforms."""
+        # Clear existing
+        while self.vbs_param_layout.count():
+            item = self.vbs_param_layout.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+            
+        from py_editor.ui.shader_manager import get_shader_params
+        shader_name = spawn_dict.get('shader_name', 'Standard')
+        params = get_shader_params(shader_name)
+        if not params: return
+        
+        spawn_dict.setdefault('shader_params', {})
+        
+        # Add Header
+        lbl = QLabel("  SHADER PARAMETERS")
+        lbl.setStyleSheet("background: #252526; color: #4fc3f7; font-size: 9px; font-weight: bold; min-height: 18px;")
+        self.vbs_param_layout.addWidget(lbl)
+        
+        for p in params:
+            name = p['name']
+            p_type = p['type']
+            
+            # Use current value or default
+            cur_val = spawn_dict['shader_params'].get(name, p['default'])
+            spawn_dict['shader_params'][name] = cur_val # ensure it exists
+            
+            if p_type == 'float':
+                # Map intensity, scale, freq to normalized or specific ranges
+                min_v, max_v = 0.0, 1.0
+                if 'speed' in name.lower() or 'frequency' in name.lower(): max_v = 10.0
+                elif 'intensity' in name.lower() or 'amplitude' in name.lower(): max_v = 2.0
+                elif 'scale' in name.lower(): max_v = 10.0
+                
+                slider = PropertySlider(float(cur_val), min_v, max_v)
+                slider.valueChanged.connect(partial(self._update_vbs_shader_param, name))
+                self._add_property_row(self.vbs_param_layout, name.replace('_', ' ').capitalize(), slider)
+            elif p_type in ('vec3', 'vec4'):
+                # Color picker if name looks like color
+                if 'color' in name.lower() or 'tint' in name.lower():
+                    picker = ColorPickerButton(cur_val)
+                    picker.colorChanged.connect(partial(self._update_vbs_shader_param, name))
+                    self._add_property_row(self.vbs_param_layout, name.replace('_', ' ').capitalize(), picker)
+                else:
+                    # Generic text or multi-slider (simplified to text for now)
+                    line = QLineEdit(str(cur_val))
+                    line.setStyleSheet(EDIT_SS)
+                    line.editingFinished.connect(lambda n=name, l=line: 
+                        self._update_vbs_shader_param(n, [float(x.strip()) for x in l.text().strip('[] ').split(',')]))
+                    self._add_property_row(self.vbs_param_layout, name.replace('_', ' ').capitalize(), line)
+
+    def _update_vbs_shader_param(self, key, val):
+        if self._updating or not self._current_objects: return
+        brow = self.vox_biomes_list.currentRow()
+        srow = self.vb_spawn_list.currentRow()
+        if brow < 0 or srow < 0: return
+        for obj in self._current_objects:
+            biomes = getattr(obj, 'voxel_biomes', [])
+            if brow >= len(biomes): continue
+            spawns = biomes[brow].get('spawns', [])
+            if srow >= len(spawns): continue
+            sp = spawns[srow]
+            sp.setdefault('shader_params', {})[key] = val
+            
+        self.property_changed.emit()
 
     def _update_selected_vox_layer(self, key, val):
         if self._updating or not self._current_objects: return
@@ -1773,31 +2580,6 @@ class ObjectPropertiesPanel(QWidget):
         self.vox_radius.setEnabled(True)
         self.vox_infinite_flat.setVisible(str(t).lower() == 'flat')
 
-    def _init_mesh_ui(self, layout):
-        self.mesh_group = QGroupBox("Mesh & Material")
-        self.mesh_group.setStyleSheet(PROPS_SS)
-        mg = QVBoxLayout(self.mesh_group)
-        
-        self.opacity_slider = PropertySlider(1.0, 0.0, 1.0)
-        self.opacity_slider.valueChanged.connect(lambda v: self.update_obj_prop('alpha', v))
-        self._add_property_row(mg, "Opacity", self.opacity_slider)
-        
-        self.mesh_path_label = QLabel("None")
-        self.mesh_path_label.setStyleSheet("color: #aaa; font-size: 11px;")
-        self._add_property_row(mg, "Source", self.mesh_path_label)
-        
-        self.tex_slot = TextureSlotWidget()
-        self.tex_slot.texture_dropped.connect(self._on_texture_dropped)
-        self._add_property_row(mg, "Texture", self.tex_slot)
-        
-        layout.addWidget(self.mesh_group)
-
-    def _on_texture_dropped(self, path):
-        if not self._current_objects: return
-        for obj in self._current_objects:
-            obj.texture_path = path
-        self.tex_slot.set_texture(path)
-        self.property_changed.emit()
     def _init_weather_ui(self, layout):
         self.weather_group = QGroupBox("Weather Simulator")
         self.weather_group.setStyleSheet(PROPS_SS)
@@ -1821,3 +2603,4 @@ class ObjectPropertiesPanel(QWidget):
         self._add_property_row(wg, "Seed", self.weather_seed)
         
         layout.addWidget(self.weather_group)
+

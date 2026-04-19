@@ -1,0 +1,10 @@
+{
+    "name": "Player",
+    "type": "player",
+    "inherits": "base.controller",
+    "description": "First/third person player controller responding to WASD input.",
+    "params": {
+        "speed": 10.0,
+        "sensitivity": 0.15
+    }
+}

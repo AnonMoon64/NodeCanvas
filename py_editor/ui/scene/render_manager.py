@@ -206,15 +206,28 @@ def _draw_wireframe_cube(sx=1, sy=1, sz=1, color=OBJECT_COLOR, fill_color=OBJECT
     for a, b in edges: glVertex3f(*verts[a]); glVertex3f(*verts[b])
     glEnd(); glLineWidth(1.0)
 
-def _draw_wireframe_sphere(radius=0.5, rings=12, segments=16, color=OBJECT_COLOR):
+def _draw_wireframe_sphere(radius=0.5, rings=12, segments=16, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
+    # Fill
+    glColor4f(*fill_color)
+    for i in range(rings):
+        phi1 = math.pi * i / rings
+        phi2 = math.pi * (i + 1) / rings
+        glBegin(GL_QUAD_STRIP)
+        for j in range(segments + 1):
+            theta = 2 * math.pi * j / segments
+            x1, y1, z1 = radius * math.sin(phi1) * math.cos(theta), radius * math.cos(phi1), radius * math.sin(phi1) * math.sin(theta)
+            x2, y2, z2 = radius * math.sin(phi2) * math.cos(theta), radius * math.cos(phi2), radius * math.sin(phi2) * math.sin(theta)
+            glNormal3f(x1/radius, y1/radius, z1/radius)
+            glVertex3f(x1, y1, z1); glVertex3f(x2, y2, z2)
+        glEnd()
+
+    # Edges
     glLineWidth(1.5); glColor4f(*color)
     for i in range(rings + 1):
         phi = math.pi * i / rings; y = radius * math.cos(phi); r = radius * math.sin(phi)
         glBegin(GL_LINE_LOOP)
         for j in range(segments):
             theta = 2*math.pi*j/segments
-            nx, ny, nz = math.sin(phi)*math.cos(theta), math.cos(phi), math.sin(phi)*math.sin(theta)
-            glNormal3f(nx, ny, nz)
             glVertex3f(r * math.cos(theta), y, r * math.sin(theta))
         glEnd()
     for j in range(segments):
@@ -223,25 +236,94 @@ def _draw_wireframe_sphere(radius=0.5, rings=12, segments=16, color=OBJECT_COLOR
         for i in range(rings+1):
             phi = math.pi * i / rings
             nx, ny, nz = math.sin(phi)*math.cos(theta), math.cos(phi), math.sin(phi)*math.sin(theta)
-            glNormal3f(nx, ny, nz)
             glVertex3f(radius*nx, radius*ny, radius*nz)
         glEnd()
     glLineWidth(1.0)
+    
+def _draw_wireframe_plane(sx=1, sz=1, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
+    hx, hz = sx/2, sz/2
+    verts = [(-hx, 0, -hz), (hx, 0, -hz), (hx, 0, hz), (-hx, 0, hz)]
+    # Fill
+    glColor4f(*fill_color)
+    glBegin(GL_QUADS)
+    glNormal3f(0, 1, 0)
+    for v in verts: glVertex3f(*v)
+    glEnd()
+    # Edges
+    glColor4f(*color); glLineWidth(1.5); glBegin(GL_LINE_LOOP)
+    for v in verts: glVertex3f(*v)
+    glEnd(); glLineWidth(1.0)
 
-def _draw_cone(radius=0.15, height=0.5, segments=12):
-    glBegin(GL_TRIANGLE_FAN)
-    glVertex3f(0, height, 0)
+def _draw_wireframe_cylinder(radius=0.5, height=1.0, segments=16, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
+    hh = height / 2.0
+    # Fill
+    glColor4f(*fill_color)
+    # Sides
+    glBegin(GL_QUAD_STRIP)
     for i in range(segments + 1):
         theta = 2 * math.pi * i / segments
-        glVertex3f(radius * math.cos(theta), 0, radius * math.sin(theta))
+        x, z = radius * math.cos(theta), radius * math.sin(theta)
+        glNormal3f(math.cos(theta), 0, math.sin(theta))
+        glVertex3f(x, -hh, z); glVertex3f(x, hh, z)
     glEnd()
-    # Bottom disk
+    # Caps
+    for y in [-hh, hh]:
+        glBegin(GL_TRIANGLE_FAN)
+        glNormal3f(0, 1 if y > 0 else -1, 0)
+        glVertex3f(0, y, 0)
+        for i in range(segments + 1):
+            theta = 2 * math.pi * i / segments
+            glVertex3f(radius * math.cos(theta), y, radius * math.sin(theta))
+        glEnd()
+    # Edges
+    glColor4f(*color); glLineWidth(1.5)
+    for y in [-hh, hh]:
+        glBegin(GL_LINE_LOOP)
+        for i in range(segments):
+            theta = 2 * math.pi * i / segments
+            glVertex3f(radius * math.cos(theta), y, radius * math.sin(theta))
+        glEnd()
+    glBegin(GL_LINES)
+    for i in [0, segments//4, segments//2, 3*segments//4]:
+        theta = 2 * math.pi * i / segments
+        x, z = radius * math.cos(theta), radius * math.sin(theta)
+        glVertex3f(x, -hh, z); glVertex3f(x, hh, z)
+    glEnd()
+    glLineWidth(1.0)
+
+def _draw_wireframe_cone(radius=0.5, height=1.0, segments=16, color=OBJECT_COLOR, fill_color=OBJECT_FACE_COLOR):
+    hh = height / 2.0
+    # Fill
+    glColor4f(*fill_color)
     glBegin(GL_TRIANGLE_FAN)
-    glVertex3f(0, 0, 0)
+    glNormal3f(0, 1, 0) # Inaccurate but fine for wireframe
+    glVertex3f(0, hh, 0)
     for i in range(segments + 1):
         theta = 2 * math.pi * i / segments
-        glVertex3f(radius * math.cos(theta), 0, radius * math.sin(theta))
+        glVertex3f(radius * math.cos(theta), -hh, radius * math.sin(theta))
     glEnd()
+    # Bottom
+    glBegin(GL_TRIANGLE_FAN)
+    glNormal3f(0, -1, 0)
+    glVertex3f(0, -hh, 0)
+    for i in range(segments + 1):
+        theta = 2 * math.pi * i / segments
+        glVertex3f(radius * math.cos(theta), -hh, radius * math.sin(theta))
+    glEnd()
+    # Edges
+    glColor4f(*color); glLineWidth(1.5)
+    glBegin(GL_LINE_LOOP)
+    for i in range(segments):
+        theta = 2 * math.pi * i / segments
+        glVertex3f(radius * math.cos(theta), -hh, radius * math.sin(theta))
+    glEnd()
+    glBegin(GL_LINES)
+    for i in [0, segments//4, segments//2, 3*segments//4]:
+        theta = 2 * math.pi * i / segments
+        glVertex3f(0, hh, 0); glVertex3f(radius * math.cos(theta), -hh, radius * math.sin(theta))
+    glEnd()
+    glLineWidth(1.0)
+
 
 def _gizmo_screen_scale(pos, camera=None):
     """Scale gizmo so its length feels consistent at any camera distance."""
@@ -363,7 +445,8 @@ def _draw_gizmo(pos, selected_axis=None, mode="translate", camera=None):
             glEnd()
         else:
             if rot: glRotatef(*rot)
-            _draw_cone(radius=0.15, height=0.45, segments=20)
+            _draw_wireframe_cone(radius=0.15, height=0.45, segments=20, 
+                                 color=(*tip_col, a), fill_color=(*tip_col, a))
         glPopMatrix()
 
     glLineWidth(1.0)

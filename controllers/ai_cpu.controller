@@ -1,0 +1,15 @@
+{
+    "name": "AI Boids (CPU)",
+    "type": "ai_cpu",
+    "inherits": "base.controller",
+    "description": "CPU-based boids flocking AI with separation, alignment, and cohesion.",
+    "params": {
+        "speed": 5.0,
+        "wander_range": 25.0,
+        "separation_weight": 1.5,
+        "alignment_weight": 1.0,
+        "cohesion_weight": 1.0,
+        "target_weight": 0.5,
+        "neighbor_distance": 10.0
+    }
+}

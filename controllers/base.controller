@@ -1,0 +1,13 @@
+{
+    "name": "Base Controller",
+    "type": "base",
+    "description": "Abstract base controller. All controllers inherit from this.",
+    "params": {
+        "speed": 5.0,
+        "active": true
+    },
+    "physics": {
+        "enabled": false,
+        "mass": 1.0
+    }
+}

@@ -48,31 +48,36 @@ def generate_flat_density(NX, NY, NZ, LX, LY, LZ, *, resolution, seed,
     gp = gen_params or {}
     world_height = float(gp.get('world_height', 1.0))
     if layers:
+        # Extract a 2D slice from the 3D grid: LX is (res, res, res).
+        # LX[:, 0, :] gives a (res, res) array holding the X coordinates.
+        LX2 = LX[:, 0, :]
+        LZ2 = LZ[:, 0, :]
+        
         # Feature-scale normalisation: fixed reference of 100u horizontal.
-        # Keeps noise features a stable world-unit size regardless of the
-        # render window → streaming chunks at different world positions all
-        # sample the same global noise field → no chunk-boundary seams.
         ref_scale = 100.0
         # Amplitude budget: matches round-mode `noise_val * radius` semantics.
-        # world_height multiplier lets the user raise mountain peaks.
         amp_scale = ref_scale * 0.5 * world_height
-        height = np.zeros_like(LX, dtype=np.float32)
+        
+        height2 = np.zeros_like(LX2, dtype=np.float32)
         for layer in layers:
             mask_thresh = float(layer.get('mask_threshold', 0.0))
             influence = 1.0
             if mask_thresh > 0:
-                influence = np.clip((height - mask_thresh * 15.0) / 10.0, 0.0, 1.0)
+                influence = np.clip((height2 - mask_thresh * 15.0) / 10.0, 0.0, 1.0)
 
-            lx_flat = LX / ref_scale
-            lz_flat = LZ / ref_scale
+            lx_flat = LX2 / ref_scale
+            lz_flat = LZ2 / ref_scale
             raw = layer_noise(lx_flat, np.zeros_like(lx_flat),
                               lz_flat, layer, seed) * influence
             val = raw * amp_scale
             blend = layer.get('blend', 'add')
-            if   blend == 'subtract': height -= val
-            elif blend == 'multiply': height *= (1.0 + raw * 0.5)
-            else:                     height += val
-        density = height - LY
+            if   blend == 'subtract': height2 -= val
+            elif blend == 'multiply': height2 *= (1.0 + raw * 0.5)
+            else:                     height2 += val
+            
+        # Broadcast the 2D heightmap (X, Z) back to 3D (X, Y, Z) and apply Y depth.
+        # height2 is (res, res). Reshape to (res, 1, res) to broadcast against LY.
+        density = height2[:, np.newaxis, :] - LY
     else:
         density = (-LY).astype(np.float32)   # Pure flat at Y = 0
 

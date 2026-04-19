@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QDockWidget, QFileDialog, QMessageBox,
     QToolBar
 )
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtCore import Qt
 
 # Local imports
@@ -26,16 +26,24 @@ from py_editor.ui.panels.node_properties import NodePropertiesPanel
 from py_editor.ui.scene.hierarchy_dock import HierarchyDock
 from py_editor.ui.scene.properties_panel import ObjectPropertiesPanel
 from py_editor.ui import (
-    LogicEditor, UIBuilderWidget, SceneEditorWidget, NodeEditorDialog, NodeSettingsDialog
+    LogicEditor, SceneEditorWidget, NodeEditorDialog, NodeSettingsDialog
 )
 from py_editor.core import load_templates
+from py_editor.core import paths as asset_paths
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Pulse Engine — Procedural Systems")
+        
+        # Set window icon
+        icon_path = os.path.join(os.path.dirname(__file__), "images", "icon.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+            
         self.resize(1600, 1000)
         self.project_root = str(Path.cwd())
+        asset_paths.set_project_root(self.project_root)
         
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -45,9 +53,6 @@ class MainWindow(QMainWindow):
         
         self.scene_editor = SceneEditorWidget(self)
         self.tabs.addTab(self.scene_editor, "Viewport")
-        
-        self.ui_builder = UIBuilderWidget(self)
-        self.tabs.addTab(self.ui_builder, "UI")
         
         self._setup_toolbar()
         self._setup_docks()
@@ -59,12 +64,33 @@ class MainWindow(QMainWindow):
         self.hierarchy.outliner.object_focused.connect(self._on_object_focused)
         self.explorer.file_opened.connect(self._on_explorer_file_opened)
         self.properties.property_changed.connect(self._on_property_changed)
+        self.scene_editor.viewport.objects_changed.connect(
+            lambda: self.hierarchy.outliner.set_objects(self.scene_editor.viewport.scene_objects))
 
     def _setup_toolbar(self):
         self.toolbar = QToolBar("Main Toolbar")
         self.toolbar.setMovable(False)
         self.addToolBar(self.toolbar)
-        
+
+        # File menu (toolbar drop-down)
+        from PyQt6.QtWidgets import QToolButton, QMenu
+        file_btn = QToolButton()
+        file_btn.setText("File")
+        file_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        file_menu = QMenu(file_btn)
+        set_root_act = QAction("Set Current Project…", self)
+        set_root_act.triggered.connect(self._on_set_project_root)
+        file_menu.addAction(set_root_act)
+        file_menu.addSeparator()
+        show_root_act = QAction("Show Project Root", self)
+        show_root_act.triggered.connect(
+            lambda: QMessageBox.information(self, "Project Root", self.project_root)
+        )
+        file_menu.addAction(show_root_act)
+        file_btn.setMenu(file_menu)
+        self.toolbar.addWidget(file_btn)
+        self.toolbar.addSeparator()
+
         # Save / Load
         save_act = QAction("Save", self); save_act.setShortcut("Ctrl+S")
         save_act.triggered.connect(self._save_project)
@@ -150,6 +176,7 @@ class MainWindow(QMainWindow):
              data = self.scene_editor.export_scene_data()
              path, _ = QFileDialog.getSaveFileName(self, "Save Scene", self.project_root, "Scene Files (*.scene)")
              if path:
+                 data = asset_paths.normalize_for_save(data)
                  with open(path, 'w') as f: json.dump(data, f, indent=4)
         else:
              QMessageBox.information(self, "Save", "Standard tab save not implemented.")
@@ -163,6 +190,7 @@ class MainWindow(QMainWindow):
         try:
             with open(path, 'r') as f:
                 data = json.load(f)
+                data = asset_paths.resolve_on_load(data)
                 if path.endswith('.logic'):
                     self.tabs.setCurrentIndex(0)
                     self.logic_editor.load_graph(data)
@@ -173,11 +201,20 @@ class MainWindow(QMainWindow):
                     self._on_scene_loaded()
                 elif path.endswith('.prefab'):
                     self.properties.set_prefab(path, data)
-                    # ensure the properties dock is visible when editing a prefab
+                    try: self.properties_dock.setVisible(True)
+                    except: pass
+                elif path.endswith('.material'):
+                    self.properties.set_standalone_material(path, data)
                     try:
                         self.properties_dock.setVisible(True)
-                    except Exception:
-                        pass
+                        self.properties_dock.raise_()
+                    except: pass
+                elif path.endswith('.spawner'):
+                    self.properties.set_spawner(path, data)
+                    try:
+                        self.properties_dock.setVisible(True)
+                        self.properties_dock.raise_()
+                    except: pass
                 else:
                     # Generic fallback to Text Editor
                     dlg = NodeEditorDialog(self)
@@ -194,6 +231,20 @@ class MainWindow(QMainWindow):
                      dlg.exec()
              except:
                  QMessageBox.critical(self, "Error", f"Failed to load: {e}")
+
+    def _on_set_project_root(self):
+        """Prompt user to pick a new project root, update explorer + asset resolver."""
+        path = QFileDialog.getExistingDirectory(self, "Select Project Root", self.project_root)
+        if not path:
+            return
+        self.project_root = path
+        asset_paths.set_project_root(path)
+        try:
+            self.explorer.set_root_path(path)
+        except Exception as e:
+            print(f"[MAIN] Explorer refresh failed: {e}")
+        self.setWindowTitle(f"Pulse Engine — {os.path.basename(path)}")
+        print(f"[MAIN] Project root set to {path}")
 
     def _on_open_settings(self):
         """Open the global settings dialog."""
@@ -302,13 +353,18 @@ class MainWindow(QMainWindow):
                  self.properties_dock.raise_()
         except Exception:
             pass
-        self.hierarchy.outliner.set_objects(self.scene_editor.viewport.scene_objects)
+            
+        # Defer Outliner sync to prevent recursive "clear()" inside selection events (Avoids Access Violation)
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self.hierarchy.outliner.select_objects(objs))
+        
         self.scene_editor.viewport.update()
         self._selection_updating = False
 
     def _on_object_deleted(self, obj):
         if not obj: return
         self.scene_editor.viewport.scene_objects.remove(obj)
+        self.scene_editor.viewport.objects_changed.emit() # Refresh Outliner
         self._on_object_selected(None)
 
     def _on_object_renamed(self, obj, new_name):
@@ -352,10 +408,6 @@ class MainWindow(QMainWindow):
              self.properties_dock.setVisible(False)
              # Show node properties if there is a selection
              self._on_node_selection_changed()
-        else:
-             self.scene_editor.on_tab_deactivated()
-             self.properties_dock.setVisible(False)
-             self.node_props_dock.setVisible(False)
 
     def get_active_graph_identifier(self) -> str:
         """Return a short identifier for the currently active graph or scene.
@@ -391,7 +443,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     return "scene://unsaved"
 
-            # Fallback for other tabs
+            # Fallback
             return f"tab://{idx}"
         except Exception:
             return "unknown_graph"

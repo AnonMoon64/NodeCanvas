@@ -20,6 +20,7 @@ from .scene.outliner import SceneOutliner
 from py_editor.core.simulation_controller import SimulationController
 from py_editor.core.node_templates import get_all_templates
 from py_editor.core.mesh_converter import MeshConverter
+from py_editor.core import paths as asset_paths
 
 class SceneEditorWidget(QWidget):
     """Orchestrator for the Scene Editor - Shell version (Viewport only)."""
@@ -108,10 +109,83 @@ class SceneEditorWidget(QWidget):
             voxel_variant = "Round"
             prim_type = "voxel_world"
 
-        # Create a new SceneObject at the drop location
-        base_name = Path(file_path).stem if file_path else prim_type.capitalize()
-        name = f"{base_name}_{len(self.viewport.scene_objects)}"
-        obj = SceneObject(name, prim_type, position=[wx, 0, wz])
+        # Handle Spawner
+        if prim_type == "spawner":
+            import json
+            try:
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+                data = asset_paths.resolve_on_load(data)
+                if data.get("type") == "spawner":
+                    settings = data.get("settings", {})
+                    prefabs = data.get("prefabs", [])
+                    if not prefabs:
+                        print(f"[SCENE] Spawner {Path(file_path).name} has no prefabs mapped.")
+                        return
+
+                    # Create a Spawner SceneObject so it appears in the outliner
+                    # and owns its spawned children via parent_id. The actual
+                    # spawn logic is shared with respawn() in scene_view.
+                    spawner_obj = SceneObject(Path(file_path).stem, "spawner",
+                                              position=[wx, 0.0, wz])
+                    spawner_obj.spawner_prefabs = list(prefabs)
+                    spawner_obj.spawner_count = settings.get("count", 5)
+                    spawner_obj.spawner_radius = settings.get("radius", 10.0)
+                    spawner_obj.spawner_min_offset = settings.get("min_offset", [0.0, 0.0, 0.0])
+                    spawner_obj.spawner_max_offset = settings.get("max_offset", [0.0, 0.0, 0.0])
+                    spawner_obj.spawner_min_tint   = settings.get("min_tint",  [1.0, 1.0, 1.0, 1.0])
+                    spawner_obj.spawner_max_tint   = settings.get("max_tint",  [1.0, 1.0, 1.0, 1.0])
+                    spawner_obj.spawner_find_ground = settings.get("find_ground", False)
+                    spawner_obj.spawner_controller_type = settings.get(
+                        "controller_type", data.get("controller_type", "None"))
+                    spawner_obj.spawner_source_path = str(file_path)
+                    # The base SceneObject layer: remember the directory so the
+                    # respawn helper can resolve relative prefab paths later.
+                    spawner_obj._spawner_base_dir = str(Path(file_path).parent)
+
+                    self.viewport.scene_objects.append(spawner_obj)
+
+                    # Do the initial populate through the same helper used for
+                    # respawn, so re-populating from the properties panel
+                    # produces identical behaviour.
+                    from py_editor.ui.scene.object_system import respawn_spawner
+                    respawn_spawner(spawner_obj, self.viewport.scene_objects)
+
+                    self.viewport.update()
+                    self.viewport.object_selected.emit(spawner_obj)
+                    if self.sim.is_running: self.sim.refresh()
+                    return
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                print(f"[SCENE] Spawner error: {e}")
+                return
+
+        # Handle Prefabs
+        obj = None
+        if prim_type == "prefab":
+            import json
+            try:
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+                data = asset_paths.resolve_on_load(data)
+                if data.get("type") == "prefab" and "root" in data:
+                    obj = SceneObject.from_dict(data["root"])
+                    obj.position = [wx, 0, wz]
+                else: 
+                    print(f"[SCENE] Invalid prefab format: {file_path}")
+                    return
+            except Exception as e:
+                print(f"[SCENE] Prefab load failed: {e}")
+                return
+        
+        if not obj:
+            # Create a new SceneObject at the drop location
+            base_name = Path(file_path).stem if file_path else prim_type.capitalize()
+            if prim_type == "landscape":
+                base_name += " (Deprecated)"
+            name = f"{base_name}_{len(self.viewport.scene_objects)}"
+            obj = SceneObject(name, prim_type, position=[wx, 0, wz])
+
         if voxel_variant is not None:
             obj.voxel_type = voxel_variant
         
@@ -141,8 +215,21 @@ class SceneEditorWidget(QWidget):
             else:
                 # General objects parent and reset local transform for surface sticking
                 obj.parent_id = closest_planet.id
+                
+                # Bi-directional linkage for scene graph
+                if obj.id not in closest_planet.children_ids:
+                    closest_planet.children_ids.append(obj.id)
+                obj._parent = closest_planet
+
                 # World to Local: p_local = p_world - parent_world
-                obj.position = [wx - closest_planet.position[0], 0, wz - closest_planet.position[2]]
+                # Using world position of planet in case it is also parented
+                p_pos = closest_planet.position
+                if closest_planet.parent_id:
+                    # If planet is parented, we'd ideally need its world pos 
+                    # but for now we assume planets are world-roots or 1-level deep.
+                    pass
+
+                obj.position = [wx - p_pos[0], 0, wz - p_pos[2]]
                 
                 # Auto-scale based on planet size
                 if getattr(closest_planet, 'voxel_radius', 0) > 10000:

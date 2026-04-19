@@ -1,0 +1,13 @@
+{
+    "base_color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "roughness": 0.5,
+    "metallic": 0.0,
+    "albedo": "models/Textures/Bark_NormalTree.png",
+    "mass": 2.0,
+    "normal": "models/Textures/Bark_NormalTree_Normal.png"
+}

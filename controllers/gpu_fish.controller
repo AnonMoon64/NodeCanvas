@@ -1,0 +1,11 @@
+{
+    "name": "GPU Fish",
+    "type": "ai_gpu_fish",
+    "inherits": "base.controller",
+    "description": "GPU-accelerated fish schooling via compute shader boids. Reads back position from SSBO to drive the mesh transform each frame.",
+    "params": {
+        "speed": 5.0,
+        "wander_range": 30.0,
+        "readback_interval": 2
+    }
+}

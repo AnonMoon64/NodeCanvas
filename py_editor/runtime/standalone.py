@@ -5,6 +5,7 @@ Headless/Standalone runtime for NodeCanvas.
 Boots a scene, attaches logic components, and runs the simulation.
 """
 import sys
+import os
 import time
 import json
 from pathlib import Path
@@ -190,7 +191,8 @@ class StandaloneGameWindow(QMainWindow):
 
         # Resolve simple collisions after movement
         try:
-            from py_editor.core.physics import resolve_collisions
+            from py_editor.core.physics import resolve_collisions, integrate_gravity
+            integrate_gravity(self.viewport.scene_objects, dt)
             resolve_collisions(self.viewport.scene_objects, dt)
         except Exception:
             pass
@@ -205,21 +207,35 @@ class StandaloneGameWindow(QMainWindow):
         
         self.viewport.update()
 
-def launch_standalone(scene_data: dict):
-    app = QApplication.instance() or QApplication([])
+def launch_standalone(scene_data: dict, run_exec: bool = False):
+    existing = QApplication.instance()
+    app = existing or QApplication(sys.argv if existing is None else [])
     window = StandaloneGameWindow(scene_data)
     window.show()
-    
+
     # Initialize controllers AFTER showing the window (ensures GL context for GPUBoids)
     window._init_controllers()
-    
-    if not QApplication.instance():
+
+    # When invoked as its own process, block on the event loop so the window
+    # survives past return. Prior code used `if not QApplication.instance()`,
+    # which was always False because we had just created the instance above —
+    # the process exited immediately, showing a cmd flash and no window.
+    if run_exec:
         sys.exit(app.exec())
     return window
 
 if __name__ == "__main__":
-    import json
     if len(sys.argv) > 1:
-        with open(sys.argv[1], 'r') as f:
-            data = json.load(f)
-        launch_standalone(data)
+        try:
+            with open(sys.argv[1], 'r') as f:
+                data = json.load(f)
+            from py_editor.core import paths as _ap
+            # Project root = directory containing the scene file (cwd passed by launcher).
+            _ap.set_project_root(os.getcwd())
+        except Exception as e:
+            print(f"[STANDALONE] Failed to load scene {sys.argv[1]}: {e}")
+            sys.exit(1)
+        launch_standalone(data, run_exec=True)
+    else:
+        print("[STANDALONE] Usage: standalone.py <scene.json>")
+        sys.exit(1)

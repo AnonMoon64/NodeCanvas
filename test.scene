@@ -1,0 +1,121 @@
+{
+    "nodes": [
+        {
+            "name": "Voxel_world_0",
+            "type": "voxel_world",
+            "position": [
+                -0.37311803977141017,
+                0,
+                -0.1339529382745468
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "scale": [
+                1.0,
+                1.0,
+                1.0
+            ],
+            "active": true,
+            "visible": true,
+            "voxel_block_size": 1.0,
+            "voxel_render_style": "Smooth",
+            "voxel_seed": 123,
+            "voxel_type": "Flat",
+            "voxel_radius": 10000.0,
+            "voxel_lod_enabled": true,
+            "voxel_smooth_iterations": 2,
+            "voxel_layers": [
+                {
+                    "name": "Continents",
+                    "noise_type": "fbm",
+                    "freq": 0.35,
+                    "amp": 0.55,
+                    "blend": "add",
+                    "seed": 123
+                }
+            ],
+            "voxel_biomes": [
+                {
+                    "name": "Beach",
+                    "height_range": [
+                        0.0,
+                        2.0
+                    ],
+                    "slope_range": [
+                        0.0,
+                        1.0
+                    ],
+                    "surface": {
+                        "color": [
+                            0.85,
+                            0.8,
+                            0.65,
+                            1.0
+                        ],
+                        "roughness": 0.9,
+                        "metallic": 0.0
+                    }
+                },
+                {
+                    "name": "Grassland",
+                    "height_range": [
+                        2.0,
+                        15.0
+                    ],
+                    "slope_range": [
+                        0.0,
+                        1.0
+                    ],
+                    "surface": {
+                        "color": [
+                            0.25,
+                            0.4,
+                            0.1,
+                            1.0
+                        ],
+                        "roughness": 0.8,
+                        "metallic": 0.0
+                    },
+                    "spawns": [
+                        {
+                            "kind": "prefab",
+                            "prefab_path": "models/FBX/Grass_Common_Short.prefab",
+                            "density": 0.505,
+                            "slope_min": 0.7,
+                            "slope_max": 1.0,
+                            "height_min": -1000.0,
+                            "height_max": 1000.0,
+                            "scale_min": 0.8,
+                            "scale_max": 1.2,
+                            "jitter": 0.3,
+                            "align_to_normal": true,
+                            "shader_params": {
+                                "u_has_tex": 0.0,
+                                "wind_speed": 3.5,
+                                "wind_intensity": 0.064
+                            },
+                            "material_path": "C:/Users/AnonM/Desktop/NodeCanvas/models/Textures/Grass.material",
+                            "shader_name": "grass.shader"
+                        },
+                        {
+                            "kind": "prefab",
+                            "prefab_path": "models/FBX/CommonTree_1.prefab",
+                            "density": 0.01,
+                            "slope_min": 0.7,
+                            "slope_max": 1.0,
+                            "height_min": -1000.0,
+                            "height_max": 1000.0,
+                            "scale_min": 0.8,
+                            "scale_max": 1.2,
+                            "jitter": 0.3,
+                            "align_to_normal": false
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

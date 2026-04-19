@@ -195,8 +195,8 @@ class SceneObject:
         # Custom Shader Support
         self.shader_name = "Standard"
         self.shader_params = {
-            "speed": 2.0, "freq": 1.5, "intensity": 1.0,
-            "yaw_amp": 0.2, "side_amp": 0.1, "roll_amp": 0.05, "flag_amp": 0.05,
+            "speed": 6.0, "freq": 3.0, "intensity": 1.0,
+            "yaw_amp": 0.4, "side_amp": 0.2, "roll_amp": 0.1, "flag_amp": 0.2,
             "wave_speed": 3.0, "wave_amplitude": 0.1,
             "forward_axis": 0.0, "invert_axis": 0.0,
             "base_color": [1.0, 1.0, 1.0, 1.0]
@@ -205,12 +205,23 @@ class SceneObject:
         # Physics properties (base)
         self.velocity = [0.0, 0.0, 0.0]
         self.acceleration = [0.0, 0.0, 0.0]
-        self.physics_enabled = True
+        self.physics_enabled = False
         self.mass = 1.0
         # Collision properties: list of dicts {tag, shape, radius, offset, enabled}
         self.collision_properties = [
             {"tag": "default", "shape": "sphere", "radius": 0.5 * max(self.scale), "offset": [0.0, 0.0, 0.0], "enabled": True}
         ]
+        
+        # Spawner properties
+        self.spawner_prefabs = []
+        self.spawner_count = 5
+        self.spawner_radius = 10.0
+        self.spawner_min_offset = [0.0, 0.0, 0.0]
+        self.spawner_max_offset = [0.0, 0.0, 0.0]
+        self.spawner_min_tint = [1.0, 1.0, 1.0, 1.0]
+        self.spawner_max_tint = [1.0, 1.0, 1.0, 1.0]
+        self.spawner_find_ground = False
+        self.spawner_controller_type = "None"
 
     def to_dict(self) -> dict:
         d = self.__dict__.copy()
@@ -218,7 +229,15 @@ class SceneObject:
 
     @staticmethod
     def from_dict(d: dict) -> 'SceneObject':
-        obj = SceneObject(d['name'], d['type'], d.get('position'), d.get('rotation'), d.get('scale'))
+        if not d or not isinstance(d, dict):
+            # Fallback for empty or corrupt data
+            return SceneObject("New Object", "cube")
+            
+        obj = SceneObject(
+            d.get('name', 'Object'), 
+            d.get('obj_type', d.get('type', 'cube')), 
+            d.get('position'), d.get('rotation'), d.get('scale')
+        )
         for k, v in d.items():
             if k == 'logic_path' and 'logic_list' not in d:
                 obj.logic_list = [v] if v else []
@@ -230,4 +249,86 @@ class SceneObject:
                 obj.logic_list = list(v)
             elif hasattr(obj, k):
                 setattr(obj, k, v)
+        obj.spawner_controller_type = d.get('spawner_controller_type', 'None')
         return obj
+
+
+def respawn_spawner(spawner, scene_objects):
+    """(Re)populate a spawner's children.
+
+    - Removes existing children parented to this spawner (so the outliner
+      group is rebuilt cleanly on respawn).
+    - Creates `spawner_count` fresh instances from the prefab list, assigns
+      each a unique id, parents them to the spawner via `parent_id`, and
+      copies the spawner's `spawner_controller_type` so each spawned object
+      gets ticked by `_sync_editor_controllers`.
+
+    Positions are stored in the spawner's local frame (parent-relative) so
+    moving the spawner drags the whole group.
+    """
+    import json, random, math
+    from pathlib import Path as _P
+
+    # 1. Remove previous brood
+    scene_objects[:] = [o for o in scene_objects
+                        if getattr(o, 'parent_id', None) != spawner.id]
+
+    prefabs = list(getattr(spawner, 'spawner_prefabs', []) or [])
+    if not prefabs:
+        return
+
+    base_dir = _P(getattr(spawner, '_spawner_base_dir', '') or '.')
+    count    = int(getattr(spawner, 'spawner_count', 5))
+    radius   = float(getattr(spawner, 'spawner_radius', 10.0))
+    min_off  = list(getattr(spawner, 'spawner_min_offset', [0, 0, 0]))
+    max_off  = list(getattr(spawner, 'spawner_max_offset', [0, 0, 0]))
+    min_t    = list(getattr(spawner, 'spawner_min_tint',   [1, 1, 1, 1]))
+    max_t    = list(getattr(spawner, 'spawner_max_tint',   [1, 1, 1, 1]))
+    ctype    = getattr(spawner, 'spawner_controller_type', 'None')
+
+    for i in range(count):
+        p_file = random.choice(prefabs)
+        p_path = _P(p_file) if _P(p_file).is_absolute() else (base_dir / p_file)
+        if not p_path.exists():
+            continue
+        try:
+            ext = p_path.suffix.lower()
+            if ext == '.prefab':
+                with open(p_path, 'r') as pf:
+                    pdata = json.load(pf)
+                from py_editor.core import paths as _ap
+                pdata = _ap.resolve_on_load(pdata)
+                if pdata.get("type") != "prefab" or "root" not in pdata:
+                    continue
+                child = SceneObject.from_dict(pdata["root"])
+            elif ext in ('.mesh', '.fbx', '.obj'):
+                child = SceneObject(name=p_path.stem, obj_type='custom_mesh')
+                child.mesh_path = str(p_path)
+            else:
+                continue
+            child.id = str(uuid.uuid4())[:8]
+
+            angle = random.uniform(0, 2 * math.pi)
+            r     = math.sqrt(random.uniform(0, 1)) * radius
+            ox    = random.uniform(min_off[0], max_off[0])
+            oy    = random.uniform(min_off[1], max_off[1])
+            oz    = random.uniform(min_off[2], max_off[2])
+            # Parent-local — moving the spawner moves the group.
+            child.position = [r * math.cos(angle) + ox, oy, r * math.sin(angle) + oz]
+            child.parent_id = spawner.id
+
+            rc = random.uniform(min_t[0], max_t[0])
+            gc = random.uniform(min_t[1], max_t[1])
+            bc = random.uniform(min_t[2], max_t[2])
+            ac = random.uniform(min_t[3], max_t[3])
+            child.color = [rc, gc, bc, ac]
+            if 'base_color' in child.material:
+                child.material['base_color'] = [rc, gc, bc, ac]
+
+            if ctype != "None":
+                child.controller_type = ctype
+
+            child.name = f"{child.name}_{i}"
+            scene_objects.append(child)
+        except Exception as e:
+            print(f"[SPAWNER] Failed to instance {p_file}: {e}")
